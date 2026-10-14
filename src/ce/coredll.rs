@@ -29761,10 +29761,20 @@ pub(crate) fn commit_fixed_heap_growth<M: CoredllGuestMemory>(
     let owner = kernel
         .current_process_birth_key()
         .ok_or(ERROR_INVALID_HANDLE)?;
-    if kernel.memory.fixed_heap_reservation(owner).is_none() {
+    let Some((base, size)) = kernel.memory.fixed_heap_reservation(owner) else {
+        return Ok(());
+    };
+    let high_water = kernel.memory.heap_high_water_mark(owner);
+    if high_water > base.checked_add(size).ok_or(ERROR_NOT_ENOUGH_MEMORY)? {
+        return Err(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    let covered = kernel
+        .memory
+        .fixed_heap_committed_prefix_end(owner)
+        .ok_or(ERROR_NOT_ENOUGH_MEMORY)?;
+    if high_water <= covered {
         return Ok(());
     }
-    let high_water = kernel.memory.heap_high_water_mark(owner);
     let prepared = kernel
         .memory
         .prepare_fixed_heap_growth(owner, high_water)
@@ -71157,6 +71167,43 @@ mod tests {
         assert!(kernel.memory.private_page_pins_for(owner).is_empty());
         assert_eq!(kernel.memory.private_commit_used_bytes(), 0);
         assert_eq!(kernel.memory.allocations_for(owner).count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_heap_subpage_allocations_keep_page_charge_and_generation_stable() -> Result<()> {
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let heap_base = 0x3000_0000;
+        assert_eq!(
+            kernel.memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ProcessHeapArena,
+                heap_base,
+                0x1000_0000,
+                PAGE_READWRITE,
+            ),
+            Some(heap_base)
+        );
+        kernel.memory.set_private_commit_limit_bytes(0x1000);
+        let mut memory = FailingPrivateVmMemory::default();
+        assert_eq!(
+            heap_alloc_raw(&mut kernel, &mut memory, 1, PROCESS_HEAP_HANDLE, 0, 16),
+            heap_base
+        );
+        let generation = kernel.memory.virtual_generation();
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+        assert_eq!(memory.native_actions_attempted, 1);
+        for index in 1..200u32 {
+            assert_eq!(
+                heap_alloc_raw(&mut kernel, &mut memory, 1, PROCESS_HEAP_HANDLE, 0, 16),
+                heap_base + index * 16
+            );
+        }
+        assert_eq!(kernel.memory.virtual_generation(), generation);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), 0x1000);
+        assert_eq!(memory.native_actions_attempted, 1);
+        assert_eq!(memory.committed_generations.len(), 1);
         Ok(())
     }
 

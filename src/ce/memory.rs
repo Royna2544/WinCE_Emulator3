@@ -1284,17 +1284,39 @@ impl MemorySystem {
             .map(|allocation| (allocation.base, allocation.size))
     }
 
+    /// End of the already committed contiguous heap prefix. This read-only
+    /// check lets ordinary sub-page HeapAlloc calls avoid cloning thousands
+    /// of committed-page entries just to discover there is no new page.
+    pub fn fixed_heap_committed_prefix_end(&self, owner: ProcessBirthKey) -> Option<u32> {
+        let (base, size) = self.fixed_heap_reservation(owner)?;
+        let reservation_end = base.checked_add(size)?;
+        let allocation = self.virtual_allocation(owner, base)?;
+        match allocation.private_committed_pages.last_key_value() {
+            Some((&last, _)) => {
+                let offset = last.checked_sub(base)?;
+                if offset % STABLE_PRIVATE_PAGE_SIZE as u32 != 0
+                    || last >= reservation_end
+                    || allocation.private_committed_pages.len()
+                        != usize::try_from(offset / STABLE_PRIVATE_PAGE_SIZE as u32 + 1).ok()?
+                {
+                    return None;
+                }
+                last.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)
+            }
+            None => Some(base),
+        }
+    }
+
     /// Prepare every newly crossed process-heap page through `high_water_end`
     /// in one budget-checked token. HeapAlloc must map and commit this token
     /// before publishing its pointer; heap faults never allocate pages.
-    /// Spillover beyond the fixed arena remains with the existing mapper.
     pub fn prepare_fixed_heap_growth(
         &self,
         owner: ProcessBirthKey,
         high_water_end: u32,
     ) -> Option<PreparedPrivateVm> {
         let (base, size) = self.fixed_heap_reservation(owner)?;
-        let original = self.virtual_allocation(owner, base)?.clone();
+        let original = self.virtual_allocation(owner, base)?;
         let reservation_end = base.checked_add(size)?;
         if high_water_end <= base {
             return None;
@@ -1303,23 +1325,7 @@ impl MemorySystem {
             high_water_end.min(reservation_end),
             STABLE_PRIVATE_PAGE_SIZE as u32,
         )?;
-        // The process heap never guest-decommits, so committed pages must be
-        // one contiguous prefix. Validate that invariant in O(1), then only
-        // prepare newly crossed pages, even after thousands of small allocs.
-        let first_missing = match original.private_committed_pages.last_key_value() {
-            Some((&last, _)) => {
-                let offset = last.checked_sub(base)?;
-                if offset % STABLE_PRIVATE_PAGE_SIZE as u32 != 0
-                    || last >= reservation_end
-                    || original.private_committed_pages.len()
-                        != usize::try_from(offset / STABLE_PRIVATE_PAGE_SIZE as u32 + 1).ok()?
-                {
-                    return None;
-                }
-                last.checked_add(STABLE_PRIVATE_PAGE_SIZE as u32)?
-            }
-            None => base,
-        };
+        let first_missing = self.fixed_heap_committed_prefix_end(owner)?;
         let new_count = usize::try_from(
             commit_end.saturating_sub(first_missing) / STABLE_PRIVATE_PAGE_SIZE as u32,
         )
@@ -1329,6 +1335,7 @@ impl MemorySystem {
         }
         let mut new_page_pins = Vec::new();
         new_page_pins.try_reserve_exact(new_count).ok()?;
+        let original = original.clone();
         let mut proposed = original.clone();
         let mut page_base = first_missing;
         while page_base < commit_end {

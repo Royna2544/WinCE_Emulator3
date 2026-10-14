@@ -42,6 +42,7 @@ use wince_emulation_v3::{
             ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_FSHEAP_INFO,
             ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MESSAGE_W,
             ORD_GET_MODULE_FILE_NAME_W, ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION,
             ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
             ORD_GET_OWNER_PROCESS, ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
@@ -149,6 +150,71 @@ use wince_emulation_v3::{
 
 mod support;
 use support::{TestGuestMemory, unique_test_root};
+
+#[test]
+fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner = kernel.current_process_birth_key().expect("boot birth");
+    let thread_id = 47;
+    let hwnd = kernel.create_window_ex_w(thread_id, "BAD_MSG_DST", "", None, 0, WS_VISIBLE, 0);
+    assert!(kernel.set_window_pos(hwnd, None, 1, 2, 10, 12, 0));
+    let queued = kernel
+        .peek_ready_visible_message_w_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGED,
+        )
+        .expect("typed WindowPos queued");
+    assert_eq!(queued.typed_payload_owner, Some(owner));
+    assert!(matches!(
+        kernel.message_pointer_payload_for_message(&queued),
+        Some(MessagePointerPayload::WindowPos(_))
+    ));
+    let budget_before = kernel.memory.private_commit_used_bytes();
+    let mut memory = TestGuestMemory::default();
+    // No guest bytes are mapped at this MSG destination.
+    let bad_msg_ptr = 0x7e00_0000;
+    for (ordinal, args) in [
+        (
+            ORD_GET_MESSAGE_W,
+            vec![bad_msg_ptr, hwnd, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED],
+        ),
+        (
+            ORD_PEEK_MESSAGE_W,
+            vec![bad_msg_ptr, hwnd, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED, 1],
+        ),
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ordinal,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+        assert_eq!(kernel.memory.private_commit_used_bytes(), budget_before);
+        let still_queued = kernel
+            .peek_ready_visible_message_w_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .expect("failed output cannot dequeue typed message");
+        assert_eq!(still_queued.typed_payload_owner, Some(owner));
+        assert_eq!(still_queued.lparam, queued.lparam);
+        assert!(kernel.message_pointer_payload_for_message(&still_queued).is_some());
+    }
+    Ok(())
+}
 
 #[test]
 fn coredll_raw_common_file_dialog_validates_openfilenamew_before_unsupported() -> Result<()> {

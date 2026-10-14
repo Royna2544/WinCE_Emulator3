@@ -483,6 +483,9 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     assert_ne!(parent_name, 0);
 
     let _child_handle = kernel.handles.create_process(2);
+    // Native child handoff writes the incoming strings before selecting B.
+    kernel.set_process_command_line("child args");
+    kernel.set_process_module_path("\\Program Files\\INavi\\child.exe");
     kernel.set_current_process_id(2);
     let child = kernel.current_process_birth_key().expect("child birth");
     let heap = kernel.memory.get_process_heap();
@@ -514,6 +517,9 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     assert_eq!(kernel.memory.local_size(child, parent_command), None);
     assert_eq!(kernel.memory.local_size(parent, child_command), None);
 
+    // Restoration likewise writes A's strings while B is still selected.
+    kernel.set_process_command_line("parent args");
+    kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");
     kernel.set_current_process_id(1);
     assert_eq!(
         allocation_return(table.dispatch_raw_ordinal_with_memory(
@@ -535,9 +541,23 @@ fn coredll_raw_process_text_pointers_are_birth_scoped_and_replace_freed_cache() 
     ));
     assert_ne!(replacement, parent_command);
     assert_eq!(kernel.command_line_guest_ptr_for(parent), Some(replacement));
+    kernel.set_process_command_line("child args");
+    kernel.set_process_module_path("\\Program Files\\INavi\\child.exe");
+    kernel.set_current_process_id(2);
     assert_eq!(
         kernel.command_line_guest_ptr_for(child),
         Some(child_command)
+    );
+    assert_eq!(kernel.process_name_guest_ptr_for(child), Some(child_name));
+    assert_eq!(
+        allocation_return(table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            11,
+            ORD_GET_COMMAND_LINE_W,
+            [],
+        )),
+        child_command
     );
     Ok(())
 }
