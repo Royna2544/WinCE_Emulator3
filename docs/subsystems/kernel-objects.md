@@ -1,6 +1,6 @@
 # Kernel objects and handles
 
-Status: first thread/process alias entry slice passed its frozen-source gate; full Stage 3 remains proposed. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
+Status: thread/process alias and immutable creation-owner slices passed their source gates; full Stage 3 remains proposed. The [architecture anchor](../ARCHITECTURE.md) owns shared CeMachine, TaskIdentity, FrameIdentity, AddressSpace, outcome and SnapshotEpoch contracts; the [migration plan](../PLAN.md) sequences changes. This document describes their kernel-object consumers rather than redefining them.
 
 ## Responsibility
 
@@ -12,7 +12,7 @@ Object lifetime and wait completion are separate from runnable eligibility. An e
 
 [HandleTable](../../src/ce/object.rs) maps globally allocated handle numbers to KernelObject values. [CeKernel](../../src/ce/kernel.rs) adds pseudo-handle resolution, raw API semantics, owner checks for selected object kinds, wake hints and diagnostic records.
 
-The entry slice stores thread mutable state once in `HandleTable` and gives public thread handles incarnation-qualified aliases. `DuplicateHandle` and `OpenThread` share that record; wait registration also records a typed canonical wake key. An execution-live thread survives closure of its final public alias internally, but post-close wait acquisition and target pinning are not implemented. Creation ProcessBirthKey is absent. Separate Kernel main-thread fallback maps can disagree with later real handles, and existing blocked continuations mostly retain numeric handles.
+The entry slice stores thread mutable state once in `HandleTable` and gives public thread handles incarnation-qualified aliases. `DuplicateHandle` and `OpenThread` share that record; wait registration also records a typed canonical wake key. An execution-live thread survives closure of its final public alias internally, but post-close wait acquisition and target pinning are not implemented. The creation-owner follow-on stores a checked ProcessBirthKey for production thread births; direct legacy HandleTable fixtures may still have an explicit unknown owner. Boot TID 1 has an execution-live, aliasless record, and the child primary is born under the child process birth. Separate Kernel primary-thread fallback maps can disagree with durable identity, and existing blocked continuations mostly retain numeric handles.
 
 The same clone-by-value problem affects every object kind that is not a file, find, volume or notification handle. `CeKernel::duplicate_handle` (`src/ce/kernel.rs:6410-6453`) hands the cloned value to its `other => other` arm. A duplicated event, mutex, semaphore or file mapping therefore becomes an independent copy. Signalling the copy, or mapping a view through it, does not reach the source. CE's HNDLDuplicate (`handle.c` 775–829) instead points the new handle at the same PHDATA. The reviewed first alias slice below covers thread/process handles only; generic Event/Mutex/Semaphore/FileMapping aliasing is an explicitly open following slice, not a D-008 memory shortcut. Until then, a cross-process shared-view test should use a named `CreateFileMappingW` reopen as its public route: `HandleTable::create_file_mapping` (`src/ce/object.rs:696-725`) returns the existing object's handle.
 
@@ -20,7 +20,7 @@ The same clone-by-value problem affects every object kind that is not a file, fi
 
 Other object types have individual conventions: `OpenProcess(current PID)` now returns a distinct closable alias, while `GetCurrentProcess` remains pseudo. File duplication uses file-system bookkeeping and mapped views use canonical mapping data with process ownership. Named Event/Mapping CloseHandle can return success without removing a public handle, duplicated file/find contexts have separate cursors, and shared mapping pages are still keyed by a public handle. These exceptions do not establish a universal alias/lifetime model. Current global handle numbers and virtual-allocation metadata do not enforce CE6 per-process handle-table/address-space isolation.
 
-Task-owned compatibility wait storage is implemented, but numeric handle arrays plus duplicated native wait payloads are not pinned canonical object references. Toolhelp/diagnostic inference is not authoritative ownership.
+Task-owned compatibility wait storage is implemented, but numeric handle arrays plus duplicated native wait payloads are not pinned canonical object references. Toolhelp reads stored creation ownership for registered threads; a synthetic host-only caller TID retains a selector-based compatibility fallback. Other diagnostic/primary fallback maps are not durable Task authority.
 
 ## Target object and reference ownership
 
@@ -88,37 +88,39 @@ For object waits, derive a typed canonical Thread/Process wake key at the Kernel
 
 Deep-copy mutable thread records on `CeKernel::clone` while preserving sibling aliases inside that clone; never share mutable `Rc`/`Arc` state across clones. This proves only the local test's alias graph, not machine/checkpoint birth-key relineage. Leave generic `other => other` duplication and named-object/file/find/mapping/view lifetime behavior explicitly open for a following connected object slice. A source-gate failure calls for a reviewed code rollback with logs and source hashes preserved; this plan gives no permission for a live app run.
 
-## Immutable creation-owner follow-on slice
+## Bounded immutable creation-owner slice
 
-The next bounded slice freezes a checked `ProcessBirthKey` in each canonical
+The source-gated follow-on stores a checked `ProcessBirthKey` in each production
 `ThreadRecord` when a thread is born. CE6's `NKCreateThread` selects the active
 process at creation (`thread.c` 935) and `InitThreadStruct` stores it as the
 thread owner (`thread.c` 276); `GetProcessIdOfThread` reads that frozen owner
-(`thread.c` 810–812). In the emulator's normal guest path, resolve the
+(`thread.c` 810–812). The emulator's normal guest path now resolves the
 creator TID's canonical owner before creation, not the mutable selected PID
-afterward. Future cross-process/PSL execution will need a checked active
-process frame at that boundary; this slice does not fabricate one.
+afterward. Future cross-process/PSL execution still needs a checked active
+process frame at that boundary; this slice did not fabricate one.
 
-Register boot TID 1 as an execution-live, aliasless canonical thread owned by
-the boot process birth so raw and native CreateThread can resolve its creator.
-The child primary gets the child ProcessBirthKey minted in the same launch
-transaction. Production raw and native CreateThread paths pass their creator
-TID through one checked owner route and fail closed for an absent/stale owner.
-Keep the existing selector-based `create_guest_thread` only as an explicitly
-labelled host/test compatibility entry; direct legacy HandleTable fixtures may
-retain an explicit unknown owner. Neither path may infer ownership later from
-the currently selected process.
+Boot TID 1 is registered as an execution-live, aliasless canonical thread owned
+by the boot process birth, so raw and native CreateThread can resolve its
+creator. The child primary receives the child ProcessBirthKey at birth.
+Production raw and native CreateThread paths pass their creator TID through
+one checked owner route and fail closed for an absent/stale owner. The existing
+selector-based `create_guest_thread` remains an explicitly labelled host/test
+compatibility entry; direct legacy HandleTable fixtures may retain an explicit
+unknown owner. Neither path infers ownership later from the currently selected
+process.
 
-Make `GetProcessIdOfThread` and Toolhelp read the stored owner for a valid
-thread birth. Turn green `get_process_id_of_thread_reports_immutable_creation_owner`
-and `task_ownership_pid_is_creation_owner_not_selected_process`, strengthening
-their controls with launch-queue drain, process rotation and a creator TID
-whose owner differs from the selected process. If boot-main or child-primary
-identity controls become genuinely satisfied, activate them in the same
-change; otherwise keep their exact missing contracts ignored. This owner key
-is a prerequisite, not proof, of a later TerminateProcess sweep of every
-owned thread (including aliasless workers), fixed-stack budget release or
-request-only parked-child completion.
+`GetProcessIdOfThread` and Toolhelp now read the stored owner for a valid
+registered thread birth. The active
+`get_process_id_of_thread_reports_immutable_creation_owner` and
+`task_ownership_pid_is_creation_owner_not_selected_process` controls pass
+after launch-queue drain, process rotation and adversarial selector changes.
+Boot-main enumeration and durable child-primary identity controls remain
+ignored; an aliasless boot record alone does not satisfy their full contracts.
+This owner key is a prerequisite, not proof, of a later TerminateProcess sweep
+of every owned thread (including aliasless workers), fixed-stack budget
+release or request-only parked-child completion. The owner-slice
+[receipt](../../evidence/stage3-owner-20261014/validation.receipt.md) records
+its source-bound gates; no live app behavior was measured.
 
 ## Test gates and pending decisions
 
@@ -127,7 +129,7 @@ later last-public-handle/alias-wake/wait-pin controls (E-11), form the
 expected-red baseline: one close-source preservation pass and twelve failures.
 Alias wake-index and clone tail assertions in the earlier controls were not
 reached after preceding failures. This is a baseline, not kernel-object
-acceptance. The first alias slice must activate and turn green these six in
+acceptance. The first alias slice activated and turned green these six in
 the same source change:
 
 | Control | First-slice evidence |
@@ -139,27 +141,31 @@ the same source change:
 | `thread_exit_through_one_alias_indexes_waiter_on_another_alias` | Canonical-key wake index |
 | `task_ownership_cloned_kernel_does_not_share_mutable_thread_state` | Independent clone-local alias graph |
 
-Leave these six ignored with the stated missing contract, rather than
-unignoring them as an incidental consequence of alias coherence:
+The bounded creation-owner slice also activated and turned green these two:
+
+| Control | Owner-slice evidence |
+| --- | --- |
+| `get_process_id_of_thread_reports_immutable_creation_owner` | Raw API reads frozen creation ProcessBirthKey |
+| `task_ownership_pid_is_creation_owner_not_selected_process` | Worker/Toolhelp owner is stable across process selection and launch drain |
+
+Keep these four ignored with their stated missing contracts:
 
 | Control | Still missing |
 | --- | --- |
-| `get_process_id_of_thread_reports_immutable_creation_owner` | Raw API creation ProcessBirthKey |
-| `task_ownership_pid_is_creation_owner_not_selected_process` | Worker/Toolhelp creation ownership |
-| `task_ownership_boot_main_is_retained_without_a_public_thread_handle` | Boot execution record without alias |
+| `task_ownership_boot_main_is_retained_without_a_public_thread_handle` | Aliasless boot-main Toolhelp enumeration and full identity contract |
 | `task_ownership_primary_identity_outlives_launch_queue_and_trace_ring` | Durable child primary identity and completion |
 | `live_task_survives_closing_its_final_public_handle` | Execution pin and retirement |
 | `closed_thread_alias_wait_keeps_an_exited_target_pinned` | Wait pin and post-close acquisition |
 
 Preserve the active `task_ownership_duplicate_close_source_keeps_thread_alive`
-success-path control. Add process current-PID alias/pseudo separation,
-sibling-close, checked exhaustion/no-publication and stale-key controls, then
-run focused active controls, raw Kernel/subsystem suites, release/no-default
-all-targets and desktop no-trace checks on the same hashed source. Record
-ignored counts, failures and immutable logs in a receipt. Even a green first
-slice does not establish O-K3, generic object aliasing, full Stage 3, CE
-scheduling, checkpoint lineage, native last-public-handle execution or live
-app responsiveness.
+success-path control. The alias slice also gated process current-PID
+alias/pseudo separation, sibling-close, checked exhaustion/no-publication and
+stale-key behavior. The owner follow-on passed its focused controls, debug
+no-default all-targets (1,364/0/5), release unicorn/trace/desktop all-targets
+(1,829/0/11) and desktop no-trace check on the same owner source. Its receipt
+records hashes and logs. These bounded gates do not establish O-K3, generic
+object aliasing, full Stage 3, CE scheduling, checkpoint lineage, native
+last-public-handle execution or live app responsiveness.
 
 Before implementation acceptance:
 

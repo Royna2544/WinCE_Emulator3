@@ -124,14 +124,18 @@ separate gates.
 Executed controls are recorded in the ledger and source-bound receipts; they
 close only their named gates, not Stage 2 or live acceptance.
 
-- Task/handle ownership: the first thread/process alias entry slice passed
-  focused gates and frozen-source debug no-default 1,360/0/7 plus release
-  unicorn/trace/desktop 1,825/0/13; six ownership/pin controls remain
-  deliberately ignored
-  ([receipt](../evidence/stage3-alias-20261014/validation.receipt.md)).
-  This is not Stage 3 acceptance. Next, freeze creation ProcessBirthKey in
-  canonical thread records and route production CreateThread through a checked
-  creator identity; then prove process-worker termination and wait pins.
+- Task/handle ownership: the thread/process alias entry slice passed its
+  frozen-source gate ([receipt](../evidence/stage3-alias-20261014/validation.receipt.md)).
+  The bounded creation-owner follow-on now freezes a checked ProcessBirthKey
+  for production thread births, registers aliasless boot TID 1, binds the
+  child primary to its birth and routes production CreateThread through a
+  checked creator TID. Two E-26 owner controls are active; its source-bound
+  debug no-default gate passed 1,364/0/5 and release unicorn/trace/desktop
+  passed 1,829/0/11, with desktop no-trace check also green
+  ([receipt](../evidence/stage3-owner-20261014/validation.receipt.md)).
+  Four ownership/pin controls remain deliberately ignored. This is not Stage
+  3 acceptance or a live-app result. Next, prove all-worker process
+  termination, durable primary/parked-child completion and wait pins.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full
