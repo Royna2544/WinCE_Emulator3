@@ -19339,7 +19339,7 @@ fn try_block_empty_get_message<D>(
         kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(kernel, blocked_thread, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             Vec::new(),
@@ -19395,7 +19395,7 @@ fn try_block_empty_get_message<D>(
         kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(kernel, blocked_thread, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -19516,7 +19516,7 @@ fn try_block_empty_get_message<D>(
         kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(kernel, blocked_thread, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -19908,7 +19908,7 @@ fn try_block_for_popup_menu_modal_wait<D>(
                 .borrow()
                 .and_then(|(id, handle)| (id == thread_id).then_some(handle))
                 .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
-            let wait_id = kernel.register_blocked_waiter(
+            let wait_id = kernel.register_opaque_compatibility_waiter(
                 thread_id,
                 thread_handle,
                 Vec::new(),
@@ -20133,7 +20133,7 @@ fn try_block_for_send_message_timeout_wait<D>(
         .borrow()
         .and_then(|(id, handle)| (id == thread_id).then_some(handle))
         .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
-    let wait_id = kernel.register_blocked_waiter(
+    let wait_id = kernel.register_opaque_compatibility_waiter(
         thread_id,
         thread_handle,
         Vec::new(),
@@ -20429,7 +20429,7 @@ fn try_block_for_clipboard_data_wait<D>(
         .and_then(|(id, handle)| (id == thread_id).then_some(handle))
         .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
     let now_ms = kernel.timers.tick_count();
-    let wait_id = kernel.register_blocked_waiter(
+    let wait_id = kernel.register_opaque_compatibility_waiter(
         thread_id,
         thread_handle,
         Vec::new(),
@@ -21304,7 +21304,7 @@ fn try_block_message_queue_io<D>(
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         let wait_handles = vec![queue_handle];
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             wait_handles.clone(),
@@ -21366,7 +21366,7 @@ fn try_block_message_queue_io<D>(
         }
         let wait_handles = vec![queue_handle];
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             wait_handles.clone(),
@@ -21462,7 +21462,7 @@ fn try_block_message_queue_io<D>(
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let wait_handles = vec![queue_handle];
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             wait_handles.clone(),
@@ -21536,6 +21536,22 @@ fn try_block_message_queue_io<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn complete_native_task_wait_preparation_failure<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    return_pc: u32,
+) -> bool {
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(crate::ce::timer::WAIT_FAILED)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+    }
+    true
+}
+
+#[cfg(feature = "unicorn")]
 fn try_block_wait_for_single_object<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -21583,23 +21599,44 @@ fn try_block_wait_for_single_object<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    kernel.record_blocked_single_wait(timeout);
     let wait_started_ms = kernel.timers.tick_count();
-    remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
 
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    let pending_callout = pending_returns
+        .borrow()
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id)
+        .cloned();
+    if let Some(callout) = pending_callout {
         let kind = BlockedWaitKind::Kernel;
         let wait_handles = vec![wait_handle];
         let wait_thread_id = guest_thread_wait_owner_id(kernel, thread_id, callout.thread_handle);
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, wait_thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             wait_thread_id,
             callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_single_wait(timeout);
+        remove_stale_blocked_get_message_for_thread(
+            prepared.kernel_mut(),
+            blocked_get_message,
+            thread_id,
         );
+        let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
+        else {
+            return false;
+        };
+        remove_stale_blocked_waits_for_thread(
+            prepared.kernel_mut(),
+            blocked_waits,
+            wait_thread_id,
+        );
+        let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -21654,6 +21691,12 @@ fn try_block_wait_for_single_object<D>(
                 host_wall_clock_limit,
             )
         {
+            kernel.record_blocked_single_wait(timeout);
+            remove_stale_blocked_get_message_for_thread(
+                kernel,
+                blocked_get_message,
+                thread_id,
+            );
             return complete_current_single_wait_timeout(
                 kernel,
                 uc,
@@ -21666,15 +21709,29 @@ fn try_block_wait_for_single_object<D>(
         }
         let kind = BlockedWaitKind::Kernel;
         let wait_handles = vec![wait_handle];
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, wait_thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             wait_thread_id,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_single_wait(timeout);
+        remove_stale_blocked_get_message_for_thread(
+            prepared.kernel_mut(),
+            blocked_get_message,
+            thread_id,
         );
+        remove_stale_blocked_waits_for_thread(
+            prepared.kernel_mut(),
+            blocked_waits,
+            wait_thread_id,
+        );
+        let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -21766,6 +21823,12 @@ fn try_block_wait_for_single_object<D>(
                 host_wall_clock_limit,
             )
         {
+            kernel.record_blocked_single_wait(timeout);
+            remove_stale_blocked_get_message_for_thread(
+                kernel,
+                blocked_get_message,
+                thread_id,
+            );
             return complete_current_single_wait_timeout(
                 kernel,
                 uc,
@@ -21778,15 +21841,29 @@ fn try_block_wait_for_single_object<D>(
         }
         let kind = BlockedWaitKind::Kernel;
         let wait_handles = vec![wait_handle];
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             thread_id,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_single_wait(timeout);
+        remove_stale_blocked_get_message_for_thread(
+            prepared.kernel_mut(),
+            blocked_get_message,
+            thread_id,
         );
+        remove_stale_blocked_waits_for_thread(
+            prepared.kernel_mut(),
+            blocked_waits,
+            thread_id,
+        );
+        let wait_id = prepared.publish();
         annotate_blocking_single_wait_import(
             kernel,
             last_imports,
@@ -22272,7 +22349,7 @@ fn try_block_sleep<D>(
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             Vec::new(),
@@ -22327,7 +22404,7 @@ fn try_block_sleep<D>(
             );
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -22429,7 +22506,7 @@ fn try_block_sleep<D>(
         }
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -22874,7 +22951,6 @@ fn try_block_wait_for_multiple_objects<D>(
         return false;
     }
 
-    kernel.record_blocked_multiple_wait(count, timeout);
     let wait_started_ms = kernel.timers.tick_count();
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -22898,20 +22974,39 @@ fn try_block_wait_for_multiple_objects<D>(
             live_pump,
         )
     {
+        kernel.record_blocked_multiple_wait(count, timeout);
         return true;
     }
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+    let pending_callout = pending_returns
+        .borrow()
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id)
+        .cloned();
+    if let Some(callout) = pending_callout {
         let kind = BlockedWaitKind::Kernel;
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             thread_id,
             callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_multiple_wait(count, timeout);
+        let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
+        else {
+            return false;
+        };
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
+        remove_stale_blocked_get_message_for_thread(
+            prepared.kernel_mut(),
+            blocked_get_message,
+            thread_id,
         );
+        let wait_id = prepared.publish();
         kernel.record_wait_event_trace(
             "BlockWaitForMultipleObjects",
             None,
@@ -22955,16 +23050,25 @@ fn try_block_wait_for_multiple_objects<D>(
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
         let kind = BlockedWaitKind::Kernel;
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             thread_id,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_multiple_wait(count, timeout);
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
+        remove_stale_blocked_get_message_for_thread(
+            prepared.kernel_mut(),
+            blocked_get_message,
+            thread_id,
         );
+        let wait_id = prepared.publish();
         kernel.record_wait_event_trace(
             "BlockWaitForMultipleObjects",
             None,
@@ -23187,18 +23291,31 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         return true;
     }
 
-    kernel.record_blocked_msg_wait(count, timeout);
     let wait_started_ms = kernel.timers.tick_count();
-    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+    let pending_callout = pending_returns
+        .borrow()
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id)
+        .cloned();
+    if let Some(callout) = pending_callout {
+        let mut prepared = match kernel.prepare_task_wait(
             thread_id,
             callout.thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_msg_wait(count, timeout);
+        let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id)
+        else {
+            return false;
+        };
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
+        let wait_id = prepared.publish();
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -23231,15 +23348,20 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let mut prepared = match kernel.prepare_task_wait(
             thread_id,
             thread_handle,
             wait_handles.clone(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
-        );
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => return complete_native_task_wait_preparation_failure(uc, return_pc),
+        };
+        prepared.kernel_mut().record_blocked_msg_wait(count, timeout);
+        remove_stale_blocked_waits_for_thread(prepared.kernel_mut(), blocked_waits, thread_id);
+        let wait_id = prepared.publish();
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
             thread_id,
@@ -23622,7 +23744,7 @@ fn block_serial_read_file<D>(
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             Vec::new(),
@@ -23663,7 +23785,7 @@ fn block_serial_read_file<D>(
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -23818,7 +23940,7 @@ fn block_wait_comm_event<D>(
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             Vec::new(),
@@ -23859,7 +23981,7 @@ fn block_wait_comm_event<D>(
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             Vec::new(),
@@ -24253,7 +24375,7 @@ fn block_winsock_read<D>(
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             callout.thread_handle,
             wait_handles.clone(),
@@ -24294,7 +24416,7 @@ fn block_winsock_read<D>(
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             thread_id,
             thread_handle,
             wait_handles.clone(),
@@ -29425,6 +29547,380 @@ mod wait_scheduler_tests {
             uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
             return_pc
         );
+    }
+
+    #[test]
+    fn retired_single_wait_alias_stays_on_raw_error_path_without_mutating_old_wait() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (closed_handle, target_tid) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let target_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(closed_handle)
+            .unwrap();
+        assert!(kernel.close_handle(closed_handle).unwrap());
+        assert!(kernel.mark_guest_thread_exited_by_id(target_tid, 0));
+        assert!(!kernel.handles.contains_thread_birth(target_birth));
+
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let old_event = kernel.create_event_w(None, true, false);
+        let started = kernel.timers.tick_count();
+        let old_wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![old_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            started,
+            INFINITE,
+        );
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: old_wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: vec![old_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: started,
+            timeout_ms: INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0x0040_2000,
+        }]));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_5000).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x7788_9900).unwrap();
+
+        assert!(!super::try_block_wait_for_single_object(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
+            &[closed_handle, INFINITE],
+            &last_imports,
+            &import_milestones,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
+            &running_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
+        assert!(kernel.blocked_waiter(old_wait_id).is_some());
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x7788_9900);
+
+        assert_eq!(
+            kernel.wait_for_single_object(closed_handle, INFINITE, thread_id),
+            crate::ce::timer::WAIT_FAILED
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            crate::ce::thread::ERROR_INVALID_HANDLE
+        );
+    }
+
+    #[test]
+    fn failed_native_single_wait_preparation_preserves_pending_return_and_old_wait() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let (target_handle, _) = kernel.create_guest_thread(0x0040_4000, 0, false);
+        let target_pin = crate::ce::object::TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(target_handle)
+                .unwrap(),
+        );
+        let old_event = kernel.create_event_w(None, true, false);
+        let started = kernel.timers.tick_count();
+        let old_wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![old_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            started,
+            INFINITE,
+        );
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: old_wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: vec![old_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: started,
+            timeout_ms: INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0x0040_2000,
+        }]));
+        let pending_return = super::PendingGuestThreadReturn {
+            creator_thread_id: super::MAIN_GUEST_THREAD_ID,
+            worker_thread_id: thread_id,
+            thread_handle,
+            return_pc: 0x0040_7000,
+            creator_regs: super::MipsGuestContext::zero(),
+        };
+        let pending_returns =
+            std::rc::Rc::new(std::cell::RefCell::new(vec![pending_return.clone()]));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let return_pc = 0x0040_6000;
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        assert!(kernel
+            .handles
+            .set_wait_target_pin_count_for_test(target_pin, u32::MAX));
+
+        assert!(super::try_block_wait_for_single_object(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
+            &[target_handle, INFINITE],
+            &last_imports,
+            &import_milestones,
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
+            &running_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+        assert_eq!(pending_returns.borrow().as_slice(), &[pending_return]);
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
+        assert!(kernel.blocked_waiter(old_wait_id).is_some());
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(u32::MAX));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
+        );
+        assert!(kernel.handles.set_wait_target_pin_count_for_test(target_pin, 0));
+    }
+
+    #[test]
+    fn failed_native_multiple_wait_preparation_rolls_back_earlier_pin() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (first_handle, _) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let (second_handle, _) = kernel.create_guest_thread(0x0040_4000, 0, false);
+        let first_pin = crate::ce::object::TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(first_handle)
+                .unwrap(),
+        );
+        let second_pin = crate::ce::object::TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(second_handle)
+                .unwrap(),
+        );
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let old_event = kernel.create_event_w(None, true, false);
+        let started = kernel.timers.tick_count();
+        let old_wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![old_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            started,
+            INFINITE,
+        );
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: old_wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: vec![old_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: started,
+            timeout_ms: INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0x0040_2000,
+        }]));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes()).unwrap();
+        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes()).unwrap();
+        let return_pc = 0x0040_6000;
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        assert!(kernel
+            .handles
+            .set_wait_target_pin_count_for_test(second_pin, u32::MAX));
+
+        assert!(super::try_block_wait_for_multiple_objects(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS),
+            &[2, 0x3000_0100, 0, INFINITE],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
+            &running_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        assert_eq!(blocked_waits.borrow()[0].wait_id, old_wait_id);
+        assert!(kernel.blocked_waiter(old_wait_id).is_some());
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
+        assert_eq!(kernel.handles.wait_target_pin_count(second_pin), Some(u32::MAX));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
+        );
+        assert!(kernel.handles.set_wait_target_pin_count_for_test(second_pin, 0));
+    }
+
+    #[test]
+    fn failed_native_msg_wait_preparation_rolls_back_earlier_pin() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let (first_handle, _) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let (second_handle, _) = kernel.create_guest_thread(0x0040_4000, 0, false);
+        let first_pin = crate::ce::object::TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(first_handle)
+                .unwrap(),
+        );
+        let second_pin = crate::ce::object::TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(second_handle)
+                .unwrap(),
+        );
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(0x3000_0100, &first_handle.to_le_bytes()).unwrap();
+        uc.mem_write(0x3000_0104, &second_handle.to_le_bytes()).unwrap();
+        let return_pc = 0x0040_6000;
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        assert!(kernel
+            .handles
+            .set_wait_target_pin_count_for_test(second_pin, u32::MAX));
+
+        assert!(super::try_block_msg_wait_for_multiple_objects_ex(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX),
+            &[2, 0x3000_0100, INFINITE, 0, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new())),
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert_eq!(kernel.handles.wait_target_pin_count(first_pin), Some(0));
+        assert_eq!(kernel.handles.wait_target_pin_count(second_pin), Some(u32::MAX));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, crate::ce::timer::WAIT_FAILED);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
+        );
+        assert!(kernel.handles.set_wait_target_pin_count_for_test(second_pin, 0));
     }
 
     #[test]
@@ -47026,7 +47522,7 @@ fn try_enter_send_message_callout<D>(
                 result_ptr,
                 previous_running_thread,
             };
-            let wait_id = kernel.register_blocked_waiter(
+            let wait_id = kernel.register_opaque_compatibility_waiter(
                 active_thread_id,
                 thread_handle,
                 Vec::new(),
@@ -47192,7 +47688,7 @@ fn try_enter_send_message_callout<D>(
             result_ptr,
             previous_running_thread,
         };
-        let wait_id = kernel.register_blocked_waiter(
+        let wait_id = kernel.register_opaque_compatibility_waiter(
             active_thread_id,
             thread_handle,
             Vec::new(),
