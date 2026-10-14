@@ -4,7 +4,26 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-14 E-38 Bounded E-37 Live Run and GMS Targeted Gate
+## 2026-10-14 E-39 Native Same-VA Controls and GMS Broad Gate
+
+- E-20's real-MIPS A→B→A controls passed across fresh native owners: public
+  `VirtualAlloc` in distinct process births isolated bytes at the same VA,
+  while an injected `FileMappingView` pair validated owner-qualified native
+  view seeding/readback at one VA. The view fixture does not prove public
+  `MapViewOfFile`, named mapping reopen, same-mapping aliases, guest
+  `CreateProcessW` handoff or shared-view slab coherence. Focused controls
+  each passed 1/0; frozen-source full release passed **1,742/0/14 ignored**
+  and no-feature **1,296/0/13 ignored**. There was no E-20 production fix or
+  app run ([ledger E-39](docs/evidence/ledger.md),
+  [E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md)).
+- The separate GMS follow-up passed its four public API tests in both broad
+  suites above, after a focused 4/0/0 gate. Boot-reserved physical RAM and
+  stable private pages share one admission/reporting budget; it does **not**
+  charge heap allocations or legacy file-view backing and is not a full
+  guest-memory census. No GMS app run occurred
+  ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
+
+## 2026-10-14 E-38 Bounded E-37 Live Run
 
 - A separate one-run approval and fresh adjacent SHA-verified ZIP backups
   enabled a 330-second iNavi run of the **preserved E-37 release EXE**, not
@@ -24,12 +43,6 @@ references for historical reconstruction.
   per-slice profiles. The [E-38 receipt](evidence/e37-live-20261014T051228Z/analysis.receipt.md)
   records authority, backup/bin hashes, timing, limits and caveats. That
   launch approval is spent; map readiness and Stage 2 acceptance remain open.
-- The GMS follow-up charges boot-reserved physical RAM to the same private
-  commit budget it reports. Its focused no-feature release public API gate
-  passed **4/0/0**; no broad suite or app run was done for that later source.
-  The [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)
-  records the source and raw-test hashes. Real native E-20 A→B→A and shared
-  file-view slabs remain separate gates.
 
 ## 2026-10-14 E-37 Fresh-Default View/Legacy-Page Sync
 

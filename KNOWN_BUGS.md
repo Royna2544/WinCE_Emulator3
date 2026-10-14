@@ -31,11 +31,20 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   validated. The first post-switch iNavi run failed at 2.9 s on mapped-view
   readback; E-37 repaired that path and the separately approved E-38 run
   survived 330 s at 430.676 MiB sampled RSS, but remained on the splash with
-  no map. Real native two-process A→B→A byte isolation and shared-view slab
-  coherence remain unproved. A same-PID DIB view without VA metadata can Flush
-  but not Unmap; the immediate CreateProcess view-sync failure path has no
-  fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports remain
-  absent. History: ledger E-14, E-16, E-18, E-20, E-22 to E-25, E-35, E-36.
+  no map. E-39 proves public private-VM native A→B→A same-VA isolation and
+  injected file-view native A→B→A isolation, but public `MapViewOfFile` still
+  uses a global view cursor; public same-VA A/B views, named reopen and
+  same-mapping alias coherence remain unproved. A same-PID DIB view without
+  VA metadata can Flush but not Unmap; the immediate CreateProcess view-sync
+  failure path has no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name
+  exports remain absent. History: ledger E-14, E-16, E-18, E-20, E-22 to
+  E-25, E-35 to E-39.
+- GMS's boot-reserved physical RAM and stable private-page commit use one
+  budget, with four public controls passing both E-39 broad suites. Only
+  stable private pages charge this budget: heap, image and legacy-view memory
+  do not reduce reported available physical memory. It is not a complete
+  guest-memory census
+  ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - Canonical Task/alias ownership is absent: 12 expected-red Task controls live
   in `tests/` (ledger E-8, E-11, E-26). Process birth and alias lifetime are
   fixed (E-21); thread/task aliases, wait pins and clone lineage are not.

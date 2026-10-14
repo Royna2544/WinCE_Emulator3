@@ -14,12 +14,11 @@ remote-control HTTP/WebSocket surface.
 - The [architecture anchor](docs/ARCHITECTURE.md), [migration plan](docs/PLAN.md)
   and [subsystem pages](docs/README.md) guide the user-authorized scheduler-core
   rewrite; they do not mark it complete. The sole source checkout is the D:
-  repository. Fresh-engine ownership, public same-VA/private-page coherence,
-  one sealed task/frame-qualified run outcome, Stage 2 and the Stage 3 task
-  migration remain open. The current D: implementation retains native
-  process engines by default, but that behavior is experimental and not an
-  accepted Stage 2 baseline. The approved target is fresh-engine-per-slice;
-  persistent-owner architecture is deferred to Stage 8.
+  repository. Fresh-engine-per-slice is the source-bound default, and public
+  private-VM native same-VA A→B→A isolation is validated. Public shared-view
+  slab coherence, one sealed task/frame-qualified run outcome, Stage 2 and
+  the Stage 3 task migration remain open. Persistent-owner architecture is
+  deferred to Stage 8.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
@@ -75,6 +74,16 @@ remote-control HTTP/WebSocket surface.
   22–34 MIPS range; overall busy slices across helpers measured 17.120 MIPS.
   The approval was consumed by this one run
   ([E-38 analysis](evidence/e37-live-20261014T051228Z/analysis.receipt.md)).
+- The E-20 native controls passed real-MIPS A→B→A same-VA bytes with fresh
+  owners: public `VirtualAlloc` private memory and a separate injected
+  `FileMappingView` fixture. The latter does not validate public
+  `MapViewOfFile`, named reopen or shared alias coherence. On the combined
+  final source, full release passed **1,742/0/14 ignored** and no-feature
+  **1,296/0/13 ignored**; the four public GMS tests passed in both. GMS now
+  includes boot-reserved RAM in its stable-private-page budget, but heap and
+  legacy views are not charged. These are source gates, not another app run
+  ([E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md),
+  [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
   and remained on the genuine splash, not the map. Guest `COM7:` reads
   transferred injected raw NMEA bytes, and tap down/up WNDPROC returns were
