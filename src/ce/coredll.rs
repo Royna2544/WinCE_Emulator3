@@ -71025,7 +71025,10 @@ mod tests {
                 .gwe
                 .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
                 .expect("rejected MSG span must not remove the queued message");
-            assert_eq!((queued.msg, queued.wparam, queued.lparam), (MSG, 0x12, 0x34));
+            assert_eq!(
+                (queued.msg, queued.wparam, queued.lparam),
+                (MSG, 0x12, 0x34)
+            );
 
             memory.fail_host_write_span = None;
             let retried = if peek_remove {
@@ -71040,10 +71043,12 @@ mod tests {
             };
             assert!(retried);
             assert_eq!(memory.guest.read_u32(MSG_PTR + 4)?, MSG);
-            assert!(kernel
-                .gwe
-                .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
-                .is_none());
+            assert!(
+                kernel
+                    .gwe
+                    .peek_message_filtered(1, None, 0, 0, PeekFlags::NO_REMOVE)
+                    .is_none()
+            );
         }
         Ok(())
     }
