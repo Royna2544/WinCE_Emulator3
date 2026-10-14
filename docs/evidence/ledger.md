@@ -1300,6 +1300,39 @@ original-mount launch requires fresh human approval and fresh adjacent verified
 ZIP backups. GMS, real native E-20 A→B→A bytes, shared-view slab coherence and
 full Stage 2/live acceptance remain separate.
 
+## E-38 Preserved E-37 iNavi live comparison (2026-10-14, executed)
+
+A separate human approval (`call_93cb71e3f4dc432c84262f0a340f3091`) covered
+**one** run of the frozen E-37 release EXE on the original writable mounts,
+after fresh adjacent SHA-verified ZIP backups. That launch exited 0 at the
+330-second host cap (330.3920454 s), with no watchdog trip or guest CPU error;
+the observer completed. The E-37 source-bound view fix therefore cleared the
+earlier O-P4 fatal mapped-view readback in this one live attempt. The settled
+iNavi SE splash persisted through the end; **no map** was observed.
+
+The 160 host samples peaked at **430.676 MiB RSS** (+299.737 s) and
+**444.953 MiB private** (+326.484 s). The RSS peak is 22.5% below BED2 E-1
+and about 71–72% below the persistent E-22/E-27/E-29 peaks over similarly
+bounded runs; this is descriptive, not a causal or input-matched result.
+Sixteen raw-NMEA POSTs and one tap received ACKs; retained guest traces
+additionally show nine positive COM7 reads (2,262 B) and tap down/up WNDPROC
+returns. They do not prove GPS parsing or navigation. The 1,714 busy native
+slice profiles give **17.120 weighted MIPS** overall and **7.278 ms
+setup+hooks per busy slice**, but the persistent runs lack matching profiles,
+so a throughput or fixed-cost gain cannot be asserted. This run-only MIPS
+measure excludes setup/hooks; busy slices averaged **58.398 ms** in `run_ms`
+and **68.159 ms** across the five tracked fields, with setup+hooks at
+**10.68%** of tracked time. E-9's same-field hookless range was **22–34
+MIPS for busy iNavi slices** on two-minute runs. E-38's corresponding PID 1
+figure is **26.359 MIPS, within that range**; the 17.120 figure includes
+helper processes, chiefly PID 67 at 15.060 MIPS, and cannot be compared to
+E-9's iNavi-only range. Neither phase/input parity nor a cold-TCG cost is
+established; that remains a paused Stage 8 question. Four mount-inventory
+entries changed timestamps only, with file hashes unchanged. All backups and
+the full [E-38 receipt](../../evidence/e37-live-20261014T051228Z/analysis.receipt.md)
+remain on D:. This single-run approval is spent; map-readiness and full Stage
+2 acceptance remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
