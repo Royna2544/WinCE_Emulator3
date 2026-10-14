@@ -6702,19 +6702,29 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         ERROR_INVALID_PARAMETER
     );
     let current_process_id = kernel.current_process_id();
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel,
-            &mut memory,
-            thread_id,
-            ORD_OPEN_PROCESS,
-            [0, 0, current_process_id],
-        ),
+    // CE6 process.c NKOpenProcess duplicates the process object even for the
+    // selected PID; GetCurrentProcess is the separate pseudo-handle path.
+    let opened_current_process = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPEN_PROCESS,
+        [0, 0, current_process_id],
+    ) {
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+            value: CoredllValue::Handle(handle),
             ..
-        }
-    ));
+        } => handle,
+        other => panic!("expected current-PID OpenProcess alias, got {other:?}"),
+    };
+    assert_ne!(opened_current_process, 0);
+    assert_ne!(opened_current_process, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
+    assert_eq!(
+        kernel.process_id(opened_current_process),
+        Some(current_process_id)
+    );
+    assert!(kernel.close_handle(opened_current_process)?);
+    assert_eq!(kernel.process_id(opened_current_process), None);
     let opened_process = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,

@@ -1,12 +1,12 @@
 // D-007 historical Stage 3 E-8 task-identity API controls.
-// The expected-red tests are compiled but ignored until the Stage 3 gate opens.
+// OpenThread aliasing is active; authentic creation-owner lookup remains red.
 
 use wince_emulation_v3::{
     Result,
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllValue},
-        coredll_ordinals::{ORD_GET_PROCESS_ID_OF_THREAD, ORD_OPEN_THREAD},
-        kernel::CeKernel,
+        coredll_ordinals::{ORD_GET_PROCESS_ID_OF_THREAD, ORD_OPEN_PROCESS, ORD_OPEN_THREAD},
+        kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CeKernel},
     },
     config::RuntimeConfig,
 };
@@ -15,7 +15,6 @@ mod support;
 use support::TestGuestMemory;
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task identity API"]
 fn open_thread_returns_independent_alias_to_same_live_task() -> Result<()> {
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
     let (original, tid) = kernel.create_guest_thread(0x1234, 0x5678, false);
@@ -49,7 +48,56 @@ fn open_thread_returns_independent_alias_to_same_live_task() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task identity API"]
+fn open_process_current_pid_returns_distinct_closable_aliases_with_shared_exit() -> Result<()> {
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let process_id = kernel.current_process_id();
+    let mut memory = TestGuestMemory::default();
+    let table = CoredllExportTable::default();
+    let mut aliases = Vec::new();
+    for _ in 0..2 {
+        let alias = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            1,
+            ORD_OPEN_PROCESS,
+            [0, 0, process_id],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            result => panic!("OpenProcess(current PID) returned {result:?}"),
+        };
+        assert_ne!(alias, 0);
+        assert_ne!(alias, CE_CURRENT_PROCESS_PSEUDO_HANDLE);
+        assert_eq!(kernel.process_id(alias), Some(process_id));
+        aliases.push(alias);
+    }
+    assert_ne!(aliases[0], aliases[1]);
+    assert_eq!(
+        kernel.process_id_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+        Some(process_id),
+        "explicit opens must not replace GetCurrentProcess's pseudo-handle"
+    );
+
+    assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x7654));
+    assert_eq!(kernel.process_exit_code(aliases[0]), Some(0x7654));
+    assert_eq!(kernel.process_exit_code(aliases[1]), Some(0x7654));
+    assert!(kernel.close_handle(aliases[0])?);
+    assert_eq!(kernel.process_id(aliases[0]), None);
+    assert_eq!(kernel.process_exit_code(aliases[1]), Some(0x7654));
+    assert!(kernel.close_handle(aliases[1])?);
+    assert_eq!(kernel.process_id(aliases[1]), None);
+    assert_eq!(
+        kernel.process_id_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+        Some(process_id),
+        "closing explicit aliases must not close the current-process pseudo-handle"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "expected red: raw GetProcessIdOfThread lacks immutable creation owner"]
 fn get_process_id_of_thread_reports_immutable_creation_owner() -> Result<()> {
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
     let child = kernel.queue_process_launch(Some("\\Test\\child.exe".to_owned()), None);

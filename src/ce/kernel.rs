@@ -35,7 +35,7 @@ use crate::{
         resource::ResourceSystem,
         scheduler::{
             Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerStats,
-            SchedulerWaitKind, SchedulerWakeReason,
+            SchedulerWaitKind, SchedulerWakeReason, WaitObjectKey,
         },
         shell::{
             NotifyIconData, ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
@@ -3128,11 +3128,13 @@ impl CeKernel {
                 self.queue_object_wake_candidates(alias);
             }
         }
+        let thread_key = self.handles.thread_birth_key_by_id(launch.thread_id);
         if self
             .handles
-            .mark_thread_exited(launch.thread_handle, exit_code)
+            .mark_thread_exited_by_id(launch.thread_id, exit_code)
+            && let Some(key) = thread_key
         {
-            self.queue_object_wake_candidates(launch.thread_handle);
+            self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessExited",
@@ -4626,16 +4628,22 @@ impl CeKernel {
 
     fn handle_debug_description(&self, handle: u32, object: &KernelObject) -> String {
         match object {
-            KernelObject::Thread(thread) => format!(
-                "thread(id={},start=0x{:08x},param=0x{:08x},priority={},signaled={},suspend={},exit=0x{:08x})",
-                thread.thread_id,
-                thread.start_address,
-                thread.parameter,
-                thread.priority,
-                thread.signaled,
-                thread.suspend_count,
-                thread.exit_code
-            ),
+            KernelObject::Thread(_) => self
+                .handles
+                .thread_snapshot_for_handle(handle)
+                .map(|thread| {
+                    format!(
+                        "thread(id={},start=0x{:08x},param=0x{:08x},priority={},signaled={},suspend={},exit=0x{:08x})",
+                        thread.thread_id,
+                        thread.start_address,
+                        thread.parameter,
+                        thread.priority,
+                        thread.signaled,
+                        thread.suspend_count,
+                        thread.exit_code
+                    )
+                })
+                .unwrap_or_else(|| "invalid thread birth".to_owned()),
             KernelObject::Device(device) => {
                 let (rx, tx) = device.queue_lengths();
                 format!(
@@ -6414,6 +6422,16 @@ impl CeKernel {
         close_source: bool,
     ) -> Result<u32> {
         let object = self.handles.get(handle)?.clone();
+        if matches!(object, KernelObject::Thread(_) | KernelObject::Process(_)) {
+            if !self.handles.process_id_exists(target_process_id) {
+                return Err(Error::InvalidHandle(target_process_id));
+            }
+            let duplicate = self.handles.try_insert(object)?;
+            if close_source {
+                self.close_handle(handle)?;
+            }
+            return Ok(duplicate);
+        }
         let duplicate_object = match object {
             KernelObject::File(file) => {
                 let duplicate_file_id = self.files.duplicate_open_file(file.file_id)?;
@@ -6527,9 +6545,10 @@ impl CeKernel {
     }
 
     pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
+        let key = self.handles.thread_birth_key_for_handle(handle);
         let success = self.handles.mark_thread_exited(handle, exit_code);
-        if success {
-            self.queue_object_wake_candidates(handle);
+        if success && let Some(key) = key {
+            self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
     }
@@ -6620,10 +6639,11 @@ impl CeKernel {
     }
 
     pub fn open_process_handle(&mut self, process_id: u32) -> Option<u32> {
-        if process_id == self.current_process_id || process_id == u32::MAX {
-            return Some(CE_CURRENT_PROCESS_PSEUDO_HANDLE);
-        }
         self.handles.open_process(process_id)
+    }
+
+    pub fn open_thread_handle(&mut self, thread_id: u32) -> Option<u32> {
+        self.handles.open_thread(thread_id)
     }
 
     pub fn is_remote_debugger_present_for_handle(&self, handle: u32) -> Option<bool> {
@@ -7197,19 +7217,23 @@ impl CeKernel {
                     .map(|code| format!("exit=0x{code:08x}")),
                 detail: None,
             }),
-            Some(KernelObject::Thread(thread)) => Some(ProcessTraceRecord {
-                op: "WaitForSingleObjectThread",
-                application: None,
-                command_line: None,
-                path: None,
-                process_handle: None,
-                thread_handle: Some(handle),
-                process_id: None,
-                thread_id: Some(thread.thread_id),
-                result: Some(result),
-                error: Some(format!("exit=0x{:08x}", thread.exit_code)),
-                detail: None,
-            }),
+            Some(KernelObject::Thread(_)) => {
+                self.handles
+                    .thread_snapshot_for_handle(handle)
+                    .map(|thread| ProcessTraceRecord {
+                        op: "WaitForSingleObjectThread",
+                        application: None,
+                        command_line: None,
+                        path: None,
+                        process_handle: None,
+                        thread_handle: Some(handle),
+                        process_id: None,
+                        thread_id: Some(thread.thread_id),
+                        result: Some(result),
+                        error: Some(format!("exit=0x{:08x}", thread.exit_code)),
+                        detail: None,
+                    })
+            }
             _ => None,
         };
         if let Some(record) = wait_trace {
@@ -7296,10 +7320,15 @@ impl CeKernel {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> u64 {
-        self.scheduler.register_blocked_wait(
+        let wait_keys = wait_handles
+            .iter()
+            .map(|handle| self.wait_object_key_for_handle(*handle, thread_id))
+            .collect();
+        self.scheduler.register_blocked_wait_with_keys(
             thread_id,
             thread_handle,
             wait_handles,
+            wait_keys,
             kind,
             wait_started_ms,
             timeout_ms,
@@ -7385,9 +7414,34 @@ impl CeKernel {
         self.comm_event_mask_changed_waits.remove(&wait_id)
     }
 
-    fn queue_object_wake_candidates(&mut self, handle: u32) -> usize {
-        let wait_ids = self.scheduler.waiter_ids_for_handle(handle);
+    fn wait_object_key_for_handle(&self, handle: u32, thread_id: u32) -> WaitObjectKey {
+        if Self::is_current_thread_pseudo_handle(handle)
+            && let Some(key) = self.handles.thread_birth_key_by_id(thread_id)
+        {
+            return WaitObjectKey::Thread(key);
+        }
+        if Self::is_current_process_pseudo_handle(handle)
+            && let Some(key) = self.handles.process_birth_key(self.current_process_id)
+        {
+            return WaitObjectKey::Process(key);
+        }
+        if let Some(key) = self.handles.thread_birth_key_for_handle(handle) {
+            return WaitObjectKey::Thread(key);
+        }
+        if let Some(key) = self.handles.process_birth_key_for_handle(handle) {
+            return WaitObjectKey::Process(key);
+        }
+        WaitObjectKey::Handle(handle)
+    }
+
+    fn queue_object_wake_candidates_for_key(&mut self, key: WaitObjectKey) -> usize {
+        let wait_ids = self.scheduler.waiter_ids_for_key(key);
         self.scheduler.queue_pending_wake_ids(wait_ids)
+    }
+
+    fn queue_object_wake_candidates(&mut self, handle: u32) -> usize {
+        let key = self.wait_object_key_for_handle(handle, 0);
+        self.queue_object_wake_candidates_for_key(key)
     }
 
     pub fn queue_serial_read_wake_candidates(&mut self, handle: u32) -> usize {

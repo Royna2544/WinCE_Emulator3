@@ -40,7 +40,7 @@ pub enum KernelObject {
     CriticalSection(CriticalSectionObject),
     ApiSet(ApiSetObject),
     ApiHandle(ApiHandleObject),
-    Thread(ThreadObject),
+    Thread(ThreadHandleObject),
     Process(ProcessHandleObject),
 }
 
@@ -265,6 +265,33 @@ pub struct ThreadObject {
     pub suspend_count: u32,
 }
 
+/// Identity of one canonical thread record. Public handles are aliases to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ThreadBirthKey {
+    thread_id: u32,
+    incarnation: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThreadHandleObject {
+    thread_id: u32,
+    incarnation: u64,
+}
+
+impl ThreadHandleObject {
+    pub fn thread_id(&self) -> u32 {
+        self.thread_id
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ThreadRecord {
+    object: ThreadObject,
+    incarnation: u64,
+    aliases: BTreeSet<u32>,
+    execution_live: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProcessObject {
     pub process_id: u32,
@@ -340,6 +367,8 @@ pub struct HandleTable {
     objects: BTreeMap<u32, KernelObject>,
     processes: BTreeMap<u32, ProcessObject>,
     next_process_incarnation: u64,
+    threads: BTreeMap<u32, ThreadRecord>,
+    next_thread_incarnation: u64,
 }
 
 impl Default for HandleTable {
@@ -349,21 +378,43 @@ impl Default for HandleTable {
             objects: BTreeMap::new(),
             processes: BTreeMap::new(),
             next_process_incarnation: 1,
+            threads: BTreeMap::new(),
+            next_thread_incarnation: 1,
         }
     }
 }
 
 impl HandleTable {
     pub fn insert(&mut self, object: KernelObject) -> u32 {
+        self.try_insert(object)
+            .expect("public handle allocation failed")
+    }
+
+    /// Publish one public alias only after its canonical target and handle ID validate.
+    pub fn try_insert(&mut self, object: KernelObject) -> Result<u32> {
         let process_alias = match &object {
             KernelObject::Process(alias) => {
-                assert!(
-                    self.processes
-                        .get(&alias.process_id)
-                        .is_some_and(|process| process.incarnation == alias.incarnation),
-                    "a process handle must refer to its registered birth"
-                );
+                if !self
+                    .processes
+                    .get(&alias.process_id)
+                    .is_some_and(|process| process.incarnation == alias.incarnation)
+                {
+                    return Err(Error::InvalidHandle(alias.process_id));
+                }
                 Some(alias.process_id)
+            }
+            _ => None,
+        };
+        let thread_alias = match &object {
+            KernelObject::Thread(alias) => {
+                if !self
+                    .threads
+                    .get(&alias.thread_id)
+                    .is_some_and(|thread| thread.incarnation == alias.incarnation)
+                {
+                    return Err(Error::InvalidHandle(alias.thread_id));
+                }
+                Some(alias.thread_id)
             }
             _ => None,
         };
@@ -371,7 +422,7 @@ impl HandleTable {
         self.next = self
             .next
             .checked_add(4)
-            .expect("public handle ID exhausted");
+            .ok_or_else(|| Error::OutOfStructures("public handle ID exhausted".to_owned()))?;
         self.objects.insert(handle, object);
         if let Some(process_id) = process_alias {
             self.processes
@@ -380,7 +431,14 @@ impl HandleTable {
                 .aliases
                 .insert(handle);
         }
-        handle
+        if let Some(thread_id) = thread_alias {
+            self.threads
+                .get_mut(&thread_id)
+                .expect("validated thread birth")
+                .aliases
+                .insert(handle);
+        }
+        Ok(handle)
     }
 
     pub fn get(&self, handle: u32) -> Result<&KernelObject> {
@@ -406,6 +464,14 @@ impl HandleTable {
             {
                 process.aliases.remove(&handle);
                 self.retire_process_if_unreferenced(alias.process_id);
+            }
+        }
+        if let KernelObject::Thread(alias) = &object {
+            if let Some(thread) = self.threads.get_mut(&alias.thread_id)
+                && thread.incarnation == alias.incarnation
+            {
+                thread.aliases.remove(&handle);
+                self.retire_thread_if_unreferenced(alias.thread_id);
             }
         }
         Ok(object)
@@ -553,10 +619,16 @@ impl HandleTable {
                 "api_handle(set=0x{:08x},data=0x{:08x})",
                 api_handle.api_set_handle, api_handle.data
             ),
-            Ok(KernelObject::Thread(thread)) => format!(
-                "thread(id={},signaled={},suspend={},exit=0x{:08x})",
-                thread.thread_id, thread.signaled, thread.suspend_count, thread.exit_code
-            ),
+            Ok(KernelObject::Thread(alias)) => self
+                .thread_for_alias(alias)
+                .map(|record| {
+                    let thread = &record.object;
+                    format!(
+                        "thread(id={},signaled={},suspend={},exit=0x{:08x})",
+                        thread.thread_id, thread.signaled, thread.suspend_count, thread.exit_code
+                    )
+                })
+                .unwrap_or_else(|| "invalid thread birth".to_owned()),
             Ok(KernelObject::Process(alias)) => self
                 .process_for_alias(alias)
                 .map(|process| {
@@ -682,14 +754,35 @@ impl HandleTable {
         parameter: u32,
         suspended: bool,
     ) -> u32 {
-        self.insert(KernelObject::Thread(ThreadObject {
+        assert!(
+            !self.threads.contains_key(&thread_id),
+            "thread TID must not alias an existing birth"
+        );
+        let incarnation = self.next_thread_incarnation;
+        self.next_thread_incarnation = self
+            .next_thread_incarnation
+            .checked_add(1)
+            .expect("thread incarnation exhausted");
+        self.threads.insert(
             thread_id,
-            start_address,
-            parameter,
-            exit_code: 259,
-            priority: CE_THREAD_PRIORITY_NORMAL,
-            signaled: false,
-            suspend_count: u32::from(suspended),
+            ThreadRecord {
+                object: ThreadObject {
+                    thread_id,
+                    start_address,
+                    parameter,
+                    exit_code: 259,
+                    priority: CE_THREAD_PRIORITY_NORMAL,
+                    signaled: false,
+                    suspend_count: u32::from(suspended),
+                },
+                incarnation,
+                aliases: BTreeSet::new(),
+                execution_live: true,
+            },
+        );
+        self.insert(KernelObject::Thread(ThreadHandleObject {
+            thread_id,
+            incarnation,
         }))
     }
 
@@ -771,10 +864,11 @@ impl HandleTable {
             return None;
         }
         let incarnation = process.incarnation;
-        Some(self.insert(KernelObject::Process(ProcessHandleObject {
+        self.try_insert(KernelObject::Process(ProcessHandleObject {
             process_id,
             incarnation,
-        })))
+        }))
+        .ok()
     }
 
     pub fn process_snapshots(&self) -> Vec<ProcessObject> {
@@ -790,6 +884,17 @@ impl HandleTable {
         Some(ProcessBirthKey {
             process_id,
             incarnation: process.incarnation,
+        })
+    }
+
+    pub fn process_birth_key_for_handle(&self, handle: u32) -> Option<ProcessBirthKey> {
+        let KernelObject::Process(alias) = self.get(handle).ok()? else {
+            return None;
+        };
+        self.process_for_alias(alias)?;
+        Some(ProcessBirthKey {
+            process_id: alias.process_id,
+            incarnation: alias.incarnation,
         })
     }
 
@@ -818,6 +923,74 @@ impl HandleTable {
         {
             self.processes.remove(&process_id);
         }
+    }
+
+    fn thread_for_alias(&self, alias: &ThreadHandleObject) -> Option<&ThreadRecord> {
+        self.threads
+            .get(&alias.thread_id)
+            .filter(|record| record.incarnation == alias.incarnation)
+    }
+
+    fn thread_for_handle(&self, handle: u32) -> Option<&ThreadRecord> {
+        let KernelObject::Thread(alias) = self.get(handle).ok()? else {
+            return None;
+        };
+        self.thread_for_alias(alias)
+    }
+
+    fn thread_for_handle_mut(&mut self, handle: u32) -> Option<&mut ThreadRecord> {
+        let KernelObject::Thread(alias) = self.get(handle).ok()? else {
+            return None;
+        };
+        let key = ThreadBirthKey {
+            thread_id: alias.thread_id,
+            incarnation: alias.incarnation,
+        };
+        self.threads
+            .get_mut(&key.thread_id)
+            .filter(|record| record.incarnation == key.incarnation)
+    }
+
+    fn retire_thread_if_unreferenced(&mut self, thread_id: u32) {
+        if self
+            .threads
+            .get(&thread_id)
+            .is_some_and(|record| !record.execution_live && record.aliases.is_empty())
+        {
+            self.threads.remove(&thread_id);
+        }
+    }
+
+    pub fn thread_birth_key_for_handle(&self, handle: u32) -> Option<ThreadBirthKey> {
+        let KernelObject::Thread(alias) = self.get(handle).ok()? else {
+            return None;
+        };
+        self.thread_for_alias(alias)?;
+        Some(ThreadBirthKey {
+            thread_id: alias.thread_id,
+            incarnation: alias.incarnation,
+        })
+    }
+
+    pub fn thread_birth_key_by_id(&self, thread_id: u32) -> Option<ThreadBirthKey> {
+        let record = self.threads.get(&thread_id)?;
+        Some(ThreadBirthKey {
+            thread_id,
+            incarnation: record.incarnation,
+        })
+    }
+
+    pub fn contains_thread_birth(&self, key: ThreadBirthKey) -> bool {
+        self.thread_birth_key_by_id(key.thread_id) == Some(key)
+    }
+
+    pub fn open_thread(&mut self, thread_id: u32) -> Option<u32> {
+        let key = self.thread_birth_key_by_id(thread_id)?;
+        self.try_insert(KernelObject::Thread(ThreadHandleObject {
+            thread_id: key.thread_id,
+            incarnation: key.incarnation,
+        }))
+        .ok()
     }
 
     pub fn process_alias_handles(&self, process_id: u32) -> Vec<u32> {
@@ -854,19 +1027,13 @@ impl HandleTable {
     }
 
     pub fn thread_snapshots(&self) -> Vec<ThreadObject> {
-        let mut thread_ids = Vec::new();
-        let mut threads = Vec::new();
-        for object in self.objects.values() {
-            let KernelObject::Thread(thread) = object else {
-                continue;
-            };
-            if thread_ids.contains(&thread.thread_id) {
-                continue;
-            }
-            thread_ids.push(thread.thread_id);
-            threads.push(thread.clone());
-        }
-        threads
+        // Preserve the existing public-snapshot boundary until execution and
+        // wait pins are migrated. A live record with no alias is internal only.
+        self.threads
+            .values()
+            .filter(|record| !record.aliases.is_empty())
+            .map(|record| record.object.clone())
+            .collect()
     }
 
     pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
@@ -1048,50 +1215,49 @@ impl HandleTable {
     }
 
     pub fn mark_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+        let Some(thread_id) = self.thread_id(handle) else {
             return false;
         };
-        thread.exit_code = exit_code;
-        thread.signaled = true;
+        self.mark_thread_exited_by_id(thread_id, exit_code)
+    }
+
+    pub fn mark_thread_exited_by_id(&mut self, thread_id: u32, exit_code: u32) -> bool {
+        let Some(record) = self.threads.get_mut(&thread_id) else {
+            return false;
+        };
+        record.object.exit_code = exit_code;
+        record.object.signaled = true;
+        record.execution_live = false;
+        self.retire_thread_if_unreferenced(thread_id);
         true
     }
 
     pub fn thread_id(&self, handle: u32) -> Option<u32> {
-        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
-            return None;
-        };
-        Some(thread.thread_id)
+        Some(self.thread_for_handle(handle)?.object.thread_id)
+    }
+
+    pub fn thread_snapshot_for_handle(&self, handle: u32) -> Option<ThreadObject> {
+        Some(self.thread_for_handle(handle)?.object.clone())
     }
 
     pub fn thread_handle_by_id(&self, thread_id: u32) -> Option<u32> {
-        self.objects
-            .iter()
-            .find_map(|(handle, object)| match object {
-                KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(*handle),
-                _ => None,
-            })
+        self.threads.get(&thread_id)?.aliases.iter().next().copied()
     }
 
     pub fn thread_exit_code(&self, handle: u32) -> Option<u32> {
-        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
-            return None;
-        };
-        Some(thread.exit_code)
+        Some(self.thread_for_handle(handle)?.object.exit_code)
     }
 
     pub fn suspend_thread(&mut self, handle: u32) -> ThreadSuspendResult {
-        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+        let Some(record) = self.thread_for_handle_mut(handle) else {
             return ThreadSuspendResult::InvalidHandle;
         };
-        Self::suspend_thread_object(thread)
+        Self::suspend_thread_object(&mut record.object)
     }
 
     pub fn suspend_thread_by_id(&mut self, thread_id: u32) -> Option<ThreadSuspendResult> {
-        let thread = self.objects.values_mut().find_map(|object| match object {
-            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
-            _ => None,
-        })?;
-        Some(Self::suspend_thread_object(thread))
+        let record = self.threads.get_mut(&thread_id)?;
+        Some(Self::suspend_thread_object(&mut record.object))
     }
 
     fn suspend_thread_object(thread: &mut ThreadObject) -> ThreadSuspendResult {
@@ -1104,18 +1270,15 @@ impl HandleTable {
     }
 
     pub fn resume_thread(&mut self, handle: u32) -> ThreadResumeResult {
-        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+        let Some(record) = self.thread_for_handle_mut(handle) else {
             return ThreadResumeResult::InvalidHandle;
         };
-        Self::resume_thread_object(thread)
+        Self::resume_thread_object(&mut record.object)
     }
 
     pub fn resume_thread_by_id(&mut self, thread_id: u32) -> Option<ThreadResumeResult> {
-        let thread = self.objects.values_mut().find_map(|object| match object {
-            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
-            _ => None,
-        })?;
-        Some(Self::resume_thread_object(thread))
+        let record = self.threads.get_mut(&thread_id)?;
+        Some(Self::resume_thread_object(&mut record.object))
     }
 
     fn resume_thread_object(thread: &mut ThreadObject) -> ThreadResumeResult {
@@ -1127,27 +1290,21 @@ impl HandleTable {
     }
 
     pub fn thread_priority(&self, handle: u32) -> Option<i32> {
-        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
-            return None;
-        };
-        Some(thread.priority)
+        Some(self.thread_for_handle(handle)?.object.priority)
     }
 
     pub fn thread_priority_by_id(&self, thread_id: u32) -> Option<i32> {
-        self.objects.values().find_map(|object| match object {
-            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread.priority),
-            _ => None,
-        })
+        Some(self.threads.get(&thread_id)?.object.priority)
     }
 
     pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
         if !(0..MAX_CE_PRIORITY_LEVELS).contains(&priority) {
             return false;
         }
-        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+        let Some(record) = self.thread_for_handle_mut(handle) else {
             return false;
         };
-        thread.priority = priority;
+        record.object.priority = priority;
         true
     }
 
@@ -1155,18 +1312,13 @@ impl HandleTable {
         if !(0..MAX_CE_PRIORITY_LEVELS).contains(&priority) {
             return Some(false);
         }
-        let thread = self.objects.values_mut().find_map(|object| match object {
-            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
-            _ => None,
-        })?;
-        thread.priority = priority;
+        let record = self.threads.get_mut(&thread_id)?;
+        record.object.priority = priority;
         Some(true)
     }
 
     pub fn thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
-        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
-            return None;
-        };
+        let thread = &self.thread_for_handle(handle)?.object;
         (!thread.signaled && thread.suspend_count == 0).then_some((
             thread.thread_id,
             thread.start_address,
@@ -1300,6 +1452,13 @@ impl HandleTable {
                 None => WaitResult::Failed,
             };
         }
+        if let Ok(KernelObject::Thread(alias)) = self.get(handle) {
+            return match self.thread_for_alias(alias) {
+                Some(thread) if thread.object.signaled => WaitResult::Object0,
+                Some(_) => WaitResult::Timeout,
+                None => WaitResult::Failed,
+            };
+        }
         let Ok(object) = self.get_mut(handle) else {
             return WaitResult::Failed;
         };
@@ -1352,7 +1511,7 @@ impl HandleTable {
             | KernelObject::CriticalSection(_)
             | KernelObject::ApiSet(_)
             | KernelObject::ApiHandle(_) => WaitResult::Failed,
-            KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
+            KernelObject::Thread(_) => WaitResult::Failed,
             KernelObject::Process(_) => WaitResult::Failed,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
@@ -1391,7 +1550,7 @@ impl HandleTable {
             }
             KernelObject::Semaphore(semaphore) => semaphore.count > 0,
             KernelObject::FileChangeNotification(notification) => notification.signaled,
-            KernelObject::Thread(thread) => thread.signaled,
+            KernelObject::Thread(alias) => self.thread_for_alias(alias)?.object.signaled,
             KernelObject::Process(alias) => self.process_for_alias(alias)?.signaled,
             KernelObject::File(_)
             | KernelObject::FindFile(_)
@@ -1432,4 +1591,42 @@ pub fn ce_thread_priority_to_win32(priority: i32) -> Option<u32> {
     } else {
         (priority - base) as u32
     })
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    #[test]
+    fn checked_thread_alias_exhaustion_publishes_no_reference() {
+        let mut table = HandleTable::default();
+        let original = table.create_thread(7, 0x1000, 0, false);
+        let alias = table.get(original).unwrap().clone();
+        let before_len = table.len();
+        table.next = u32::MAX - 1;
+
+        assert!(matches!(
+            table.try_insert(alias),
+            Err(Error::OutOfStructures(_))
+        ));
+        assert_eq!(table.len(), before_len);
+        assert_eq!(table.thread_handle_by_id(7), Some(original));
+        assert_eq!(table.thread_snapshots().len(), 1);
+    }
+
+    #[test]
+    fn retired_thread_birth_rejects_stale_key_after_tid_reuse() {
+        let mut table = HandleTable::default();
+        let original = table.create_thread(7, 0x1000, 0, false);
+        let old = table.thread_birth_key_for_handle(original).unwrap();
+        assert!(table.mark_thread_exited(original, 0));
+        table.close(original).unwrap();
+        assert!(!table.contains_thread_birth(old));
+
+        let replacement = table.create_thread(7, 0x2000, 0, false);
+        let new = table.thread_birth_key_for_handle(replacement).unwrap();
+        assert_ne!(old, new);
+        assert!(!table.contains_thread_birth(old));
+        assert!(table.contains_thread_birth(new));
+    }
 }

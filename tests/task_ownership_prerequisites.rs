@@ -1,6 +1,6 @@
 //! D-007 historical Stage 3 E-8 task-ownership controls.
 //! These call real Kernel lifecycle consumers, not a test-only state model.
-//! The still-red cases remain ignored until the Stage 3 gate opens.
+//! Alias-sharing controls are active; creation/primary identity reds stay ignored.
 
 use wince_emulation_v3::{
     Result,
@@ -18,7 +18,6 @@ fn kernel() -> Result<CeKernel> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
 fn task_ownership_thread_aliases_share_ce_priority() -> Result<()> {
     let mut kernel = kernel()?;
     let (original, tid) = kernel.create_guest_thread(0x1000, 0x2000, false);
@@ -36,7 +35,6 @@ fn task_ownership_thread_aliases_share_ce_priority() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
 fn task_ownership_thread_aliases_share_suspend_count() -> Result<()> {
     let mut kernel = kernel()?;
     let (original, _) = kernel.create_guest_thread(0x1000, 0x2000, false);
@@ -64,7 +62,6 @@ fn task_ownership_thread_aliases_share_suspend_count() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
 fn task_ownership_thread_aliases_share_exit_and_wait_signal() -> Result<()> {
     let mut kernel = kernel()?;
     let (original, tid) = kernel.create_guest_thread(0x1000, 0x2000, false);
@@ -121,7 +118,7 @@ fn task_ownership_duplicate_close_source_keeps_thread_alive() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
+#[ignore = "expected red: worker creation owner and Toolhelp still use selected PID"]
 fn task_ownership_pid_is_creation_owner_not_selected_process() -> Result<()> {
     let mut kernel = kernel()?;
     assert_eq!(kernel.current_process_id(), 1);
@@ -156,7 +153,7 @@ fn task_ownership_pid_is_creation_owner_not_selected_process() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
+#[ignore = "expected red: boot main lacks execution-owned Task record without public alias"]
 fn task_ownership_boot_main_is_retained_without_a_public_thread_handle() -> Result<()> {
     let mut kernel = kernel()?;
     assert_eq!(kernel.guest_thread_handle_by_id(1), None);
@@ -176,7 +173,7 @@ fn task_ownership_boot_main_is_retained_without_a_public_thread_handle() -> Resu
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
+#[ignore = "expected red: child primary identity still depends on launch queue or trace ring"]
 fn task_ownership_primary_identity_outlives_launch_queue_and_trace_ring() -> Result<()> {
     let mut kernel = kernel()?;
     let first = kernel.queue_process_launch(None, None);
@@ -195,7 +192,6 @@ fn task_ownership_primary_identity_outlives_launch_queue_and_trace_ring() -> Res
 }
 
 #[test]
-#[ignore = "expected red: E-8 Stage 3 task ownership"]
 fn task_ownership_cloned_kernel_does_not_share_mutable_thread_state() -> Result<()> {
     let mut original = kernel()?;
     let (handle, tid) = original.create_guest_thread(0x1000, 0, false);
