@@ -59910,7 +59910,12 @@ mod unicorn_tests {
         let err = execution
             .result
             .expect_err("held page fence must reject pre-entry setup");
-        assert!(format!("{err:#}").contains("fence private slab page"));
+        assert!(
+            format!("{err:#}").contains(&format!(
+                "fence stable page 0x{private_base:08x}: NativeExecutionActive"
+            )),
+            "{err:#}"
+        );
         assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
         assert_eq!(report.attempt_id(), None);
         assert!(matches!(
@@ -60000,7 +60005,12 @@ mod unicorn_tests {
         let err = execution
             .result
             .expect_err("held page fence must reject pre-entry setup");
-        assert!(format!("{err:#}").contains("fence private slab page"));
+        assert!(
+            format!("{err:#}").contains(&format!(
+                "fence stable page 0x{private_base:08x}: NativeExecutionActive"
+            )),
+            "{err:#}"
+        );
         assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
         assert_eq!(report.attempt_id(), None);
         assert!(matches!(
