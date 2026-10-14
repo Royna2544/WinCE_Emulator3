@@ -59,8 +59,8 @@ pub struct TimerMessageOrigin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TimerKey {
     thread_id: u32,
-    owner_birth: Option<ThreadBirthKey>,
     hwnd: Option<u32>,
+    owner_birth: Option<ThreadBirthKey>,
     id: u32,
 }
 
@@ -68,8 +68,8 @@ impl TimerKey {
     fn for_timer(timer: &KernelTimer) -> Self {
         Self {
             thread_id: timer.thread_id,
-            owner_birth: timer.owner_birth,
             hwnd: timer.hwnd,
+            owner_birth: timer.owner_birth,
             id: timer.id,
         }
     }
@@ -117,10 +117,12 @@ mod tests {
         timers.sleep_ms(delay);
 
         assert_eq!(timers.next_due_delay_ms(), Some(0));
-        let due = timers.due_timers();
+        let due = timers.due_candidates();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].id, 1000);
         assert_eq!(due[0].thread_id, 1);
+        assert!(timers.activate_due_timer(&due[0]));
+        assert!(timers.pending_timers()[0].pending_message);
     }
 
     #[test]
@@ -196,6 +198,29 @@ mod tests {
         assert!(timers.kill_timer(45, None, 7));
         assert!(timers.kill_thread_timer_for_birth(new, 7));
         assert_eq!(timers.timer_count(), 0);
+    }
+
+    #[test]
+    fn simultaneous_exact_thread_and_window_timers_keep_hwnd_less_first() {
+        let (birth, _) = reused_thread_births(48);
+        let mut timers = TimerSystem::default();
+        // Insert the window timer first to prove due ordering comes from the
+        // legacy hwnd key order, not insertion order or birth-key presence.
+        assert_eq!(
+            timers.set_timer(48, Some(0x10048), Some(1), 1, 0x0113, None),
+            1
+        );
+        assert_eq!(
+            timers.set_thread_timer_for_birth(birth, Some(2), 1, 0x0113, None),
+            2
+        );
+        timers.sleep_ms(1);
+        let due = timers.due_candidates();
+        assert_eq!(due.len(), 2);
+        assert_eq!((due[0].hwnd, due[0].owner_birth), (None, Some(birth)));
+        assert_eq!((due[1].hwnd, due[1].owner_birth), (Some(0x10048), None));
+        assert!(timers.activate_due_timer(&due[0]));
+        assert!(timers.activate_due_timer(&due[1]));
     }
 
     #[test]
@@ -354,8 +379,8 @@ impl TimerSystem {
             let mut id = self.next_timer;
             while self.timers.contains_key(&TimerKey {
                 thread_id,
-                owner_birth,
                 hwnd,
+                owner_birth,
                 id,
             }) {
                 id = id.wrapping_add(1).max(1);
@@ -366,8 +391,8 @@ impl TimerSystem {
         let due_ms = self.tick_count().wrapping_add(period_ms);
         let key = TimerKey {
             thread_id,
-            owner_birth,
             hwnd,
+            owner_birth,
             id,
         };
         self.last_timer_instance = instance;
@@ -393,8 +418,8 @@ impl TimerSystem {
         self.timers
             .remove(&TimerKey {
                 thread_id,
-                owner_birth: None,
                 hwnd,
+                owner_birth: None,
                 id,
             })
             .is_some()
@@ -404,8 +429,8 @@ impl TimerSystem {
         self.timers
             .remove(&TimerKey {
                 thread_id: birth.thread_id(),
-                owner_birth: Some(birth),
                 hwnd: None,
+                owner_birth: Some(birth),
                 id,
             })
             .is_some()
@@ -553,25 +578,11 @@ impl TimerSystem {
         self.timers.remove(&key).is_some()
     }
 
-    pub fn due_timers(&mut self) -> Vec<KernelTimer> {
-        self.due_candidates()
-            .into_iter()
-            .filter_map(|candidate| {
-                self.activate_due_timer(&candidate).then(|| {
-                    self.timers
-                        .get(&TimerKey::for_timer(&candidate))
-                        .cloned()
-                        .unwrap_or(candidate)
-                })
-            })
-            .collect()
-    }
-
     pub fn clear_pending_message(&mut self, thread_id: u32, hwnd: Option<u32>, id: u32) -> bool {
         let Some(timer) = self.timers.get_mut(&TimerKey {
             thread_id,
-            owner_birth: None,
             hwnd,
+            owner_birth: None,
             id,
         }) else {
             return false;
@@ -584,8 +595,8 @@ impl TimerSystem {
     pub fn clear_pending_for_origin(&mut self, origin: TimerMessageOrigin) -> bool {
         let Some(timer) = self.timers.get_mut(&TimerKey {
             thread_id: origin.birth.thread_id(),
-            owner_birth: Some(origin.birth),
             hwnd: None,
+            owner_birth: Some(origin.birth),
             id: origin.id,
         }) else {
             return false;

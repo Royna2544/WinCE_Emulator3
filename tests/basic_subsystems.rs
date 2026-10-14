@@ -7992,7 +7992,7 @@ fn registry_reg_enum_value_w_key_count_and_reg_set_value_exw_binary() {
 }
 
 #[test]
-fn timer_system_next_due_delay_ms_due_timers_remove_window_timers_and_clear_pending_message() {
+fn timer_system_next_due_delay_ms_due_candidates_remove_window_timers_and_clear_pending_message() {
     use wince_emulation_v3::ce::gwe::WM_TIMER;
     use wince_emulation_v3::ce::timer::TimerSystem;
 
@@ -8008,17 +8008,18 @@ fn timer_system_next_due_delay_ms_due_timers_remove_window_timers_and_clear_pend
     let delay = timers.next_due_delay_ms().unwrap();
     assert!(delay <= 500);
 
-    // due_timers: not due yet → empty.
-    let due = timers.due_timers();
+    // due_candidates: not due yet → empty.
+    let due = timers.due_candidates();
     assert!(due.is_empty());
 
     // Advance virtual time by 600ms to make the timer due.
     timers.sleep_ms(600);
-    let due = timers.due_timers();
+    let due = timers.due_candidates();
     assert_eq!(due.len(), 1);
     assert_eq!(due[0].id, 1);
     assert_eq!(due[0].hwnd, Some(0x1_0001));
-    // After due_timers, timer is re-inserted with pending_message=true.
+    assert!(timers.activate_due_timer(&due[0]));
+    // Activation rearms the timer with pending_message=true.
     assert_eq!(timers.timer_count(), 1);
 
     // clear_pending_message: clears pending flag; returns true if it was set.

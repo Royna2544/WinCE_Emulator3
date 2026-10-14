@@ -3,7 +3,10 @@ use std::fs;
 use wince_emulation_v3::{
     Result,
     ce::{
-        coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
+        coredll::{
+            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllRawContext,
+            CoredllValue,
+        },
         coredll_ordinals::{
             ORD_ABORT_DOC, ORD_ACTIVATE_KEYBOARD_LAYOUT, ORD_ADD_FONT_MEM_RESOURCE_EX,
             ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_ALPHA_BLEND, ORD_APPEND_MENU_W,
@@ -185,6 +188,116 @@ fn seed_live_message_thread(kernel: &mut CeKernel, thread_id: u32) -> Result<()>
         .try_create_thread_in_birth(owner, thread_id, 0, 0, false)?;
     assert_eq!(kernel.handles.thread_id(handle), Some(thread_id));
     assert!(kernel.handles.thread_execution_live_by_id(thread_id));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_thread_timer_rejects_stale_caller_birth_after_tid_reuse() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let process_birth = kernel.current_process_birth_key().expect("boot birth");
+    let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+    let old_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(old_handle)
+        .expect("A birth");
+    assert!(kernel.mark_guest_thread_exited(old_handle, 0));
+    assert!(kernel.close_handle(old_handle)?);
+    let new_handle = kernel.handles.try_create_thread_in_birth(
+        process_birth,
+        thread_id,
+        0x0040_4000,
+        0,
+        false,
+    )?;
+    let new_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(new_handle)
+        .expect("B birth");
+    assert_ne!(old_birth, new_birth);
+
+    assert_eq!(
+        kernel.set_timer_for_birth(new_birth, Some(77), 100, None),
+        77
+    );
+    let original_timer = kernel.timers.pending_timers().pop().expect("B timer");
+    let stale_context = CoredllRawContext {
+        thread_id,
+        caller_birth: Some(old_birth),
+        ..Default::default()
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            stale_context.clone(),
+            ORD_SET_TIMER,
+            [0, 77, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            stale_context,
+            ORD_KILL_TIMER,
+            [0, 77],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    let retained = kernel.timers.pending_timers();
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].owner_birth, Some(new_birth));
+    assert_eq!(retained[0].id, 77);
+    assert_eq!(retained[0].instance, original_timer.instance);
+    assert_eq!(retained[0].period_ms, Some(100));
+
+    let new_context = CoredllRawContext {
+        thread_id,
+        caller_birth: Some(new_birth),
+        ..Default::default()
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            new_context.clone(),
+            ORD_SET_TIMER,
+            [0, 88, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(88),
+            ..
+        }
+    ));
+    for id in [77, 88] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                new_context.clone(),
+                ORD_KILL_TIMER,
+                [0, id],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+    assert_eq!(kernel.timers.timer_count(), 0);
     Ok(())
 }
 
