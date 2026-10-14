@@ -15,3 +15,22 @@ The count query is intentionally additive to Unicorn's C API. The vendored
 build generates the Rust `Query` binding from the header; generated bindings
 and the registry Rust wrapper are not hand-patched here. Validation and any
 future upstream submission need separate evidence.
+
+## O-P4 native owner lifetime audit (2026-10-14)
+
+Fresh-per-slice closure relies on this exact vendored 2.1.5 source, not on an
+upstream guarantee: `uc.c:497-570` shows `uc_close` freeing the owner and
+returning `UC_ERR_OK` on both its pre-init and initialized paths. A successful
+`uc_hook_add` initializes the engine (`uc.c:1914-1934`, `:304`); subsequent
+`uc_hook_del` can return an error only through `UC_INIT` (`uc.c:2042-2066`).
+Deleted hooks are marked `to_delete`, skipped by dispatch, and native close
+clears deferred and remaining hook lists (`uc.c:560-564`). The Rust wrapper's
+`Drop` does not expose the C return, so this is a pinned-source proof, not a
+general checked-close API. Fresh leases close their owning wrapper before
+dropping the nonowning run wrapper, callback boxes or pointer backing pins.
+
+Before changing Unicorn C, its Rust wrapper, crate version, or build options,
+re-audit those exits and hook/owner lifetimes and rerun the O-P4 closed-owner
+and churn gates. If `uc_close` can fail with an uncertain side effect, the
+fresh path must stop until a consuming checked-close/quarantine design is
+implemented; ordinary wrapper `Drop` would not be sufficient.
