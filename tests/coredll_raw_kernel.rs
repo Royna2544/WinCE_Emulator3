@@ -42,31 +42,31 @@ use wince_emulation_v3::{
             ORD_GET_EVENT_DATA, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_FILE_VERSION_INFO_SIZE_W, ORD_GET_FILE_VERSION_INFO_W, ORD_GET_FSHEAP_INFO,
             ORD_GET_HEAP_SNAPSHOT, ORD_GET_ICON_INFO, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MESSAGE_W,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_MODULE_HANDLE_W, ORD_GET_MODULE_INFORMATION,
-            ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW, ORD_GET_OPEN_FILE_NAME_W,
-            ORD_GET_OWNER_PROCESS, ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A,
-            ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROC_NAME,
-            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
-            ORD_GET_PROCESS_VERSION, ORD_GET_SAVE_FILE_NAME_W, ORD_GET_STDIO_PATH_W,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION, ORD_GET_SYSTEM_POWER_STATE,
-            ORD_GET_SYSTEM_POWER_STATUS_EX, ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME,
-            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_CONTEXT, ORD_GET_THREAD_ID,
-            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD,
-            ORD_IMAGE_LIST_ADD_MASKED, ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY,
-            ORD_IMAGE_LIST_COPY_DITHER_IMAGE, ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY,
-            ORD_IMAGE_LIST_DRAG_ENTER, ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE,
-            ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK, ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX,
-            ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
-            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
-            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
-            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_GET_MESSAGE_W, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_MODULE_HANDLE_W,
+            ORD_GET_MODULE_INFORMATION, ORD_GET_MSG_QUEUE_INFO, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_OPEN_FILE_NAME_W, ORD_GET_OWNER_PROCESS, ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
+            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_IN_PROCESS, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROC_NAME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX,
+            ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION, ORD_GET_SAVE_FILE_NAME_W,
+            ORD_GET_STDIO_PATH_W, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_MEMORY_DIVISION,
+            ORD_GET_SYSTEM_POWER_STATE, ORD_GET_SYSTEM_POWER_STATUS_EX,
+            ORD_GET_SYSTEM_POWER_STATUS_EX2, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_CONTEXT, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
+            ORD_GET_VERSION_EX_W, ORD_IMAGE_LIST_ADD, ORD_IMAGE_LIST_ADD_MASKED,
+            ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
+            ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
+            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_APIREADY, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
             ORD_IS_EXITING, ORD_IS_NAMED_EVENT_SIGNALED, ORD_IS_PRIMARY_THREAD,
             ORD_IS_PROCESS_DYING, ORD_IS_PROCESSOR_FEATURE_PRESENT, ORD_KERN_EXTRACT_ICONS,
@@ -151,6 +151,47 @@ use wince_emulation_v3::{
 mod support;
 use support::{TestGuestMemory, unique_test_root};
 
+struct RejectMsgDestinationMemory {
+    inner: TestGuestMemory,
+    rejected_addr: u32,
+}
+
+impl CoredllGuestMemory for RejectMsgDestinationMemory {
+    fn read_u8(&self, addr: u32) -> Result<u8> {
+        self.inner.read_u8(addr)
+    }
+
+    fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+        self.inner.write_u8(addr, value)
+    }
+
+    fn read_u32(&self, addr: u32) -> Result<u32> {
+        self.inner.read_u32(addr)
+    }
+
+    fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        self.inner.write_u32(addr, value)
+    }
+
+    fn read_u16(&self, addr: u32) -> Result<u16> {
+        self.inner.read_u16(addr)
+    }
+
+    fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+        self.inner.write_u16(addr, value)
+    }
+
+    fn prepare_host_write(&mut self, _kernel: &mut CeKernel, addr: u32, len: u32) -> Result<()> {
+        if addr == self.rejected_addr && len == 28 {
+            Err(wince_emulation_v3::Error::Backend(
+                "invalid MSG output destination".to_owned(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 #[test]
 fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Result<()> {
     let table = CoredllExportTable::default();
@@ -173,9 +214,12 @@ fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Res
         Some(MessagePointerPayload::WindowPos(_))
     ));
     let budget_before = kernel.memory.private_commit_used_bytes();
-    let mut memory = TestGuestMemory::default();
     // No guest bytes are mapped at this MSG destination.
     let bad_msg_ptr = 0x7e00_0000;
+    let mut memory = RejectMsgDestinationMemory {
+        inner: TestGuestMemory::default(),
+        rejected_addr: bad_msg_ptr,
+    };
     for (ordinal, args) in [
         (
             ORD_GET_MESSAGE_W,
@@ -183,7 +227,13 @@ fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Res
         ),
         (
             ORD_PEEK_MESSAGE_W,
-            vec![bad_msg_ptr, hwnd, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED, 1],
+            vec![
+                bad_msg_ptr,
+                hwnd,
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+                1,
+            ],
         ),
     ] {
         assert!(matches!(
@@ -199,7 +249,10 @@ fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Res
                 ..
             }
         ));
-        assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
         assert_eq!(kernel.memory.private_commit_used_bytes(), budget_before);
         let still_queued = kernel
             .peek_ready_visible_message_w_filtered(
@@ -211,8 +264,132 @@ fn typed_message_bad_msg_destination_preserves_queue_and_private_budget() -> Res
             .expect("failed output cannot dequeue typed message");
         assert_eq!(still_queued.typed_payload_owner, Some(owner));
         assert_eq!(still_queued.lparam, queued.lparam);
-        assert!(kernel.message_pointer_payload_for_message(&still_queued).is_some());
+        assert!(
+            kernel
+                .message_pointer_payload_for_message(&still_queued)
+                .is_some()
+        );
     }
+    Ok(())
+}
+
+#[test]
+fn raw_get_destroy_dispatch_keeps_other_births_same_va_payload() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let owner_a = kernel.current_process_birth_key().unwrap();
+    let thread_a = 71;
+    let hwnd_a = kernel.create_window_ex_w(thread_a, "GET_DESTROY_A", "", None, 0, WS_VISIBLE, 0);
+    let launch_b = kernel.queue_process_launch(None, None);
+    let owner_b = kernel
+        .handles
+        .process_birth_key(launch_b.process_id)
+        .unwrap();
+    kernel.set_current_process_id(launch_b.process_id);
+    let thread_b = launch_b.thread_id;
+    let hwnd_b = kernel.create_window_ex_w(thread_b, "GET_DESTROY_B", "", None, 0, WS_VISIBLE, 0);
+    kernel.set_current_process_id(1);
+    assert!(kernel.set_window_pos(hwnd_a, None, 1, 2, 10, 12, 0));
+    assert!(kernel.set_window_pos(hwnd_b, None, 1, 2, 10, 12, 0));
+    let queued_a = kernel
+        .peek_ready_visible_message_w_filtered(
+            thread_a,
+            Some(hwnd_a),
+            WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGED,
+        )
+        .unwrap();
+    let queued_b = kernel
+        .peek_ready_visible_message_w_filtered(
+            thread_b,
+            Some(hwnd_b),
+            WM_WINDOWPOSCHANGED,
+            WM_WINDOWPOSCHANGED,
+        )
+        .unwrap();
+    assert_eq!(queued_a.typed_payload_owner, Some(owner_a));
+    assert_eq!(queued_b.typed_payload_owner, Some(owner_b));
+    assert_eq!(queued_a.lparam, queued_b.lparam);
+    let msg_ptr = 0x28_000;
+    let mut memory = TestGuestMemory::default();
+    memory.map_words(msg_ptr, 7);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_a,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, hwnd_a, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr + 12)?, queued_a.lparam);
+    assert!(kernel.destroy_window(hwnd_a));
+    assert!(
+        kernel
+            .message_pointer_payload(owner_a, queued_a.lparam)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .message_pointer_payload(owner_b, queued_b.lparam)
+            .is_some()
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_a,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .message_pointer_payload(owner_b, queued_b.lparam)
+            .is_some()
+    );
+
+    kernel.set_current_process_id(launch_b.process_id);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_b,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, hwnd_b, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr + 12)?, queued_b.lparam);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_b,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .message_pointer_payload(owner_b, queued_b.lparam)
+            .is_none()
+    );
     Ok(())
 }
 
@@ -7022,7 +7199,9 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..LoadedModuleMetadata::default()
         },
     );
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     let heap_alloc_a = kernel
         .memory
         .heap_alloc(heap_birth, PROCESS_HEAP_HANDLE, 0, 32)
@@ -14477,7 +14656,9 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     assert!(kernel.resources.icon(bitfields_icon).is_none());
     assert!(kernel.resources.bitmap(bitfields_color_bitmap).is_none());
     assert!(kernel.resources.bitmap(bitfields_mask_bitmap).is_none());
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     assert!(
         kernel
             .memory
@@ -16750,7 +16931,9 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
     let path_ptr = 0x2_4000;
@@ -19890,7 +20073,12 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert!(
         kernel
             .memory
-            .heap_size(heap_birth, PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
+            .heap_size(
+                heap_birth,
+                PROCESS_HEAP_HANDLE,
+                0,
+                icon_replaced_bitmap_bits
+            )
             .is_none()
     );
     assert!(
@@ -22944,7 +23132,9 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
         .expect("taskbar payload queued")
         .lparam;
     assert_eq!(
-        kernel.memory.heap_size(birth, PROCESS_HEAP_HANDLE, 0, queued_nid),
+        kernel
+            .memory
+            .heap_size(birth, PROCESS_HEAP_HANDLE, 0, queued_nid),
         Some(152)
     );
     // CE6 serializes only the 152-byte form, even when a synthetic raw caller
@@ -23028,7 +23218,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(birth, copied_nid).is_none());
+    assert!(
+        kernel
+            .gwe
+            .message_pointer_payload(birth, copied_nid)
+            .is_none()
+    );
     assert!(
         kernel
             .memory
@@ -23169,7 +23364,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(birth, copied_modify).is_none());
+    assert!(
+        kernel
+            .gwe
+            .message_pointer_payload(birth, copied_modify)
+            .is_none()
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -23226,7 +23426,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(birth, copied_delete).is_none());
+    assert!(
+        kernel
+            .gwe
+            .message_pointer_payload(birth, copied_delete)
+            .is_none()
+    );
 
     memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE);
     memory.write_word(data + 16, WM_USER + 123);
@@ -23280,7 +23485,12 @@ fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Resu
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(birth, copied_readd).is_none());
+    assert!(
+        kernel
+            .gwe
+            .message_pointer_payload(birth, copied_readd)
+            .is_none()
+    );
 
     assert!(kernel.destroy_window(taskbar_hwnd));
     memory.write_word(data + 12, NIF_TIP);
@@ -23451,9 +23661,12 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
             ..
         }
     ));
-    assert_eq!(kernel.gwe.message_pointer_payload(birth, payload_ptr), Some(payload.clone()));
-    let delivered = Message::new(hwnd, WM_WINDOWPOSCHANGED, 0, payload_ptr, 0)
-        .with_typed_payload_owner(birth);
+    assert_eq!(
+        kernel.gwe.message_pointer_payload(birth, payload_ptr),
+        Some(payload.clone())
+    );
+    let delivered =
+        Message::new(hwnd, WM_WINDOWPOSCHANGED, 0, payload_ptr, 0).with_typed_payload_owner(birth);
     kernel.record_delivered_typed_payload_message(birth, thread_id, msg_ptr, &delivered);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -23468,7 +23681,12 @@ fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Res
             ..
         }
     ));
-    assert!(kernel.gwe.message_pointer_payload(birth, payload_ptr).is_none());
+    assert!(
+        kernel
+            .gwe
+            .message_pointer_payload(birth, payload_ptr)
+            .is_none()
+    );
     assert!(
         kernel
             .memory
@@ -23691,7 +23909,9 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
     let hwnd = kernel.create_window_ex_w(thread_id, "SHN_SINK", "", None, 0, 0, 0);
@@ -24787,7 +25007,9 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
     let hwnd = kernel.create_window_ex_w(thread_id, "SHN_TIMEOUT", "", None, 0, 0, 0);
@@ -25076,7 +25298,9 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
-    let heap_birth = kernel.current_process_birth_key().expect("heap owner birth");
+    let heap_birth = kernel
+        .current_process_birth_key()
+        .expect("heap owner birth");
     let mut memory = TestGuestMemory::default();
     let root = unique_test_root("shell-filechange");
     let _ = fs::remove_dir_all(&root);

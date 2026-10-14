@@ -8570,16 +8570,19 @@ impl CeKernel {
         if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
             return false;
         }
-        let Some((owner, lparam)) = self.queue_shell_notification_payload(record.hwnd_sink, ShellNotificationMessage {
-            hwnd_from: 0,
-            id_from: record.id,
-            code,
-            lparam: record.lparam,
-            return_value: 0,
-            data0,
-            data1,
-            link,
-        }) else {
+        let Some((owner, lparam)) = self.queue_shell_notification_payload(
+            record.hwnd_sink,
+            ShellNotificationMessage {
+                hwnd_from: 0,
+                id_from: record.id,
+                code,
+                lparam: record.lparam,
+                return_value: 0,
+                data0,
+                data1,
+                link,
+            },
+        ) else {
             return false;
         };
         if self.post_window_typed_payload_message(
@@ -9242,22 +9245,30 @@ impl CeKernel {
         msg_ptr: u32,
         message: &mut Message,
     ) {
-        message.typed_payload_owner = None;
-        let Some(delivered) = self
+        let provenance =
+            self.delivered_typed_payload_owner_for_message(owner, thread_id, msg_ptr, message);
+        self.delivered_typed_payload_messages
+            .remove(&(owner, thread_id, msg_ptr));
+        message.typed_payload_owner = provenance;
+    }
+
+    pub fn delivered_typed_payload_owner_for_message(
+        &self,
+        owner: ProcessBirthKey,
+        thread_id: u32,
+        msg_ptr: u32,
+        message: &Message,
+    ) -> Option<ProcessBirthKey> {
+        let delivered = self
             .delivered_typed_payload_messages
-            .remove(&(owner, thread_id, msg_ptr))
-        else {
-            return;
-        };
-        if delivered.typed_payload_owner == Some(owner)
+            .get(&(owner, thread_id, msg_ptr))?;
+        (delivered.typed_payload_owner == Some(owner)
             && delivered.hwnd == message.hwnd
             && delivered.msg == message.msg
             && delivered.wparam == message.wparam
             && delivered.lparam == message.lparam
-            && self.message_pointer_payload_for_message(&delivered).is_some()
-        {
-            message.typed_payload_owner = Some(owner);
-        }
+            && self.message_pointer_payload_for_message(delivered).is_some())
+        .then_some(owner)
     }
 
     pub fn message_pointer_payload(
@@ -10071,10 +10082,11 @@ impl CeKernel {
         let Some(ptr) = self.memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 28) else {
             return None;
         };
-        if self
-            .gwe
-            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::WindowPos(payload))
-        {
+        if self.gwe.insert_message_pointer_payload(
+            owner,
+            ptr,
+            MessagePointerPayload::WindowPos(payload),
+        ) {
             self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
@@ -10101,10 +10113,11 @@ impl CeKernel {
         else {
             return None;
         };
-        if self
-            .gwe
-            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::ShellNotification(payload))
-        {
+        if self.gwe.insert_message_pointer_payload(
+            owner,
+            ptr,
+            MessagePointerPayload::ShellNotification(payload),
+        ) {
             self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
@@ -10126,10 +10139,11 @@ impl CeKernel {
         else {
             return None;
         };
-        if self
-            .gwe
-            .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::NotifyIcon(payload))
-        {
+        if self.gwe.insert_message_pointer_payload(
+            owner,
+            ptr,
+            MessagePointerPayload::NotifyIcon(payload),
+        ) {
             self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
@@ -11962,7 +11976,12 @@ mod tests {
         assert!(kernel.gwe.message_pointer_payload(owner_b, ptr_b).is_some());
         assert!(kernel.destroy_window(hwnd_b));
         assert!(kernel.gwe.message_pointer_payload(owner_b, ptr_b).is_none());
-        assert!(kernel.memory.heap_size(owner_b, PROCESS_HEAP_HANDLE, 0, ptr_b).is_none());
+        assert!(
+            kernel
+                .memory
+                .heap_size(owner_b, PROCESS_HEAP_HANDLE, 0, ptr_b)
+                .is_none()
+        );
     }
 
     #[test]
@@ -11987,11 +12006,27 @@ mod tests {
             height: 10,
             flags: 0,
         };
-        let (_, ptr_a) = kernel.queue_window_pos_payload(hwnd_a, position(hwnd_a)).unwrap();
-        let (_, ptr_b) = kernel.queue_window_pos_payload(hwnd_b, position(hwnd_b)).unwrap();
+        let (_, ptr_a) = kernel
+            .queue_window_pos_payload(hwnd_a, position(hwnd_a))
+            .unwrap();
+        let (_, ptr_b) = kernel
+            .queue_window_pos_payload(hwnd_b, position(hwnd_b))
+            .unwrap();
         assert_eq!(ptr_a, ptr_b);
-        assert!(kernel.post_window_typed_payload_message(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, owner_a));
-        assert!(kernel.post_window_typed_payload_message(hwnd_b, WM_WINDOWPOSCHANGED, 0, ptr_b, owner_b));
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_a,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_a,
+            owner_a
+        ));
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_b,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_b,
+            owner_b
+        ));
         kernel.set_process_name_guest_ptr_for(owner_a, 0x1111);
         kernel.set_process_name_guest_ptr_for(owner_b, 0x2222);
         kernel.set_command_line_guest_ptr_for(owner_a, 0x3333);
@@ -12015,7 +12050,10 @@ mod tests {
         let owner_a = kernel.current_process_birth_key().unwrap();
         let hwnd_a = kernel.create_window_ex_w(11, "DELIVERED_A", "", None, 0, WS_VISIBLE, 0);
         let launch_b = kernel.queue_process_launch(None, None);
-        let owner_b = kernel.handles.process_birth_key(launch_b.process_id).unwrap();
+        let owner_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .unwrap();
         kernel.set_current_process_id(launch_b.process_id);
         let hwnd_b = kernel.create_window_ex_w(22, "DELIVERED_B", "", None, 0, WS_VISIBLE, 0);
         kernel.set_current_process_id(1);
@@ -12028,13 +12066,43 @@ mod tests {
             height: 1,
             flags: 0,
         };
-        let (_, ptr_a) = kernel.queue_window_pos_payload(hwnd_a, position(hwnd_a)).unwrap();
-        let (_, ptr_b) = kernel.queue_window_pos_payload(hwnd_b, position(hwnd_b)).unwrap();
+        let (_, ptr_a) = kernel
+            .queue_window_pos_payload(hwnd_a, position(hwnd_a))
+            .unwrap();
+        let (_, ptr_b) = kernel
+            .queue_window_pos_payload(hwnd_b, position(hwnd_b))
+            .unwrap();
         assert_eq!(ptr_a, ptr_b);
-        assert!(kernel.post_window_typed_payload_message(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, owner_a));
-        assert!(kernel.post_window_typed_payload_message(hwnd_b, WM_WINDOWPOSCHANGED, 0, ptr_b, owner_b));
-        let message_a = kernel.take_ready_visible_message_w_filtered(11, Some(hwnd_a), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
-        let message_b = kernel.take_ready_visible_message_w_filtered(22, Some(hwnd_b), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_a,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_a,
+            owner_a
+        ));
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_b,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_b,
+            owner_b
+        ));
+        let message_a = kernel
+            .take_ready_visible_message_w_filtered(
+                11,
+                Some(hwnd_a),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .unwrap();
+        let message_b = kernel
+            .take_ready_visible_message_w_filtered(
+                22,
+                Some(hwnd_b),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .unwrap();
         kernel.record_delivered_typed_payload_message(owner_a, 11, 0x2000, &message_a);
         kernel.record_delivered_typed_payload_message(owner_b, 22, 0x2000, &message_b);
 
@@ -12059,7 +12127,10 @@ mod tests {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let owner_a = kernel.current_process_birth_key().unwrap();
         let launch_b = kernel.queue_process_launch(None, None);
-        let owner_b = kernel.handles.process_birth_key(launch_b.process_id).unwrap();
+        let owner_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .unwrap();
         kernel.set_process_module_path("\\A\\parent.exe");
         kernel.set_process_command_line("parent args");
         kernel.set_process_name_guest_ptr_for(owner_a, 0x1000);
@@ -12100,7 +12171,14 @@ mod tests {
             )
             .unwrap();
         assert!(kernel.post_window_typed_payload_message(hwnd, WM_WINDOWPOSCHANGED, 0, ptr, owner));
-        let peeked = kernel.peek_ready_visible_message_w_filtered(11, Some(hwnd), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        let peeked = kernel
+            .peek_ready_visible_message_w_filtered(
+                11,
+                Some(hwnd),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .unwrap();
         kernel.record_delivered_typed_payload_message(owner, 11, 0x2000, &peeked);
         kernel.record_delivered_typed_payload_message(
             owner,
@@ -12109,7 +12187,14 @@ mod tests {
             &Message::new(hwnd, crate::ce::gwe::WM_USER + 1, 0, ptr, 0),
         );
         assert!(kernel.message_pointer_payload(owner, ptr).is_some());
-        let taken = kernel.take_ready_visible_message_w_filtered(11, Some(hwnd), WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGED).unwrap();
+        let taken = kernel
+            .take_ready_visible_message_w_filtered(
+                11,
+                Some(hwnd),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .unwrap();
         kernel.record_delivered_typed_payload_message(owner, 11, 0x2000, &taken);
         let mut dispatched = Message::new(hwnd, WM_WINDOWPOSCHANGED, 0, ptr, 0);
         kernel.reattach_delivered_typed_payload_message(owner, 11, 0x2000, &mut dispatched);
