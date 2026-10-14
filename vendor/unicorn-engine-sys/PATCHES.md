@@ -10,6 +10,7 @@ submission or merge is recorded here.
 | Windows CMake alias copy (D-007; introduced with vendoring in `ca477366`) | `cmake/bundle_static.cmake` | Its post-build command uses `cmake -E copy` to create the static-library alias instead of requiring symlink privilege on Windows. Local; not recorded as submitted upstream. |
 | Additive native count-stop query (O-P1; `05eed768`) | `include/unicorn/unicorn.h`, `include/uc_priv.h`, `uc.c` | Adds `UC_QUERY_COUNT_STOP` and per-start native state. The count hook marks a successful stop request, start resets the observation, stop reversal clears it, and a same-handle nested start makes the query return `UC_ERR_RESOURCE` rather than a guessed result. This is a stop-request witness, not an exclusive cause or retired-instruction count. Local; not recorded as submitted upstream. |
 | Windows TCG commit-tail clamp (E-5/E-6/E-32) | `qemu/accel/tcg/translate-all.c` | Caps each VEH commit at the remaining reserved code arena. Small pre-init MIPS tests reproduced the pristine access violation and pass with this local fix. This does not establish the E-32 app crash cause or cover concurrent VEH teardown. Local; not recorded as submitted upstream. |
+| Static vendored-only native linkage (O-P4) | `build.rs` | Always builds this repository's Unicorn C through CMake and rejects `dynamic_linkage`. The old `pkg-config` probe could silently link any installed Unicorn >= 2, bypassing the audited `uc_close`, count-stop query and TCG patch; a dynamic build could load an unaudited same-named DLL at runtime. Local; not recorded as submitted upstream. |
 
 The count query is intentionally additive to Unicorn's C API. The vendored
 build generates the Rust `Query` binding from the header; generated bindings
@@ -19,7 +20,7 @@ future upstream submission need separate evidence.
 ## O-P4 native owner lifetime audit (2026-10-14)
 
 Fresh-per-slice closure relies on this exact vendored 2.1.5 source, not on an
-upstream guarantee: `uc.c:497-570` shows `uc_close` freeing the owner and
+upstream guarantee: `uc.c:497-574` shows `uc_close` freeing the owner and
 returning `UC_ERR_OK` on both its pre-init and initialized paths. A successful
 `uc_hook_add` initializes the engine (`uc.c:1914-1934`, `:304`); subsequent
 `uc_hook_del` can return an error only through `UC_INIT` (`uc.c:2042-2066`).
@@ -28,6 +29,10 @@ clears deferred and remaining hook lists (`uc.c:560-564`). The Rust wrapper's
 `Drop` does not expose the C return, so this is a pinned-source proof, not a
 general checked-close API. Fresh leases close their owning wrapper before
 dropping the nonowning run wrapper, callback boxes or pointer backing pins.
+`build.rs` now unconditionally compiles this vendored C source for a static
+link, rejects the optional `dynamic_linkage` feature at build time, and never
+uses a system `pkg-config` Unicorn. The registry Rust wrapper is pinned
+separately to exact version 2.1.5 in the root manifest and lockfile.
 
 Before changing Unicorn C, its Rust wrapper, crate version, or build options,
 re-audit those exits and hook/owner lifetimes and rerun the O-P4 closed-owner

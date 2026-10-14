@@ -351,34 +351,18 @@ fn generate_bindings() {
 }
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_DYNAMIC_LINKAGE").is_some() {
+        panic!(
+            "O-P4 requires statically linked vendored Unicorn C; dynamic_linkage could load an unaudited DLL. See vendor/unicorn-engine-sys/PATCHES.md"
+        );
+    }
+
     watch_source_files();
 
     generate_bindings();
 
-    match pkg_config::Config::new()
-        .atleast_version("2")
-        .cargo_metadata(false)
-        .probe("unicorn")
-    {
-        Ok(lib) => {
-            for dir in lib.link_paths {
-                println!("cargo:rustc-link-search=native={}", dir.to_str().unwrap());
-            }
-            if cfg!(feature = "dynamic_linkage") {
-                if cc::Build::new().get_compiler().is_like_msvc() {
-                    println!("cargo:rustc-link-lib=dylib=unicorn-import");
-                } else {
-                    println!("cargo:rustc-link-lib=dylib=unicorn");
-                }
-            } else {
-                println!("cargo:rustc-link-arg=-Wl,-allow-multiple-definition");
-                println!("cargo:rustc-link-lib=static=unicorn");
-                println!("cargo:rustc-link-lib=pthread");
-                println!("cargo:rustc-link-lib=m");
-            }
-        }
-        Err(_) => {
-            build_with_cmake();
-        }
-    }
+    // Fresh-owner teardown is justified by this vendored C implementation of
+    // uc_close. A pkg-config probe could silently link an unrelated installed
+    // Unicorn >= 2 with different close semantics, invalidating that proof.
+    build_with_cmake();
 }
