@@ -71100,13 +71100,21 @@ mod tests {
         let mapping = kernel.handles.create_file_mapping(None, 0x1000, 4, None);
         let view = map_view_of_file_raw(&mut kernel, &mut memory, thread_id, mapping, 0, 0, 4);
         assert_ne!(view, 0);
+        let view_allocation = kernel.memory.virtual_allocation(owner, view).unwrap();
+        assert_eq!(view_allocation.owner, owner);
         assert_eq!(
+            view_allocation.source,
+            VirtualAllocationSource::FileViewSlab
+        );
+        assert_eq!(
+            view_allocation.backing,
+            VirtualAllocationBacking::StableSharedViewSlab
+        );
+        assert!(
             kernel
-                .memory
-                .virtual_allocation(owner, view)
-                .unwrap()
-                .source,
-            VirtualAllocationSource::FileViewLegacy
+                .handles
+                .file_mapping_view_for_birth(owner, view)
+                .is_some()
         );
 
         let snapshot = thcreate_snapshot_raw(
