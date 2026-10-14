@@ -577,6 +577,21 @@ struct PendingWndProcReturn {
 }
 
 #[cfg(feature = "unicorn")]
+fn release_wndproc_typed_payload(kernel: &mut CeKernel, callout: &PendingWndProcReturn) {
+    if matches!(
+        callout.msg,
+        crate::ce::gwe::WM_WINDOWPOSCHANGED
+            | crate::ce::gwe::WM_NOTIFY
+            | crate::ce::gwe::WM_HANDLESHELLNOTIFYICON
+    ) && let Some(owner) = callout.typed_payload_owner
+    {
+        // A bare lParam is never release authority: another birth may own
+        // exactly the same VA. PM_NOREMOVE retains its queued typed instance.
+        let _ = kernel.release_dispatched_typed_payload(owner, callout.lparam);
+    }
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WndProcContinuation {
     source: &'static str,
@@ -8816,12 +8831,7 @@ impl UnicornMips {
                             .gwe
                             .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                     }
-                    if callout.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED
-                        && let Some(owner) = callout.typed_payload_owner
-                    {
-                        let _ = unsafe { &mut *kernel_ptr }
-                            .release_message_pointer_payload(owner, callout.lparam);
-                    }
+                    release_wndproc_typed_payload(unsafe { &mut *kernel_ptr }, &callout);
                     let _ = finish_guest_paint_after_wndproc_return(
                         unsafe { &mut *kernel_ptr },
                         &callout,
@@ -19904,15 +19914,16 @@ fn try_complete_current_get_message_wait<D>(
     ) else {
         return false;
     };
-    if prepare_native_message_pointer_payload(
-        kernel,
-        uc,
-        sealed_host_write_guard,
-        thread_id,
-        &message,
-        heap_mapping,
-    )
-    .is_err()
+    if preflight_unicorn_message_write(uc, sealed_host_write_guard, msg_ptr).is_err()
+        || prepare_native_message_pointer_payload(
+            kernel,
+            uc,
+            sealed_host_write_guard,
+            thread_id,
+            &message,
+            heap_mapping,
+        )
+        .is_err()
         || write_unicorn_message(uc, sealed_host_write_guard, msg_ptr, &message).is_err()
     {
         return false;
@@ -32874,15 +32885,18 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         blocked.min_msg,
         blocked.max_msg,
     ) {
-        if prepare_native_message_pointer_payload(
-            kernel,
-            uc,
-            sealed_host_write_guard,
-            blocked.thread_id,
-            &message,
-            heap_mapping,
-        )
-        .is_err()
+        if (blocked.import_pc == 0
+            && preflight_unicorn_message_write(uc, sealed_host_write_guard, blocked.msg_ptr)
+                .is_err())
+            || prepare_native_message_pointer_payload(
+                kernel,
+                uc,
+                sealed_host_write_guard,
+                blocked.thread_id,
+                &message,
+                heap_mapping,
+            )
+            .is_err()
             || (blocked.import_pc == 0
                 && write_unicorn_message(uc, sealed_host_write_guard, blocked.msg_ptr, &message)
                     .is_err())
@@ -32976,15 +32990,16 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
     ) else {
         return false;
     };
-    if prepare_native_message_pointer_payload(
-        kernel,
-        uc,
-        sealed_host_write_guard,
-        blocked.thread_id,
-        &message,
-        heap_mapping,
-    )
-    .is_err()
+    if preflight_unicorn_message_write(uc, sealed_host_write_guard, blocked.msg_ptr).is_err()
+        || prepare_native_message_pointer_payload(
+            kernel,
+            uc,
+            sealed_host_write_guard,
+            blocked.thread_id,
+            &message,
+            heap_mapping,
+        )
+        .is_err()
         || write_unicorn_message(uc, sealed_host_write_guard, blocked.msg_ptr, &message).is_err()
     {
         return false;
@@ -33409,12 +33424,14 @@ fn saved_message_remote_input_target_for_unicorn(kernel: &CeKernel) -> Option<(u
     })
 }
 
+// A deferred native delivery must reject a bad MSG destination before
+// materializing a typed pointer payload, which can commit canonical heap pages.
+// The writer repeats this check immediately before touching guest bytes.
 #[cfg(feature = "unicorn")]
-fn write_unicorn_message<D>(
-    uc: &mut unicorn_engine::Unicorn<'_, D>,
+fn preflight_unicorn_message_write<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
     sealed_host_write_guard: &SealedHostWriteGuard,
     addr: u32,
-    message: &crate::ce::gwe::Message,
 ) -> Result<()> {
     let end = addr
         .checked_add(28)
@@ -33442,6 +33459,17 @@ fn write_unicorn_message<D>(
             })?
             .min(u64::from(end));
     }
+    sealed_host_write_guard.check_write(u64::from(addr), 28)
+}
+
+#[cfg(feature = "unicorn")]
+fn write_unicorn_message<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
+    addr: u32,
+    message: &crate::ce::gwe::Message,
+) -> Result<()> {
+    preflight_unicorn_message_write(uc, sealed_host_write_guard, addr)?;
     let mut bytes = [0u8; 28];
     bytes[0..4].copy_from_slice(&message.hwnd.to_le_bytes());
     bytes[4..8].copy_from_slice(&message.msg.to_le_bytes());
@@ -33946,7 +33974,10 @@ mod guest_thread_stack_tests {
         let high = kernel.memory.heap_high_water_mark(owner);
         let target = ((high + 0xfff) & !0xfff) + page_offset;
         if target > high {
-            kernel.memory.heap_alloc(owner, heap, 0, target - high).unwrap();
+            kernel
+                .memory
+                .heap_alloc(owner, heap, 0, target - high)
+                .unwrap();
         }
         assert!(kernel.set_window_pos(
             hwnd,
@@ -34061,10 +34092,9 @@ mod guest_thread_stack_tests {
             let page = at & !0xfff;
             let offset = (at & 0xfff) as usize;
             let count = (0x1000 - offset).min(len - consumed);
-            let pin = kernel
-                .memory
-                .private_page_pin(owner, page)
-                .ok_or_else(|| Error::Backend(format!("missing canonical heap page 0x{page:08x}")))?;
+            let pin = kernel.memory.private_page_pin(owner, page).ok_or_else(|| {
+                Error::Backend(format!("missing canonical heap page 0x{page:08x}"))
+            })?;
             pin.read_bytes(offset, &mut bytes[consumed..consumed + count])
                 .map_err(|err| Error::Backend(format!("read canonical heap page: {err:?}")))?;
             consumed += count;
@@ -34140,7 +34170,11 @@ mod guest_thread_stack_tests {
             assert_eq!(canonical_heap_bytes(&kernel, message.lparam, 28)?, expected);
             let owner = kernel.current_process_birth_key().expect("fixture birth");
             assert!(kernel.memory.allocation(owner, message.lparam).is_some());
-            assert!(kernel.message_pointer_payload_for_message(&message).is_some());
+            assert!(
+                kernel
+                    .message_pointer_payload_for_message(&message)
+                    .is_some()
+            );
             assert!(
                 kernel
                     .peek_ready_visible_message_w_filtered(
@@ -34161,6 +34195,81 @@ mod guest_thread_stack_tests {
                 )
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn wndproc_typed_cleanup_uses_captured_birth_not_same_va_current_process() -> Result<()> {
+        let (mut kernel, mut cpu, _receiver, message) = direct_payload_fixture(false, 0)?;
+        let original_owner = kernel.current_process_birth_key().expect("original birth");
+        let payload = kernel
+            .message_pointer_payload_for_message(&message)
+            .expect("tagged WINDOWPOS payload");
+        assert!(prepare_direct_payload(&mut cpu, &mut kernel, false));
+        let callout = cpu.pending_wndproc_returns.last().unwrap().clone();
+        assert_eq!(callout.typed_payload_owner, Some(original_owner));
+
+        kernel.handles.create_process(2);
+        let other_owner = kernel.handles.process_birth_key(2).expect("other birth");
+        let offset = message.lparam - GUEST_HEAP_ARENA_BASE;
+        kernel
+            .memory
+            .heap_alloc(other_owner, kernel.memory.get_process_heap(), 0, offset)
+            .unwrap();
+        let other_ptr = kernel
+            .memory
+            .heap_alloc(other_owner, kernel.memory.get_process_heap(), 0, 28)
+            .unwrap();
+        assert_eq!(other_ptr, message.lparam);
+        assert!(
+            kernel
+                .gwe
+                .insert_message_pointer_payload(other_owner, other_ptr, payload)
+        );
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 2,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+
+        release_wndproc_typed_payload(&mut kernel, &callout);
+        assert!(
+            kernel
+                .message_pointer_payload(original_owner, message.lparam)
+                .is_none()
+        );
+        assert!(
+            kernel
+                .message_pointer_payload(other_owner, other_ptr)
+                .is_some()
+        );
+        assert!(
+            kernel
+                .memory
+                .allocation(original_owner, message.lparam)
+                .is_none()
+        );
+        assert!(kernel.memory.allocation(other_owner, other_ptr).is_some());
+
+        let mut untagged = callout.clone();
+        untagged.typed_payload_owner = None;
+        release_wndproc_typed_payload(&mut kernel, &untagged);
+        let mut file_change = callout.clone();
+        file_change.typed_payload_owner = Some(other_owner);
+        file_change.msg = crate::ce::gwe::WM_FILECHANGEINFO;
+        release_wndproc_typed_payload(&mut kernel, &file_change);
+        assert!(
+            kernel
+                .message_pointer_payload(other_owner, other_ptr)
+                .is_some()
+        );
+        file_change.msg = crate::ce::gwe::WM_HANDLESHELLNOTIFYICON;
+        release_wndproc_typed_payload(&mut kernel, &file_change);
+        assert!(
+            kernel
+                .message_pointer_payload(other_owner, other_ptr)
+                .is_none()
+        );
         Ok(())
     }
 
@@ -34248,14 +34357,20 @@ mod guest_thread_stack_tests {
     {
         let (mut kernel, mut cpu, receiver, original) = direct_payload_fixture(false, 0)?;
         let owner = kernel.current_process_birth_key().expect("fixture birth");
-        let payload = kernel.message_pointer_payload(owner, original.lparam).unwrap();
+        let payload = kernel
+            .message_pointer_payload(owner, original.lparam)
+            .unwrap();
         drain_direct_payload_fixture_queue(&mut kernel, receiver);
         kernel.release_message_pointer_payload(owner, original.lparam);
         let ptr = kernel
             .memory
             .heap_alloc(owner, kernel.memory.get_process_heap(), 0, 128)
             .unwrap();
-        assert!(kernel.gwe.insert_message_pointer_payload(owner, ptr, payload));
+        assert!(
+            kernel
+                .gwe
+                .insert_message_pointer_payload(owner, ptr, payload)
+        );
         let mut queued = original.clone();
         queued.lparam = ptr;
         queued.typed_payload_owner = Some(owner);
@@ -34357,7 +34472,10 @@ mod guest_thread_stack_tests {
         cpu.prepare_message_pointer_payload(&mut kernel, receiver, &message)?;
         message.typed_payload_owner = kernel.current_process_birth_key();
         message.lparam = 0x1234_5678;
-        assert!(cpu.prepare_message_pointer_payload(&mut kernel, receiver, &message).is_err());
+        assert!(
+            cpu.prepare_message_pointer_payload(&mut kernel, receiver, &message)
+                .is_err()
+        );
         assert_eq!(cpu.mapped_blobs.len(), before);
         assert_eq!(cpu.pending_wndproc_returns.len(), 0);
         Ok(())
@@ -34410,7 +34528,11 @@ mod guest_thread_stack_tests {
         assert!(prepare_direct_payload(&mut cpu, &mut kernel, false));
         assert_eq!(canonical_heap_bytes(&kernel, ptr, len)?, expected);
         assert_eq!(
-            mips_read_direct_payload(&cpu, &kernel, &[0x8ce8_0010, 0x9502_0000, 0x8ce8_0014, 0x9503_0000])?,
+            mips_read_direct_payload(
+                &cpu,
+                &kernel,
+                &[0x8ce8_0010, 0x9502_0000, 0x8ce8_0014, 0x9503_0000]
+            )?,
             (4, 6, ptr + 46)
         );
         // File-change payload lifetime remains explicit SHFileNotifyFree, not
@@ -34490,16 +34612,15 @@ mod guest_thread_stack_tests {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let mut blobs = Vec::new();
         {
-            let mut memory = unsafe {
-                UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs)
-            }
-            .with_private_vm_mapping(UnicornPrivateVmMapping {
-                mapped: &mapped,
-                owner,
-                native_pins: &pins,
-                active_guards: &guards,
-                terminal_error: &terminal_error,
-            });
+            let mut memory =
+                unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) }
+                    .with_private_vm_mapping(UnicornPrivateVmMapping {
+                        mapped: &mapped,
+                        owner,
+                        native_pins: &pins,
+                        active_guards: &guards,
+                        terminal_error: &terminal_error,
+                    });
             let allocated = crate::ce::coredll::allocate_guest_heap_initialized(
                 &mut kernel,
                 &mut memory,
@@ -34525,17 +34646,18 @@ mod guest_thread_stack_tests {
             0x1234_5678
         );
         assert_eq!(initial_allocation_canonical_mips_word(&kernel, ptr + 4)?, 0);
-        assert_eq!(initial_allocation_canonical_mips_word(&kernel, ptr + 60)?, 0);
+        assert_eq!(
+            initial_allocation_canonical_mips_word(&kernel, ptr + 60)?,
+            0
+        );
         assert!(blobs.is_empty());
         Ok(())
     }
 
     #[test]
-    fn initial_guest_allocation_com_link_canonical_or_mapping_failure_preserves_fifo()
-    -> Result<()> {
-        use crate::ce::{
-            shell::{ShellNotificationCallbackMethod, ShellNotificationCallbackRecord},
-        };
+    fn initial_guest_allocation_com_link_canonical_or_mapping_failure_preserves_fifo() -> Result<()>
+    {
+        use crate::ce::shell::{ShellNotificationCallbackMethod, ShellNotificationCallbackRecord};
         for fail_map in [false, true] {
             let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
             let owner = kernel.current_process_birth_key().expect("fixture birth");
@@ -34733,7 +34855,9 @@ mod guest_thread_stack_tests {
                     base: candidate,
                     bytes: vec![0xa5; 0x1000].into(),
                 };
-                assert!(reserve_fixed_system_slabs(&source, &[blob], &mut kernel, Some(owner)).is_err());
+                assert!(
+                    reserve_fixed_system_slabs(&source, &[blob], &mut kernel, Some(owner)).is_err()
+                );
                 assert!(kernel.memory.fixed_heap_reservation(owner).is_none());
                 continue;
             }
@@ -34743,23 +34867,23 @@ mod guest_thread_stack_tests {
             let terminal_error = RefCell::new(None);
             let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
             let collision = candidate + if kind == 2 { 0x1000 } else { 0 };
-            uc.mem_map(u64::from(collision), 0x1000, Prot::READ).unwrap();
+            uc.mem_map(u64::from(collision), 0x1000, Prot::READ)
+                .unwrap();
             uc.mem_write(u64::from(collision), &[0xa5; 32]).unwrap();
             let generation = kernel.memory.heap_generation();
             let budget = kernel.memory.private_commit_available_bytes();
             let mut blobs = Vec::new();
             let request = if kind == 2 { 0x1001 } else { 32 };
             let allocated = {
-                let mut memory = unsafe {
-                    UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs)
-                }
-                .with_private_vm_mapping(UnicornPrivateVmMapping {
-                    mapped: &mapped,
-                    owner,
-                    native_pins: &pins,
-                    active_guards: &guards,
-                    terminal_error: &terminal_error,
-                });
+                let mut memory =
+                    unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) }
+                        .with_private_vm_mapping(UnicornPrivateVmMapping {
+                            mapped: &mapped,
+                            owner,
+                            native_pins: &pins,
+                            active_guards: &guards,
+                            terminal_error: &terminal_error,
+                        });
                 crate::ce::coredll::allocate_guest_heap(
                     &mut kernel,
                     &mut memory,
@@ -34772,7 +34896,10 @@ mod guest_thread_stack_tests {
             assert!(kernel.memory.allocation(owner, candidate).is_none());
             assert_eq!(kernel.memory.heap_generation(), generation);
             assert_eq!(kernel.memory.private_commit_available_bytes(), budget);
-            assert_eq!(uc.mem_read_as_vec(u64::from(collision), 32).unwrap(), [0xa5; 32]);
+            assert_eq!(
+                uc.mem_read_as_vec(u64::from(collision), 32).unwrap(),
+                [0xa5; 32]
+            );
             assert!(blobs.is_empty());
         }
         Ok(())
@@ -34780,12 +34907,13 @@ mod guest_thread_stack_tests {
     #[test]
     fn initial_guest_allocation_failed_create_returns_zero_and_does_not_publish_window()
     -> Result<()> {
-        use crate::ce::{coredll_ordinals::ORD_CREATE_WINDOW_EX_W, memory::PROCESS_HEAP_HANDLE};
+        use crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W;
         let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
-        kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, 0, GUEST_HEAP_ARENA_SIZE)
-            .unwrap();
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mapped = Rc::new(canonical_heap_test_mapping(&mut kernel)?);
+        let pins = NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
         let parent = kernel.create_window_ex_w(1, "allocation_parent", "", None, 0, 0, 0);
         let sibling = kernel.create_window_ex_w(1, "allocation_sibling", "", Some(parent), 0, 0, 0);
         let hwnd =
@@ -34793,14 +34921,13 @@ mod guest_thread_stack_tests {
         kernel
             .gwe
             .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, 0x21000);
-        let candidate = kernel.memory.heap_high_water_mark();
+        let candidate = kernel.memory.heap_high_water_mark(owner);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(u64::from(candidate & !0xfff), 0x1000, Prot::READ)
             .unwrap();
         uc.reg_write(RegisterMIPS::SP, 0x10f00).unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x22000).unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x80001000).unwrap();
-        let mapped = Rc::new(RefCell::new(KernelMemoryMappings::new(&[])));
         let mut blobs = Vec::new();
         let pending = Rc::new(RefCell::new(Vec::new()));
         let sealed_host_write_guard = super::SealedHostWriteGuard::from_mapped_blobs(&blobs)?;
@@ -34813,7 +34940,13 @@ mod guest_thread_stack_tests {
             hwnd,
             &mapped,
             &mut blobs,
-            None,
+            Some(UnicornPrivateVmMapping {
+                mapped: mapped.as_ref(),
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
             &pending,
             &sealed_host_write_guard,
         ));
@@ -34825,12 +34958,12 @@ mod guest_thread_stack_tests {
         assert!(kernel.gwe.is_window(parent));
         assert!(kernel.gwe.is_window(sibling));
         assert!(pending.borrow().is_empty());
-        assert!(kernel.memory.allocation(candidate).is_none());
+        assert!(kernel.memory.allocation(owner, candidate).is_none());
         assert_eq!(
             kernel.threads.get_last_error(1),
             crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY
         );
-        let high = kernel.memory.heap_high_water_mark();
+        let high = kernel.memory.heap_high_water_mark(owner);
         assert!(!super::try_enter_create_window_create_callout(
             &mut kernel,
             &mut uc,
@@ -34840,12 +34973,18 @@ mod guest_thread_stack_tests {
             0,
             &mapped,
             &mut blobs,
-            None,
+            Some(UnicornPrivateVmMapping {
+                mapped: mapped.as_ref(),
+                owner,
+                native_pins: &pins,
+                active_guards: &guards,
+                terminal_error: &terminal_error,
+            }),
             &pending,
             &sealed_host_write_guard,
         ));
         assert_eq!(
-            kernel.memory.heap_high_water_mark(),
+            kernel.memory.heap_high_water_mark(owner),
             high,
             "failed API completion does not retry or duplicate creation"
         );
@@ -34858,14 +34997,18 @@ mod guest_thread_stack_tests {
         use crate::ce::memory::PROCESS_HEAP_HANDLE;
         for refusal in 0..3 {
             let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+            let owner = kernel.current_process_birth_key().expect("fixture birth");
             let hwnd = kernel.create_window_ex_w(1, "allocation_lifetime", "", None, 0, 0, 0);
             kernel
                 .gwe
                 .set_window_long(hwnd, crate::ce::gwe::GWL_WNDPROC, 0x21000);
-            let user_payload = kernel.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 4).unwrap();
+            let user_payload = kernel
+                .memory
+                .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 4)
+                .unwrap();
             let scratch = kernel
                 .memory
-                .heap_alloc(PROCESS_HEAP_HANDLE, 0, CREATESTRUCTW_SIZE)
+                .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, CREATESTRUCTW_SIZE)
                 .unwrap();
             let pending = Rc::new(RefCell::new(vec![CreateWindowReturn {
                 owner: kernel.current_process_birth_key().unwrap(),
@@ -34887,7 +35030,7 @@ mod guest_thread_stack_tests {
             );
             if refusal != 1 {
                 assert!(
-                    kernel.memory.allocation(scratch).is_some(),
+                    kernel.memory.allocation(owner, scratch).is_some(),
                     "WM_CREATE continuation still owns scratch"
                 );
                 assert_eq!(pending.borrow().len(), 1);
@@ -34908,8 +35051,8 @@ mod guest_thread_stack_tests {
                 );
             }
             assert!(pending.borrow().is_empty());
-            assert!(kernel.memory.allocation(scratch).is_none());
-            assert!(kernel.memory.allocation(user_payload).is_some());
+            assert!(kernel.memory.allocation(owner, scratch).is_none());
+            assert!(kernel.memory.allocation(owner, user_payload).is_some());
             assert_eq!(kernel.gwe.is_window(hwnd), refusal == 0);
             assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x22000);
             assert_eq!(
@@ -34926,8 +35069,13 @@ mod guest_thread_stack_tests {
         use crate::ce::memory::PROCESS_HEAP_HANDLE;
         for fault in 0..3 {
             let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
-            let source = kernel.memory.local_alloc(0, 0x1000).unwrap();
-            let candidate = kernel.memory.heap_high_water_mark();
+            let owner = kernel.current_process_birth_key().expect("fixture birth");
+            let mapped = canonical_heap_test_mapping(&mut kernel)?;
+            let source = kernel.memory.local_alloc(owner, 0, 0x1000).unwrap();
+            let candidate = kernel.memory.heap_high_water_mark(owner);
+            let pins = NativeMappingPins::default();
+            let guards = RefCell::new(BTreeMap::new());
+            let terminal_error = RefCell::new(None);
             assert!(kernel.gwe.open_clipboard(0));
             assert_eq!(
                 kernel
@@ -34938,25 +35086,38 @@ mod guest_thread_stack_tests {
             let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
             let mut blobs = Vec::new();
             if fault == 2 {
-                uc.mem_map(u64::from(source), 0x1000, Prot::ALL).unwrap();
-                uc.mem_write(u64::from(source), &0x12345678u32.to_le_bytes())
-                    .unwrap();
+                let prepared = kernel
+                    .memory
+                    .prepare_fixed_heap_growth(owner, candidate)
+                    .expect("source page growth");
+                kernel.memory.commit_prepared_private_vm(prepared).unwrap();
+                let pin = kernel.memory.private_page_pin(owner, source).unwrap();
+                pin.write_bytes(0, &0x12345678u32.to_le_bytes()).unwrap();
+                map_private_slab_page(
+                    &mut uc,
+                    &kernel,
+                    &mut mapped.borrow_mut(),
+                    owner,
+                    pin,
+                    &pins,
+                    Some(&guards),
+                )?;
                 uc.mem_map(u64::from(candidate), 0x1000, Prot::READ)
                     .unwrap();
-                blobs.push(MappedBlob {
-                    name: "ram:ce-heap-arena".to_owned(),
-                    base: source,
-                    bytes: vec![0; 0x1000].into(),
-                });
             }
-            let mapped = RefCell::new(KernelMemoryMappings::new(&blobs));
             let result = super::clipboard_render_complete_handle(
                 &mut kernel,
                 &mut uc,
                 &super::SealedHostWriteGuard::default(),
                 &mapped,
                 &mut blobs,
-                None,
+                Some(UnicornPrivateVmMapping {
+                    mapped: &mapped,
+                    owner,
+                    native_pins: &pins,
+                    active_guards: &guards,
+                    terminal_error: &terminal_error,
+                }),
                 1,
                 1,
                 true,
@@ -34970,9 +35131,11 @@ mod guest_thread_stack_tests {
                     _ => crate::ce::thread::ERROR_NOT_ENOUGH_MEMORY,
                 }
             );
-            assert!(kernel.memory.allocation(candidate).is_none());
+            assert!(kernel.memory.allocation(owner, candidate).is_none());
             assert_eq!(
-                kernel.memory.heap_size(PROCESS_HEAP_HANDLE, 0, source),
+                kernel
+                    .memory
+                    .heap_size(owner, PROCESS_HEAP_HANDLE, 0, source),
                 Some(0x1000)
             );
             assert_eq!(
@@ -34982,7 +35145,13 @@ mod guest_thread_stack_tests {
                     &super::SealedHostWriteGuard::default(),
                     &mapped,
                     &mut blobs,
-                    None,
+                    Some(UnicornPrivateVmMapping {
+                        mapped: &mapped,
+                        owner,
+                        native_pins: &pins,
+                        active_guards: &guards,
+                        terminal_error: &terminal_error,
+                    }),
                     1,
                     99,
                     true
@@ -34999,66 +35168,57 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn heap_realloc_fresh_spill_copy_is_persisted_for_real_mips_reads() -> Result<()> {
+    fn heap_realloc_past_32_mib_preserves_canonical_bytes_for_real_mips_reads() -> Result<()> {
         use crate::ce::{
             coredll::{CoredllDispatch, CoredllExportTable, CoredllValue},
             coredll_ordinals::ORD_HEAP_RE_ALLOC,
             memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
         };
-        use unicorn_engine::{
-            Unicorn,
-            unicorn_const::{Arch, Mode, Prot},
-        };
-
-        let config = crate::config::RuntimeConfig::load_default()?;
-        let mut kernel = CeKernel::boot(config);
-        let arena = kernel
-            .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, 0, GUEST_HEAP_ARENA_SIZE)
-            .unwrap();
-        assert_eq!(arena, GUEST_HEAP_ARENA_BASE);
+        const THIRTY_TWO_MIB: u32 = 0x0200_0000;
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mapped = canonical_heap_test_mapping(&mut kernel)?;
         let source = kernel
             .memory
-            .heap_alloc(PROCESS_HEAP_HANDLE, 0, 16)
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
             .unwrap();
-        assert_eq!(source, GUEST_HEAP_ARENA_BASE + GUEST_HEAP_ARENA_SIZE);
-
-        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
-            .map_err(|err| Error::Backend(format!("create source Unicorn: {err:?}")))?;
-        uc.mem_map(
-            u64::from(GUEST_HEAP_ARENA_BASE),
-            u64::from(GUEST_HEAP_ARENA_SIZE),
-            Prot::ALL,
-        )
-        .map_err(|err| Error::Backend(format!("map base heap arena: {err:?}")))?;
-        let mapped = RefCell::new(KernelMemoryMappings::new(&[]));
-        let mut blobs = Vec::new();
-        {
-            // SAFETY: `blobs` remains live and is accessed only through this
-            // adapter for the duration of the scope.
-            let mut memory =
-                unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) };
-            memory.ensure_heap_mapped(source, 16)?;
-            memory.write_bytes(source, &[0x78, 0x56, 0x34, 0x12])?;
-        }
-
+        let source_growth = kernel
+            .memory
+            .prepare_fixed_heap_growth(owner, kernel.memory.heap_high_water_mark(owner))
+            .expect("source heap page");
+        kernel
+            .memory
+            .commit_prepared_private_vm(source_growth)
+            .unwrap();
+        kernel
+            .memory
+            .private_page_pin(owner, source & !0xfff)
+            .unwrap()
+            .write_bytes((source & 0xfff) as usize, &0x1234_5678u32.to_le_bytes())
+            .unwrap();
         let gap = kernel
             .memory
-            .heap_alloc(
-                PROCESS_HEAP_HANDLE,
-                0,
-                GUEST_HEAP_SPILLOVER_GRANULARITY - 16,
-            )
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, THIRTY_TWO_MIB - 16)
             .unwrap();
         assert_eq!(gap, source + 16);
-        let destination = kernel.memory.heap_high_water_mark();
-        assert_eq!(destination, source + GUEST_HEAP_SPILLOVER_GRANULARITY);
-
+        let destination = kernel.memory.heap_high_water_mark(owner);
+        assert_eq!(destination, source + THIRTY_TWO_MIB);
+        let budget_before = kernel.memory.private_commit_available_bytes();
+        let pins = NativeMappingPins::default();
+        let guards = RefCell::new(BTreeMap::new());
+        let terminal_error = RefCell::new(None);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut blobs = Vec::new();
         let dispatch = {
-            // SAFETY: `blobs` remains live and is accessed only through this
-            // adapter for the duration of the dispatch.
             let mut memory =
-                unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) };
+                unsafe { UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs) }
+                    .with_private_vm_mapping(UnicornPrivateVmMapping {
+                        mapped: &mapped,
+                        owner,
+                        native_pins: &pins,
+                        active_guards: &guards,
+                        terminal_error: &terminal_error,
+                    });
             CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
                 &mut kernel,
                 &mut memory,
@@ -35074,55 +35234,30 @@ mod guest_thread_stack_tests {
                 ..
             } if ptr == destination
         ));
-        map_kernel_memory_allocations(&mut uc, &kernel, &mut mapped.borrow_mut(), &mut blobs)?;
-        sync_mapped_blobs_from_unicorn(&uc, &mut blobs)?;
-
-        let mut restored = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
-            .map_err(|err| Error::Backend(format!("create restored Unicorn: {err:?}")))?;
-        let mut restored_ranges = Vec::new();
-        for blob in &blobs {
-            map_persisted_ram_blob_pages(&mut restored, &mut restored_ranges, blob)?;
-            restored
-                .mem_write(u64::from(blob.base), &blob.bytes)
-                .map_err(|err| Error::Backend(format!("restore heap blob: {err:?}")))?;
-        }
-
-        let code = 0x0001_0000u32;
-        restored
-            .mem_map(u64::from(code), 0x1000, Prot::ALL)
-            .map_err(|err| Error::Backend(format!("map MIPS probe: {err:?}")))?;
-        let words = [
-            0x3c08_0000 | (destination >> 16),
-            0x3508_0000 | (destination & 0xffff),
-            0x8d02_0000,
-            0x9103_0010,
-            0x03e0_0008,
-            0,
-        ];
-        let code_bytes = words
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect::<Vec<_>>();
-        restored
-            .mem_write(u64::from(code), &code_bytes)
-            .map_err(|err| Error::Backend(format!("write MIPS probe: {err:?}")))?;
-        restored
-            .reg_write(RegisterMIPS::RA, u64::from(code + code_bytes.len() as u32))
-            .map_err(|err| Error::Backend(format!("write MIPS probe RA: {err:?}")))?;
-        restored
-            .emu_start(
-                u64::from(code),
-                u64::from(code + code_bytes.len() as u32),
-                0,
-                0,
-            )
-            .map_err(|err| Error::Backend(format!("execute MIPS heap probe: {err:?}")))?;
-
-        assert_eq!(restored.reg_read(RegisterMIPS::V0).unwrap(), 0x1234_5678);
-        assert_eq!(restored.reg_read(RegisterMIPS::V1).unwrap(), 0);
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(owner, PROCESS_HEAP_HANDLE, 0, destination),
+            Some(32)
+        );
+        assert_eq!(
+            initial_allocation_canonical_mips_word(&kernel, destination)?,
+            0x1234_5678
+        );
+        assert_eq!(
+            initial_allocation_canonical_mips_word(&kernel, destination + 16)?,
+            0
+        );
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget_before - u64::from(THIRTY_TWO_MIB)
+        );
+        assert!(
+            blobs.is_empty(),
+            "heap growth never creates a copied RAM blob"
+        );
         Ok(())
     }
-
     #[test]
     fn unmapped_guest_spans_group_contiguous_pages() -> Result<()> {
         let mut mapped = KernelMemoryMappings::new(&[]);
@@ -35185,65 +35320,6 @@ mod guest_thread_stack_tests {
         assert!(mapped.ranges.contains(&(0x4000_3000, 0x1000)));
         assert!(!is_guest_page_mapped(&mapped, 0x4000_2000));
     }
-
-    #[test]
-    fn persisted_ram_blob_remap_groups_unmapped_spans() -> Result<()> {
-        use unicorn_engine::{
-            Unicorn,
-            unicorn_const::{Arch, Mode},
-        };
-
-        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
-            .map_err(|err| Error::Backend(format!("{err:?}")))?;
-        let mut mapped_ranges = vec![(0x3100_2000, 0x1000)];
-        let blob = MappedBlob {
-            name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
-            base: 0x3100_0000,
-            bytes: vec![0; 0x5000].into(),
-        };
-
-        map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
-
-        assert!(mapped_ranges.contains(&(0x3100_0000, 0x2000)));
-        assert!(mapped_ranges.contains(&(0x3100_2000, 0x1000)));
-        assert!(mapped_ranges.contains(&(0x3100_3000, 0x2000)));
-        assert!(!mapped_ranges.contains(&(0x3100_0000, 0x1000)));
-        assert!(!mapped_ranges.contains(&(0x3100_3000, 0x1000)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn persisted_heap_spillover_remaps_as_executable() -> Result<()> {
-        use unicorn_engine::{
-            Unicorn,
-            unicorn_const::{Arch, Mode},
-        };
-
-        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
-            .map_err(|err| Error::Backend(format!("{err:?}")))?;
-        let mut mapped_ranges = Vec::new();
-        let blob = MappedBlob {
-            name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
-            base: 0x3100_0000,
-            bytes: vec![0; 0x1000].into(),
-        };
-
-        map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
-        uc.mem_write(0x3100_0000, &0x03e0_0008u32.to_le_bytes())
-            .map_err(|err| Error::Backend(format!("write jr ra: {err:?}")))?;
-        uc.mem_write(0x3100_0004, &0u32.to_le_bytes())
-            .map_err(|err| Error::Backend(format!("write nop: {err:?}")))?;
-        uc.reg_write(RegisterMIPS::RA, 0x3100_0008)
-            .map_err(|err| Error::Backend(format!("write ra: {err:?}")))?;
-
-        uc.emu_start(0x3100_0000, 0, 0, 2)
-            .map_err(|err| Error::Backend(format!("execute heap spillover: {err:?}")))?;
-
-        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x3100_0008);
-        Ok(())
-    }
-
     #[test]
     fn switch_to_parked_child_restores_process_identity() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
@@ -44263,6 +44339,14 @@ fn try_enter_dispatch_message_callout<D>(
         return false;
     }
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let typed_payload_owner = kernel.current_process_birth_key().and_then(|owner| {
+        kernel.delivered_typed_payload_owner_for_message(
+            owner,
+            active_thread_id,
+            msg_ptr,
+            &crate::ce::gwe::Message::new(hwnd, msg, wparam, lparam, 0),
+        )
+    });
 
     tracing::debug!(
         target: "ce.gwe",
@@ -44283,7 +44367,7 @@ fn try_enter_dispatch_message_callout<D>(
         msg,
         wparam,
         lparam,
-        typed_payload_owner: None,
+        typed_payload_owner,
         wndproc,
         return_pc,
         return_sp: wndproc_return_sp(uc),
@@ -48938,9 +49022,12 @@ fn try_enter_create_window_create_callout<D>(
         pending_returns.borrow_mut().push(callout);
         true
     } else {
-        let _ = kernel
-            .memory
-            .heap_free(owner, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, create_struct);
+        let _ = kernel.memory.heap_free(
+            owner,
+            crate::ce::memory::PROCESS_HEAP_HANDLE,
+            0,
+            create_struct,
+        );
         restore_mips_gprs(uc, &caller_regs);
         let _ = kernel.destroy_window_with_reason(hwnd, "CreateWindowExW callout setup failed");
         kernel
@@ -52392,7 +52479,9 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         let (heap_base, heap_size) = kernel
             .memory
             .fixed_heap_reservation(mapping.owner)
-            .ok_or_else(|| Error::Backend("selected birth has no fixed heap reservation".to_owned()))?;
+            .ok_or_else(|| {
+                Error::Backend("selected birth has no fixed heap reservation".to_owned())
+            })?;
         let heap_end = u64::from(heap_base) + u64::from(heap_size);
         if addr < heap_base || u64::from(end) > heap_end {
             return Err(Error::InvalidArgument(
@@ -52895,9 +52984,8 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
     use super::{
-        HEAP_SPILLOVER_BLOB_NAME, ImportTrapTable, LiveTrampolineState, MappedBlob, MemoryMap,
-        MemoryPerms, read_unicorn_u32, reconcile_persistent_native_memory,
-        sync_persisted_blobs_to_native,
+        ImportTrapTable, LiveTrampolineState, MappedBlob, MemoryMap, MemoryPerms, read_unicorn_u32,
+        reconcile_persistent_native_memory, sync_persisted_blobs_to_native,
     };
     use crate::{
         ce::{
@@ -55153,8 +55241,8 @@ mod unicorn_tests {
                 bytes: stale_trap.to_le_bytes().to_vec().into(),
             },
             super::MappedBlob {
-                name: super::HEAP_SPILLOVER_BLOB_NAME.to_owned(),
-                base: 0x3100_0000,
+                name: "ram:mutable-code".to_owned(),
+                base: 0x4800_0000,
                 bytes: stale_heap.to_le_bytes().to_vec().into(),
             },
         ];
@@ -55166,13 +55254,13 @@ mod unicorn_tests {
             Prot::ALL,
         )
         .unwrap();
-        uc.mem_map(0x3100_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x4800_0000, 0x1000, Prot::ALL).unwrap();
         uc.mem_write(
             crate::emulator::imports::IMPORT_TRAP_BASE.into(),
             &live_trap.to_le_bytes(),
         )
         .unwrap();
-        uc.mem_write(0x3100_0000, &live_heap.to_le_bytes()).unwrap();
+        uc.mem_write(0x4800_0000, &live_heap.to_le_bytes()).unwrap();
 
         assert_eq!(
             super::read_unicorn_code_u32(
@@ -55183,7 +55271,7 @@ mod unicorn_tests {
             Some(live_trap)
         );
         assert_eq!(
-            super::read_unicorn_code_u32(&uc, &mapped_code, 0x3100_0000),
+            super::read_unicorn_code_u32(&uc, &mapped_code, 0x4800_0000),
             Some(live_heap)
         );
     }
@@ -58190,24 +58278,19 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn persistent_native_memory_retains_tracked_virtual_pages_and_sparse_spillover() {
+    fn persistent_native_memory_retains_tracked_virtual_pages_without_heap_blobs() {
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x9000, 0x1000, Prot::READ).unwrap();
         uc.mem_write(0x9000, &0xabcdef01u32.to_le_bytes()).unwrap();
-        let blob = MappedBlob {
-            name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
-            base: 0x5000,
-            bytes: vec![0; 0x1000].into(),
-        };
         reconcile_persistent_native_memory(
             &mut uc,
             &MemoryMap::default(),
-            &[blob],
+            &[],
             &HashSet::from([0x9000]),
         )
         .unwrap();
         assert_eq!(read_unicorn_u32(&uc, 0x9000), Some(0xabcdef01));
-        assert_eq!(read_unicorn_u32(&uc, 0x5000), Some(0));
+        assert_eq!(read_unicorn_u32(&uc, 0x5000), None);
         assert!(uc.mem_read_as_vec(0x4000, 1).is_err());
         assert!(uc.mem_read_as_vec(0x6000, 1).is_err());
         assert!(
@@ -64838,6 +64921,7 @@ mod unicorn_tests {
     }
 
     fn native_payload_fixture() -> (
+        super::NativeMappingPins,
         CeKernel,
         Unicorn<'static, ()>,
         RefCell<super::KernelMemoryMappings>,
@@ -64845,17 +64929,20 @@ mod unicorn_tests {
         u32,
     ) {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
         kernel
             .memory
-            .heap_alloc(
-                kernel.memory.get_process_heap(),
-                0,
+            .reserve_fixed_private_range(
+                owner,
+                crate::ce::memory::VirtualAllocationSource::ProcessHeapArena,
+                super::GUEST_HEAP_ARENA_BASE,
                 super::GUEST_HEAP_ARENA_SIZE,
+                0x04,
             )
-            .unwrap();
+            .expect("fixture heap reservation");
         kernel
             .memory
-            .heap_alloc(kernel.memory.get_process_heap(), 0, 0xff0)
+            .heap_alloc(owner, kernel.memory.get_process_heap(), 0, 0xff0)
             .unwrap();
         let hwnd = kernel.create_window_ex_w(1, "NATIVE_PAYLOAD", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, 0x0001_0000);
@@ -64871,13 +64958,24 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::SP, 0x20800).unwrap();
         uc.reg_write(RegisterMIPS::PC, 0x10c00).unwrap();
         uc.reg_write(RegisterMIPS::RA, 0x10000).unwrap();
-        let mapped = RefCell::new(super::KernelMemoryMappings::new(&[]));
+        let mut mapping = super::KernelMemoryMappings::new(&[]);
+        mapping.system_slab_owner = Some(owner);
+        mapping.system_slab_ranges =
+            vec![(super::GUEST_HEAP_ARENA_BASE, super::GUEST_HEAP_ARENA_SIZE)];
+        let mapped = RefCell::new(mapping);
         let blobs = vec![super::MappedBlob {
             name: "ram:msg".to_owned(),
             base: 0x20000,
             bytes: vec![0; 0x1000].into(),
         }];
-        (kernel, uc, mapped, blobs, hwnd)
+        (
+            super::NativeMappingPins::default(),
+            kernel,
+            uc,
+            mapped,
+            blobs,
+            hwnd,
+        )
     }
 
     fn native_payload_message(kernel: &mut CeKernel, hwnd: u32) -> crate::ce::gwe::Message {
@@ -64893,7 +64991,23 @@ mod unicorn_tests {
             .unwrap()
     }
 
-    fn native_payload_mips_fields(uc: &mut Unicorn<'_, ()>, pointer: u32) -> (u32, u32, u32) {
+    fn native_payload_mips_fields(
+        kernel: &CeKernel,
+        uc: &mut Unicorn<'_, ()>,
+        mapped: &RefCell<super::KernelMemoryMappings>,
+        native_pins: &super::NativeMappingPins,
+        pointer: u32,
+    ) -> (u32, u32, u32) {
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        super::map_private_slab_pages(
+            uc,
+            kernel,
+            &mut mapped.borrow_mut(),
+            owner,
+            native_pins,
+            None,
+        )
+        .expect("map canonical payload pages");
         // Actual MIPS loads of WINDOWPOS x, y and width through the pointer.
         let code = [0x8c82_0008u32, 0x8c83_000c, 0x8c88_0010];
         uc.mem_write(
@@ -64913,21 +65027,51 @@ mod unicorn_tests {
         )
     }
 
-    fn native_payload_restored_fields(
-        blobs: &[super::MappedBlob],
-        pointer: u32,
-    ) -> (u32, u32, u32) {
+    fn native_payload_restored_fields(kernel: &CeKernel, pointer: u32) -> (u32, u32, u32) {
+        let native_pins = super::NativeMappingPins::default();
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let mut ranges = Vec::new();
-        for blob in blobs
-            .iter()
-            .filter(|blob| blob.name == super::HEAP_SPILLOVER_BLOB_NAME)
-        {
-            super::map_persisted_ram_blob_pages(&mut uc, &mut ranges, blob).unwrap();
-            uc.mem_write(u64::from(blob.base), &blob.bytes).unwrap();
-        }
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        mapped.system_slab_owner = Some(owner);
+        mapped.system_slab_ranges =
+            vec![(super::GUEST_HEAP_ARENA_BASE, super::GUEST_HEAP_ARENA_SIZE)];
+        super::map_private_slab_pages(&mut uc, kernel, &mut mapped, owner, &native_pins, None)
+            .expect("restore canonical payload pages");
         uc.mem_map(0x10000, 0x1000, Prot::ALL).unwrap();
-        native_payload_mips_fields(&mut uc, pointer)
+        let fields = native_payload_mips_fields(
+            kernel,
+            &mut uc,
+            &RefCell::new(mapped),
+            &native_pins,
+            pointer,
+        );
+        drop(uc); // Close the native owner before its raw-pointer pin registry.
+        fields
+    }
+
+    fn native_payload_canonical_snapshot(
+        kernel: &CeKernel,
+        pointer: u32,
+    ) -> Vec<(u32, Option<Vec<u8>>)> {
+        let owner = kernel.current_process_birth_key().expect("fixture birth");
+        let first = pointer & !0xfff;
+        let last = pointer.checked_add(27).expect("WINDOWPOS range") & !0xfff;
+        let pages = if first == last {
+            vec![first]
+        } else {
+            vec![first, last]
+        };
+        pages
+            .into_iter()
+            .map(|page| {
+                let bytes = kernel.memory.private_page_pin(owner, page).map(|pin| {
+                    let mut bytes = vec![0; super::STABLE_PRIVATE_PAGE_SIZE];
+                    pin.read_bytes(0, &mut bytes).expect("read canonical page");
+                    bytes
+                });
+                (page, bytes)
+            })
+            .collect()
     }
 
     fn native_payload_msg_fault(
@@ -64963,7 +65107,7 @@ mod unicorn_tests {
 
     #[test]
     fn native_deferred_setpos_payload_is_readable_before_guest_callback_and_fresh_restore() {
-        let (mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
+        let (native_pins, mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
         kernel.threads.set_last_error(1, 0x7755);
         let pending = Rc::new(RefCell::new(Vec::new()));
         assert!(super::try_enter_set_window_pos_callout(
@@ -64984,14 +65128,16 @@ mod unicorn_tests {
         assert_eq!(pending.borrow().len(), 1);
         let pointer = uc.reg_read(RegisterMIPS::A3).unwrap() as u32;
         assert_eq!(kernel.threads.get_last_error(1), 0x7755);
-        assert_eq!(native_payload_mips_fields(&mut uc, pointer), (3, 4, 64));
-        super::sync_mapped_blobs_from_unicorn(&uc, &mut blobs).unwrap();
-        assert_eq!(native_payload_restored_fields(&blobs, pointer), (3, 4, 64));
+        assert_eq!(
+            native_payload_mips_fields(&kernel, &mut uc, &mapped, &native_pins, pointer),
+            (3, 4, 64)
+        );
+        assert_eq!(native_payload_restored_fields(&kernel, pointer), (3, 4, 64));
     }
 
     #[test]
     fn native_deferred_setpos_missing_context_fails_api_once_and_retains_authentic_message() {
-        let (mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
+        let (native_pins, mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
         let pending = Rc::new(RefCell::new(Vec::new()));
         let before_posts = kernel
             .recent_message_ops()
@@ -65069,7 +65215,7 @@ mod unicorn_tests {
                 .is_none()
         );
         assert_eq!(
-            native_payload_mips_fields(&mut uc, message.lparam),
+            native_payload_mips_fields(&kernel, &mut uc, &mapped, &native_pins, message.lparam),
             (3, 4, 64)
         );
     }
@@ -65078,7 +65224,8 @@ mod unicorn_tests {
     fn native_deferred_getmessage_none_then_mapped_resume_retains_fifo_wait_and_context() {
         for sent in [false, true] {
             for fault in ["good", "readonly_msg", "cross_readonly_msg"] {
-                let (mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
+                let (native_pins, mut kernel, mut uc, mapped, mut blobs, hwnd) =
+                    native_payload_fixture();
                 let msg_ptr = native_payload_msg_fault(&mut uc, &mut blobs, fault);
                 kernel.set_window_pos(hwnd, Some(0), 3, 4, 64, 32, 0);
                 let mut message = native_payload_message(&mut kernel, hwnd);
@@ -65156,6 +65303,10 @@ mod unicorn_tests {
                 assert_eq!(kernel.threads.get_last_error(1), 0x7755);
                 if fault != "good" {
                     let before_output = uc.mem_read_as_vec(u64::from(msg_ptr), 28).unwrap();
+                    let before_budget = kernel.memory.private_commit_used_bytes();
+                    let before_virtual_generation = kernel.memory.virtual_generation();
+                    let before_heap_generation = kernel.memory.heap_generation();
+                    let before_payload = native_payload_canonical_snapshot(&kernel, message.lparam);
                     assert!(!super::try_resume_blocked_get_message_with_active_pc(
                         &mut kernel,
                         &mut uc,
@@ -65178,6 +65329,26 @@ mod unicorn_tests {
                     assert_eq!(
                         uc.mem_read_as_vec(u64::from(msg_ptr), 28).unwrap(),
                         before_output,
+                        "{fault}"
+                    );
+                    assert_eq!(
+                        kernel.memory.private_commit_used_bytes(),
+                        before_budget,
+                        "{fault}"
+                    );
+                    assert_eq!(
+                        kernel.memory.virtual_generation(),
+                        before_virtual_generation,
+                        "{fault}"
+                    );
+                    assert_eq!(
+                        kernel.memory.heap_generation(),
+                        before_heap_generation,
+                        "{fault}"
+                    );
+                    assert_eq!(
+                        native_payload_canonical_snapshot(&kernel, message.lparam),
+                        before_payload,
                         "{fault}"
                     );
                     assert!(blocked.borrow().is_some());
@@ -65250,12 +65421,17 @@ mod unicorn_tests {
                     })
                 ));
                 assert_eq!(
-                    native_payload_mips_fields(&mut uc, message.lparam),
+                    native_payload_mips_fields(
+                        &kernel,
+                        &mut uc,
+                        &mapped,
+                        &native_pins,
+                        message.lparam,
+                    ),
                     (3, 4, 64)
                 );
-                super::sync_mapped_blobs_from_unicorn(&uc, &mut blobs).unwrap();
                 assert_eq!(
-                    native_payload_restored_fields(&blobs, message.lparam),
+                    native_payload_restored_fields(&kernel, message.lparam),
                     (3, 4, 64)
                 );
             }
@@ -65273,27 +65449,44 @@ mod unicorn_tests {
             "readonly_msg",
             "cross_readonly_msg",
         ] {
-            let (mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
+            let (native_pins, mut kernel, mut uc, mapped, mut blobs, hwnd) =
+                native_payload_fixture();
             kernel.set_window_pos(hwnd, Some(0), 3, 4, 64, 32, 0);
             let message = native_payload_message(&mut kernel, hwnd);
             if fault == "readonly" {
-                {
-                    let mut memory = unsafe {
-                        super::UnicornGuestMemory::with_heap_mapping(&mut uc, &mapped, &mut blobs)
-                    };
-                    crate::ce::coredll::CoredllGuestMemory::ensure_heap_mapped(
-                        &mut memory,
-                        message.lparam,
-                        28,
-                    )
-                    .unwrap();
-                }
+                super::prepare_native_message_pointer_payload(
+                    &mut kernel,
+                    &mut uc,
+                    &super::SealedHostWriteGuard::default(),
+                    1,
+                    &message,
+                    Some(super::UnicornHeapMapping {
+                        mapped: &mapped,
+                        mapped_blobs: &mut blobs,
+                    }),
+                )
+                .unwrap();
+                let owner = kernel.current_process_birth_key().expect("fixture birth");
+                super::map_private_slab_pages(
+                    &mut uc,
+                    &kernel,
+                    &mut mapped.borrow_mut(),
+                    owner,
+                    &native_pins,
+                    None,
+                )
+                .unwrap();
                 uc.mem_protect(u64::from(message.lparam & !0xfff), 0x1000, Prot::READ)
                     .unwrap();
             } else if fault == "missing_allocation" {
-                kernel.memory.local_free(message.lparam);
+                let owner = kernel.current_process_birth_key().expect("fixture birth");
+                kernel.memory.local_free(owner, message.lparam);
             } else if fault == "shrunk" {
-                kernel.memory.local_re_alloc(message.lparam, 16, 0).unwrap();
+                let owner = kernel.current_process_birth_key().expect("fixture birth");
+                kernel
+                    .memory
+                    .local_re_alloc(owner, message.lparam, 16, 0)
+                    .unwrap();
             }
             let msg_ptr = if fault == "bad_msg" {
                 0x22000
@@ -65315,6 +65508,10 @@ mod unicorn_tests {
             );
             let regs = super::capture_mips_gprs(&uc);
             kernel.threads.set_last_error(1, 0x7755);
+            let before_budget = kernel.memory.private_commit_used_bytes();
+            let before_virtual_generation = kernel.memory.virtual_generation();
+            let before_heap_generation = kernel.memory.heap_generation();
+            let before_payload = native_payload_canonical_snapshot(&kernel, message.lparam);
             if fault == "success" {
                 assert!(super::try_complete_current_get_message_wait(
                     &mut kernel,
@@ -65336,12 +65533,17 @@ mod unicorn_tests {
                 assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 1);
                 assert_eq!(kernel.threads.get_last_error(1), 0x7755);
                 assert_eq!(
-                    native_payload_mips_fields(&mut uc, message.lparam),
+                    native_payload_mips_fields(
+                        &kernel,
+                        &mut uc,
+                        &mapped,
+                        &native_pins,
+                        message.lparam,
+                    ),
                     (3, 4, 64)
                 );
-                super::sync_mapped_blobs_from_unicorn(&uc, &mut blobs).unwrap();
                 assert_eq!(
-                    native_payload_restored_fields(&blobs, message.lparam),
+                    native_payload_restored_fields(&kernel, message.lparam),
                     (3, 4, 64)
                 );
                 continue;
@@ -65377,6 +65579,26 @@ mod unicorn_tests {
             assert_eq!(
                 uc.mem_read_as_vec(u64::from(msg_ptr), 28).ok(),
                 before_output,
+                "{fault}"
+            );
+            assert_eq!(
+                kernel.memory.private_commit_used_bytes(),
+                before_budget,
+                "{fault}"
+            );
+            assert_eq!(
+                kernel.memory.virtual_generation(),
+                before_virtual_generation,
+                "{fault}"
+            );
+            assert_eq!(
+                kernel.memory.heap_generation(),
+                before_heap_generation,
+                "{fault}"
+            );
+            assert_eq!(
+                native_payload_canonical_snapshot(&kernel, message.lparam),
+                before_payload,
                 "{fault}"
             );
             if matches!(fault, "readonly_msg" | "cross_readonly_msg" | "bad_msg") {
@@ -65421,7 +65643,13 @@ mod unicorn_tests {
                 );
                 assert_eq!(kernel.threads.get_last_error(1), 0x7755);
                 assert_eq!(
-                    native_payload_mips_fields(&mut uc, message.lparam),
+                    native_payload_mips_fields(
+                        &kernel,
+                        &mut uc,
+                        &mapped,
+                        &native_pins,
+                        message.lparam,
+                    ),
                     (3, 4, 64)
                 );
             }
@@ -65431,7 +65659,8 @@ mod unicorn_tests {
     #[test]
     fn native_deferred_sent_identity_rejects_expired_head_even_with_identical_replacement() {
         for identical in [false, true] {
-            let (mut kernel, mut uc, mapped, mut blobs, hwnd) = native_payload_fixture();
+            let (native_pins, mut kernel, mut uc, mapped, mut blobs, hwnd) =
+                native_payload_fixture();
             kernel.set_window_pos(hwnd, Some(0), 3, 4, 64, 32, 0);
             let message = native_payload_message(&mut kernel, hwnd);
             let _ = kernel.take_ready_message_w_filtered(1, Some(hwnd), message.msg, message.msg);
@@ -65517,7 +65746,7 @@ mod unicorn_tests {
             );
             assert_eq!(kernel.gwe.active_sent_message_id(1), Some(next_id));
             assert_eq!(
-                native_payload_mips_fields(&mut uc, ready.lparam),
+                native_payload_mips_fields(&kernel, &mut uc, &mapped, &native_pins, ready.lparam),
                 (3, 4, 64)
             );
         }
@@ -65525,7 +65754,7 @@ mod unicorn_tests {
 
     #[test]
     fn native_deferred_unknown_guest_pointer_needs_no_mapping_and_is_untouched() {
-        let (mut kernel, mut uc, _, _, hwnd) = native_payload_fixture();
+        let (_native_pins, mut kernel, mut uc, _, _, hwnd) = native_payload_fixture();
         let message = crate::ce::gwe::Message::new(
             hwnd,
             crate::ce::gwe::WM_WINDOWPOSCHANGED,
@@ -65553,21 +65782,11 @@ mod unicorn_tests {
 
     #[test]
     fn set_window_pos_callout_sends_windowposchanged_synchronously() {
-        let config = RuntimeConfig::load_default().unwrap();
-        let mut kernel = CeKernel::boot(config);
-        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        uc.mem_map(u64::from(super::GUEST_HEAP_ARENA_BASE), 0x1000, Prot::ALL)
-            .unwrap();
-        let mapped_test = RefCell::new(super::KernelMemoryMappings::new(&[]));
-        let mut blobs_test = vec![super::MappedBlob {
-            name: "ram:heap".to_owned(),
-            base: super::GUEST_HEAP_ARENA_BASE,
-            bytes: vec![0; 0x1000].into(),
-        }];
+        let (_native_pins, mut kernel, mut uc, mapped_test, mut blobs_test, hwnd) =
+            native_payload_fixture();
         let thread_id = 1;
         let wndproc = 0x0001_3570;
         let return_pc = 0x0040_1000;
-        let hwnd = kernel.create_window_ex_w(thread_id, "SET_WINDOW_POS", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
             .unwrap();
@@ -68692,6 +68911,11 @@ mod unicorn_tests {
             Some(parent),
         )?;
         assert_eq!(parent_ranges.len(), 2);
+        let parent_ptr = kernel
+            .memory
+            .heap_alloc(parent, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, 4)
+            .expect("parent heap allocation");
+        assert_eq!(parent_ptr, super::GUEST_HEAP_ARENA_BASE);
         let growth = kernel
             .memory
             .prepare_fixed_heap_growth(parent, super::GUEST_HEAP_ARENA_BASE + 4)
@@ -68712,6 +68936,14 @@ mod unicorn_tests {
             Some(child),
         )?;
         assert_eq!(child_ranges, parent_ranges);
+        let child_ptr = kernel
+            .memory
+            .heap_alloc(child, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, 4)
+            .expect("child heap allocation");
+        assert_eq!(
+            child_ptr, parent_ptr,
+            "independent births reuse the same VA"
+        );
         let growth = kernel
             .memory
             .prepare_fixed_heap_growth(child, super::GUEST_HEAP_ARENA_BASE + 4)
@@ -68936,8 +69168,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn invalid_stack_leaves_fixed_heap_unreserved_and_spillover_rejects_all_vm_overlap()
-    -> crate::Result<()> {
+    fn invalid_stack_leaves_fixed_heap_unreserved() -> crate::Result<()> {
         let mut cpu = super::UnicornMips::new()?;
         cpu.map_region(
             super::GUEST_HEAP_ARENA_BASE,
@@ -68958,44 +69189,11 @@ mod unicorn_tests {
             .is_err()
         );
         assert!(kernel.memory.fixed_heap_reservation(owner).is_none());
-
-        let spill = super::GUEST_HEAP_ARENA_BASE + super::GUEST_HEAP_ARENA_SIZE;
-        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let mut mapped = super::KernelMemoryMappings::new(&[]);
-        mapped.system_slab_ranges.push((spill + 0x1000, 0x1000));
-        let mut blobs = Vec::new();
-        assert!(
-            super::map_heap_spillover_through(
-                &mut uc,
-                &mut mapped,
-                &mut blobs,
-                spill + 0x2000,
-                &[],
-            )
-            .is_err()
-        );
-        assert!(blobs.is_empty());
-        assert_eq!(mapped.heap_spill_cursor, spill);
-        mapped.system_slab_ranges.clear();
-        assert!(
-            super::map_heap_spillover_through(
-                &mut uc,
-                &mut mapped,
-                &mut blobs,
-                spill + 0x2000,
-                &[(spill + 0x1000, 0x1000)],
-            )
-            .is_err()
-        );
-        assert!(blobs.is_empty());
-        assert_eq!(mapped.heap_spill_cursor, spill);
-        assert_eq!(super::native_page_perms(&uc, spill)?, None);
         Ok(())
     }
 
     #[test]
-    fn queued_windowpos_payload_uses_canonical_heap_and_fallback_rejects_fixed_stack()
-    -> crate::Result<()> {
+    fn queued_windowpos_payload_uses_canonical_heap_without_copied_blob() -> crate::Result<()> {
         const STACK: u32 = 0x7000_0000;
         let mut kernel = phase1_kernel("fixed-queued-payload.exe")?;
         let hwnd = kernel.create_window_ex_w(1, "FIXED_PAYLOAD", "", None, 0, 0, 0);
@@ -69032,17 +69230,6 @@ mod unicorn_tests {
             .expect("queued canonical payload");
         assert_eq!(actual, expected);
 
-        let mut fallback_blobs = Vec::new();
-        assert!(
-            super::write_persisted_message_payload(
-                &cpu.memory,
-                &mut fallback_blobs,
-                STACK + 0xff0,
-                &[0xa5; 32],
-            )
-            .is_err()
-        );
-        assert!(fallback_blobs.is_empty());
         Ok(())
     }
 
@@ -69423,6 +69610,215 @@ mod unicorn_tests {
         drop(fresh_guards);
         drop(fresh_ledger);
         drop(fresh_pins);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_serial_nmea_completion_under_other_birth_preserves_rx_and_stack_then_retries()
+    -> crate::Result<()> {
+        use crate::ce::object::KernelObject;
+
+        const STACK: u32 = 0x7000_0000;
+        const NMEA: &[u8] = b"$GPRMC,123519,A*00\r\n";
+        let buffer = STACK + 0x0ff8;
+        let transferred_ptr = STACK + 0x1018;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.map_region(
+            super::GUEST_HEAP_ARENA_BASE,
+            super::GUEST_HEAP_ARENA_SIZE,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-heap-arena",
+        )?;
+        cpu.map_region(
+            STACK,
+            0x3000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        let mut kernel = phase1_kernel("stale-serial-birth.exe")?;
+        let original = kernel.current_process_birth_key().expect("original birth");
+        let original_ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(original),
+        )?;
+        let serial = kernel.create_file_w(
+            "COM7:",
+            crate::ce::file::GENERIC_READ | crate::ce::file::GENERIC_WRITE,
+            crate::ce::file::CREATE_ALWAYS,
+        )?;
+        let Ok(KernelObject::Device(device)) = kernel.handles.get_mut(serial) else {
+            panic!("serial device handle");
+        };
+        device.enqueue_rx(NMEA);
+        let blocked = super::BlockedWaitThread {
+            wait_id: 11,
+            thread_id: 1,
+            thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            wait_handles: Vec::new(),
+            kind: super::BlockedWaitKind::SerialRead {
+                handle: serial,
+                buffer,
+                requested: NMEA.len() as u32,
+                transferred_ptr,
+                owner_birth: Some(original),
+            },
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0x0001_0000,
+        };
+
+        kernel.handles.create_process(2);
+        let other = kernel.handles.process_birth_key(2).expect("other birth");
+        assert_ne!(original, other);
+        let other_ranges = super::reserve_fixed_system_slabs(
+            &cpu.memory,
+            &cpu.mapped_blobs,
+            &mut kernel,
+            Some(other),
+        )?;
+        assert_eq!(other_ranges, original_ranges);
+        let prepared = kernel
+            .memory
+            .prepare_fixed_private_span(other, buffer, NMEA.len() as u32)
+            .expect("other stack span");
+        kernel.memory.commit_prepared_private_vm(prepared).unwrap();
+        let other_first = kernel.memory.private_page_pin(other, STACK).unwrap();
+        let other_second = kernel
+            .memory
+            .private_page_pin(other, STACK + 0x1000)
+            .unwrap();
+        other_first.write_bytes(0xff8, &[0xa5; 8]).unwrap();
+        other_second
+            .write_bytes(0, &[0xa5; NMEA.len() - 8])
+            .unwrap();
+        other_second.write_bytes(0x18, &[0xcc; 4]).unwrap();
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 2,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let other_pins = super::NativeMappingPins::default();
+        let other_guards = RefCell::new(BTreeMap::new());
+        let other_terminal = RefCell::new(None);
+        let mut other_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let other_mapped = RefCell::new(super::KernelMemoryMappings::new(&[]));
+        other_mapped.borrow_mut().system_slab_owner = Some(other);
+        other_mapped.borrow_mut().system_slab_ranges = other_ranges;
+        super::map_private_slab_pages(
+            &mut other_uc,
+            &kernel,
+            &mut other_mapped.borrow_mut(),
+            other,
+            &other_pins,
+            Some(&other_guards),
+        )?;
+        let budget = kernel.memory.private_commit_available_bytes();
+        let rx_len = |kernel: &CeKernel| {
+            kernel
+                .handles
+                .get(serial)
+                .ok()
+                .and_then(|object| match object {
+                    KernelObject::Device(device) => Some(device.rx_len()),
+                    _ => None,
+                })
+        };
+        assert_eq!(rx_len(&kernel), Some(NMEA.len()));
+        assert_eq!(
+            super::complete_blocked_serial_read(
+                &blocked,
+                &mut kernel,
+                &mut other_uc,
+                &super::SealedHostWriteGuard::default(),
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &other_mapped,
+                    owner: other,
+                    native_pins: &other_pins,
+                    active_guards: &other_guards,
+                    terminal_error: &other_terminal,
+                }),
+            ),
+            0
+        );
+        assert_eq!(
+            rx_len(&kernel),
+            Some(NMEA.len()),
+            "stale read cannot consume RX"
+        );
+        assert_eq!(kernel.memory.private_commit_available_bytes(), budget);
+        assert_eq!(
+            other_uc
+                .mem_read_as_vec(u64::from(buffer), NMEA.len())
+                .unwrap(),
+            vec![0xa5; NMEA.len()]
+        );
+        assert_eq!(
+            super::read_unicorn_u32(&other_uc, transferred_ptr),
+            Some(0xcccc_cccc)
+        );
+        assert!(kernel.memory.private_page_pin(original, STACK).is_none());
+        drop(other_uc);
+        drop(other_guards);
+        drop(other_mapped);
+        drop(other_pins);
+
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: original.process_id(),
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let original_pins = super::NativeMappingPins::default();
+        let original_guards = RefCell::new(BTreeMap::new());
+        let original_terminal = RefCell::new(None);
+        let mut original_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let original_mapped = RefCell::new(super::KernelMemoryMappings::new(&[]));
+        original_mapped.borrow_mut().system_slab_owner = Some(original);
+        original_mapped.borrow_mut().system_slab_ranges = original_ranges;
+        assert_eq!(
+            super::complete_blocked_serial_read(
+                &blocked,
+                &mut kernel,
+                &mut original_uc,
+                &super::SealedHostWriteGuard::default(),
+                Some(super::UnicornPrivateVmMapping {
+                    mapped: &original_mapped,
+                    owner: original,
+                    native_pins: &original_pins,
+                    active_guards: &original_guards,
+                    terminal_error: &original_terminal,
+                }),
+            ),
+            1
+        );
+        assert!(original_terminal.borrow().is_none());
+        assert_eq!(rx_len(&kernel), Some(0));
+        assert_eq!(
+            kernel.memory.private_commit_available_bytes(),
+            budget - 2 * 0x1000
+        );
+        assert_eq!(
+            original_uc
+                .mem_read_as_vec(u64::from(buffer), NMEA.len())
+                .unwrap(),
+            NMEA
+        );
+        assert_eq!(
+            super::read_unicorn_u32(&original_uc, transferred_ptr),
+            Some(NMEA.len() as u32)
+        );
+        let mut other_bytes = [0; 8];
+        other_first.read_bytes(0xff8, &mut other_bytes).unwrap();
+        assert_eq!(other_bytes, [0xa5; 8]);
+        let mut other_count = [0; 4];
+        other_second.read_bytes(0x18, &mut other_count).unwrap();
+        assert_eq!(other_count, [0xcc; 4]);
+        drop(original_uc);
+        drop(original_guards);
+        drop(original_mapped);
+        drop(original_pins);
         Ok(())
     }
 
