@@ -332,10 +332,12 @@ pub struct CeKernel {
     process_module_base: u32,
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
-    process_name_guest_ptr: u32,
-    module_heap_info_guest_ptr: u32,
+    process_name_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
+    module_heap_info_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
+    typed_payload_recipients: BTreeMap<(ProcessBirthKey, u32), u32>,
+    delivered_typed_payload_messages: BTreeMap<(ProcessBirthKey, u32, u32), Message>,
     process_command_line: String,
-    command_line_guest_ptr: u32,
+    command_line_guest_ptrs: BTreeMap<ProcessBirthKey, u32>,
     process_current_directory: Option<String>,
     process_stdio_paths: BTreeMap<(u32, u32), String>,
     process_show_cmd: u32,
@@ -1198,10 +1200,12 @@ impl CeKernel {
             process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
-            process_name_guest_ptr: 0,
-            module_heap_info_guest_ptr: 0,
+            process_name_guest_ptrs: BTreeMap::new(),
+            module_heap_info_guest_ptrs: BTreeMap::new(),
+            typed_payload_recipients: BTreeMap::new(),
+            delivered_typed_payload_messages: BTreeMap::new(),
             process_command_line: String::new(),
-            command_line_guest_ptr: 0,
+            command_line_guest_ptrs: BTreeMap::new(),
             process_current_directory: None,
             process_stdio_paths: BTreeMap::new(),
             process_show_cmd: SW_SHOWNORMAL,
@@ -2755,27 +2759,30 @@ impl CeKernel {
         let path = path.into();
         self.files.set_root_relative_guest_path(&path);
         self.process_module_path = path;
-        self.process_name_guest_ptr = 0;
+        // The text is still global process context. Loader handoff changes it
+        // before switching the current-process selector, so invalidate all
+        // birth-qualified pointer caches rather than guessing its owner.
+        self.process_name_guest_ptrs.clear();
     }
 
     pub fn process_module_path(&self) -> &str {
         &self.process_module_path
     }
 
-    pub fn process_name_guest_ptr(&mut self) -> u32 {
-        self.process_name_guest_ptr
+    pub fn process_name_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
+        self.process_name_guest_ptrs.get(&owner).copied()
     }
 
-    pub fn set_process_name_guest_ptr(&mut self, ptr: u32) {
-        self.process_name_guest_ptr = ptr;
+    pub fn set_process_name_guest_ptr_for(&mut self, owner: ProcessBirthKey, ptr: u32) {
+        self.process_name_guest_ptrs.insert(owner, ptr);
     }
 
-    pub fn module_heap_info_guest_ptr(&self) -> u32 {
-        self.module_heap_info_guest_ptr
+    pub fn module_heap_info_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
+        self.module_heap_info_guest_ptrs.get(&owner).copied()
     }
 
-    pub fn set_module_heap_info_guest_ptr(&mut self, ptr: u32) {
-        self.module_heap_info_guest_ptr = ptr;
+    pub fn set_module_heap_info_guest_ptr_for(&mut self, owner: ProcessBirthKey, ptr: u32) {
+        self.module_heap_info_guest_ptrs.insert(owner, ptr);
     }
 
     pub fn set_process_module_host_path(&mut self, path: impl Into<PathBuf>) {
@@ -2788,7 +2795,8 @@ impl CeKernel {
 
     pub fn set_process_command_line(&mut self, command_line: impl Into<String>) {
         self.process_command_line = command_line.into();
-        self.command_line_guest_ptr = 0; // invalidate cached guest pointer
+        // The loader changes this text before/after selector handoff as well.
+        self.command_line_guest_ptrs.clear();
     }
 
     pub fn process_command_line(&self) -> &str {
@@ -2798,12 +2806,12 @@ impl CeKernel {
     /// Return (or lazily allocate) the guest-side command-line wide-string pointer.
     /// Allocates a LMEM block just large enough to hold the null-terminated UTF-16
     /// command line on first call.  Returns 0 only when the memory system is full.
-    pub fn command_line_guest_ptr(&mut self) -> u32 {
-        self.command_line_guest_ptr
+    pub fn command_line_guest_ptr_for(&self, owner: ProcessBirthKey) -> Option<u32> {
+        self.command_line_guest_ptrs.get(&owner).copied()
     }
 
-    pub fn set_command_line_guest_ptr(&mut self, ptr: u32) {
-        self.command_line_guest_ptr = ptr;
+    pub fn set_command_line_guest_ptr_for(&mut self, owner: ProcessBirthKey, ptr: u32) {
+        self.command_line_guest_ptrs.insert(owner, ptr);
     }
 
     pub fn set_process_current_directory(&mut self, directory: Option<String>) {
@@ -3099,6 +3107,11 @@ impl CeKernel {
         }
         if let Some(owner) = exiting_birth {
             self.release_message_pointer_payloads_for_owner(owner);
+            self.delivered_typed_payload_messages
+                .retain(|(birth, _, _), _| *birth != owner);
+            self.module_heap_info_guest_ptrs.remove(&owner);
+            self.process_name_guest_ptrs.remove(&owner);
+            self.command_line_guest_ptrs.remove(&owner);
         }
         if let Some(aliases) = self
             .handles
@@ -3168,6 +3181,7 @@ impl CeKernel {
         }
         let hwnds = self.process_window_targets(process_id, thread_id);
         for hwnd in &hwnds {
+            let targets = self.gwe.window_and_descendants(*hwnd).unwrap_or_default();
             self.record_window_lifecycle_trace(
                 "destroy_window_begin",
                 thread_id,
@@ -3177,6 +3191,7 @@ impl CeKernel {
             );
             let _ = self.gwe.destroy_window(*hwnd, self.timers.tick_count());
             self.release_discarded_message_pointer_payloads();
+            self.release_message_pointer_payloads_for_windows(&targets);
             self.record_window_lifecycle_trace(
                 "destroy_window_end",
                 thread_id,
@@ -8992,6 +9007,7 @@ impl CeKernel {
         let destroyed = self.gwe.destroy_window(hwnd, self.timers.tick_count());
         if destroyed {
             self.release_discarded_message_pointer_payloads();
+            self.release_message_pointer_payloads_for_windows(&targets);
             self.shell.remove_windows_state(&targets);
             self.timers.remove_window_timers(&targets);
             for send_id in doomed_send_ids {
@@ -9200,6 +9216,50 @@ impl CeKernel {
             .flatten()
     }
 
+    pub fn record_delivered_typed_payload_message(
+        &mut self,
+        owner: ProcessBirthKey,
+        thread_id: u32,
+        msg_ptr: u32,
+        message: &Message,
+    ) {
+        let key = (owner, thread_id, msg_ptr);
+        if message.typed_payload_owner == Some(owner)
+            && self.message_pointer_payload_for_message(message).is_some()
+        {
+            self.delivered_typed_payload_messages
+                .insert(key, message.clone());
+        } else {
+            // The same guest MSG slot may be reused for an ordinary message.
+            self.delivered_typed_payload_messages.remove(&key);
+        }
+    }
+
+    pub fn reattach_delivered_typed_payload_message(
+        &mut self,
+        owner: ProcessBirthKey,
+        thread_id: u32,
+        msg_ptr: u32,
+        message: &mut Message,
+    ) {
+        message.typed_payload_owner = None;
+        let Some(delivered) = self
+            .delivered_typed_payload_messages
+            .remove(&(owner, thread_id, msg_ptr))
+        else {
+            return;
+        };
+        if delivered.typed_payload_owner == Some(owner)
+            && delivered.hwnd == message.hwnd
+            && delivered.msg == message.msg
+            && delivered.wparam == message.wparam
+            && delivered.lparam == message.lparam
+            && self.message_pointer_payload_for_message(&delivered).is_some()
+        {
+            message.typed_payload_owner = Some(owner);
+        }
+    }
+
     pub fn message_pointer_payload(
         &self,
         owner: ProcessBirthKey,
@@ -9214,6 +9274,9 @@ impl CeKernel {
         ptr: u32,
     ) -> Option<MessagePointerPayload> {
         let payload = self.gwe.take_message_pointer_payload(owner, ptr)?;
+        self.typed_payload_recipients.remove(&(owner, ptr));
+        self.delivered_typed_payload_messages
+            .retain(|(birth, _, _), message| *birth != owner || message.lparam != ptr);
         let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
         Some(payload)
     }
@@ -9228,6 +9291,21 @@ impl CeKernel {
 
     fn release_message_pointer_payloads_for_owner(&mut self, owner: ProcessBirthKey) {
         for ptr in self.gwe.message_pointer_payload_addresses_for_owner(owner) {
+            let _ = self.release_message_pointer_payload(owner, ptr);
+        }
+    }
+
+    fn release_message_pointer_payloads_for_windows(&mut self, targets: &[u32]) {
+        // GetMessage removes a message from GWE's queue before the guest can
+        // Dispatch it. The registry must remember its original recipient so
+        // destroying that window also retires these already-delivered values.
+        let doomed: Vec<_> = self
+            .typed_payload_recipients
+            .iter()
+            .filter(|(_, hwnd)| targets.contains(hwnd))
+            .map(|(key, _)| *key)
+            .collect();
+        for (owner, ptr) in doomed {
             let _ = self.release_message_pointer_payload(owner, ptr);
         }
     }
@@ -9997,6 +10075,7 @@ impl CeKernel {
             .gwe
             .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::WindowPos(payload))
         {
+            self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
             let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
@@ -10026,6 +10105,7 @@ impl CeKernel {
             .gwe
             .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::ShellNotification(payload))
         {
+            self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
             let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
@@ -10050,6 +10130,7 @@ impl CeKernel {
             .gwe
             .insert_message_pointer_payload(owner, ptr, MessagePointerPayload::NotifyIcon(payload))
         {
+            self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
             let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
@@ -10310,6 +10391,7 @@ impl CeKernel {
             ptr,
             MessagePointerPayload::FileChangeNotification(payload),
         ) {
+            self.typed_payload_recipients.insert((owner, ptr), hwnd);
             Some((owner, ptr))
         } else {
             let _ = self.memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, ptr);
@@ -11789,5 +11871,141 @@ mod tests {
             Some(0x1234)
         );
         Ok(())
+    }
+
+    #[test]
+    fn typed_message_payloads_use_recipient_birth_and_discard_exact_window_owner() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner_a = kernel.current_process_birth_key().expect("boot birth");
+        let hwnd_a = kernel.create_window_ex_w(11, "PAYLOAD_A", "", None, 0, WS_VISIBLE, 0);
+        let launch_b = kernel.queue_process_launch(None, None);
+        let owner_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("child birth");
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel.create_window_ex_w(22, "PAYLOAD_B", "", None, 0, WS_VISIBLE, 0);
+        kernel.set_current_process_id(1);
+
+        let position = |hwnd| WindowPos {
+            hwnd,
+            insert_after: HWND_TOP,
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+            flags: 0,
+        };
+        // The mutable current selector is A, but the first producer targets B.
+        let (produced_b, ptr_b) = kernel
+            .queue_window_pos_payload(hwnd_b, position(hwnd_b))
+            .expect("B payload");
+        let (produced_a, ptr_a) = kernel
+            .queue_window_pos_payload(hwnd_a, position(hwnd_a))
+            .expect("A payload");
+        assert_eq!((produced_a, produced_b), (owner_a, owner_b));
+        assert_eq!(ptr_a, ptr_b, "independent births may reuse one guest VA");
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_a,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_a,
+            owner_a,
+        ));
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_b,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_b,
+            owner_b,
+        ));
+        let message_a = kernel
+            .take_ready_visible_message_w_filtered(
+                11,
+                Some(hwnd_a),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .expect("A queued message");
+        let message_b = kernel
+            .peek_ready_visible_message_w_filtered(
+                22,
+                Some(hwnd_b),
+                WM_WINDOWPOSCHANGED,
+                WM_WINDOWPOSCHANGED,
+            )
+            .expect("B queued message");
+        assert_eq!(message_a.typed_payload_owner, Some(owner_a));
+        assert_eq!(message_b.typed_payload_owner, Some(owner_b));
+        assert_eq!(
+            kernel.message_pointer_payload_for_message(&message_a),
+            Some(MessagePointerPayload::WindowPos(position(hwnd_a)))
+        );
+        assert_eq!(
+            kernel.message_pointer_payload_for_message(&message_b),
+            Some(MessagePointerPayload::WindowPos(position(hwnd_b)))
+        );
+        assert!(
+            kernel
+                .message_pointer_payload_for_message(&Message::new(
+                    hwnd_a,
+                    WM_WINDOWPOSCHANGED,
+                    0,
+                    ptr_a,
+                    0,
+                ))
+                .is_none(),
+            "an unmarked guest pointer must not inherit host provenance"
+        );
+        assert_eq!(kernel.dispatch_message_w_for_thread(11, message_a), 0);
+        assert!(kernel.gwe.message_pointer_payload(owner_a, ptr_a).is_none());
+        assert!(kernel.gwe.message_pointer_payload(owner_b, ptr_b).is_some());
+        assert!(kernel.destroy_window(hwnd_b));
+        assert!(kernel.gwe.message_pointer_payload(owner_b, ptr_b).is_none());
+        assert!(kernel.memory.heap_size(owner_b, PROCESS_HEAP_HANDLE, 0, ptr_b).is_none());
+    }
+
+    #[test]
+    fn process_exit_retires_only_its_typed_payloads_and_guest_pointer_caches() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner_a = kernel.current_process_birth_key().expect("boot birth");
+        let hwnd_a = kernel.create_window_ex_w(1, "SURVIVING_A", "", None, 0, 0, 0);
+        let launch_b = kernel.queue_process_launch(None, None);
+        let owner_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("child birth");
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel.create_window_ex_w(launch_b.thread_id, "EXITING_B", "", None, 0, 0, 0);
+        kernel.set_current_process_id(1);
+        let position = |hwnd| WindowPos {
+            hwnd,
+            insert_after: HWND_TOP,
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            flags: 0,
+        };
+        let (_, ptr_a) = kernel.queue_window_pos_payload(hwnd_a, position(hwnd_a)).unwrap();
+        let (_, ptr_b) = kernel.queue_window_pos_payload(hwnd_b, position(hwnd_b)).unwrap();
+        assert_eq!(ptr_a, ptr_b);
+        assert!(kernel.post_window_typed_payload_message(hwnd_a, WM_WINDOWPOSCHANGED, 0, ptr_a, owner_a));
+        assert!(kernel.post_window_typed_payload_message(hwnd_b, WM_WINDOWPOSCHANGED, 0, ptr_b, owner_b));
+        kernel.set_process_name_guest_ptr_for(owner_a, 0x1111);
+        kernel.set_process_name_guest_ptr_for(owner_b, 0x2222);
+        kernel.set_command_line_guest_ptr_for(owner_a, 0x3333);
+        kernel.set_command_line_guest_ptr_for(owner_b, 0x4444);
+        kernel.set_module_heap_info_guest_ptr_for(owner_a, 0x5555);
+        kernel.set_module_heap_info_guest_ptr_for(owner_b, 0x6666);
+        kernel.mark_process_launch_exited(&launch_b, 0);
+        assert!(kernel.gwe.message_pointer_payload(owner_b, ptr_b).is_none());
+        assert!(kernel.gwe.message_pointer_payload(owner_a, ptr_a).is_some());
+        assert_eq!(kernel.process_name_guest_ptr_for(owner_a), Some(0x1111));
+        assert_eq!(kernel.process_name_guest_ptr_for(owner_b), None);
+        assert_eq!(kernel.command_line_guest_ptr_for(owner_a), Some(0x3333));
+        assert_eq!(kernel.command_line_guest_ptr_for(owner_b), None);
+        assert_eq!(kernel.module_heap_info_guest_ptr_for(owner_a), Some(0x5555));
+        assert_eq!(kernel.module_heap_info_guest_ptr_for(owner_b), None);
     }
 }
