@@ -119,6 +119,18 @@ impl NativeMappingPins {
         pins.private_pages.remove(&identity).is_some()
     }
 
+    pub(crate) fn has_private(
+        &self,
+        identity: PrivatePageIdentity,
+        expected_host_address: usize,
+    ) -> bool {
+        self.0
+            .borrow()
+            .private_pages
+            .get(&identity)
+            .is_some_and(|pin| pin.host_address == expected_host_address)
+    }
+
     /// Retain one exact sealed image run before its pointer enters Unicorn.
     /// Reused owners validate this same pointer and extent against their
     /// mapping ledger; a pin is retired only after a checked native unmap.

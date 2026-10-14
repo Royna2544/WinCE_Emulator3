@@ -1356,6 +1356,31 @@ fn checked_host_write<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn validate_native_guest_writable_u32<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    guard: &SealedHostWriteGuard,
+    addr: u32,
+) -> Result<()> {
+    let start = u64::from(addr);
+    guard.check_write(start, 4)?;
+    let end = start + 4;
+    let regions = uc
+        .mem_regions()
+        .map_err(|err| Error::Backend(format!("preflight CreateThread output pointer: {err:?}")))?;
+    let write = unicorn_engine::Prot::WRITE.0 as u32;
+    for byte in start..end {
+        if !regions.iter().any(|region| {
+            byte >= region.begin && byte <= region.end && region.perms & write == write
+        }) {
+            return Err(Error::InvalidArgument(format!(
+                "CreateThread output 0x{addr:08x} is not writable guest memory"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn mapped_blob_is_static_code(blob: &MappedBlob) -> bool {
     blob.name.starts_with("image:")
         || blob.name.starts_with("dll:")
@@ -4886,9 +4911,10 @@ impl UnicornMips {
         if thread_id == 0 || thread_id == MAIN_GUEST_THREAD_ID {
             return false;
         }
-        let Some(thread_handle) = kernel.guest_thread_handle_by_id(thread_id) else {
+        if kernel.handles.thread_birth_key_by_id(thread_id).is_none() {
             return false;
-        };
+        }
+        let thread_handle = kernel.guest_thread_handle_by_id(thread_id).unwrap_or(0);
 
         let exit_code = saved.regs.regs[2];
         self.remove_stale_blocked_waits_for_thread(kernel, thread_id);
@@ -4901,7 +4927,7 @@ impl UnicornMips {
         self.running_guest_thread
             .take_if(|(running_thread_id, _)| *running_thread_id == thread_id);
         self.guest_thread_stack_slots.remove(&thread_id);
-        let _ = kernel.mark_guest_thread_exited(thread_handle, exit_code);
+        let _ = kernel.mark_guest_thread_exited_by_id(thread_id, exit_code);
         self.saved_context = None;
         self.current_thread_id = self.initial_thread_id;
 
@@ -8593,9 +8619,14 @@ impl UnicornMips {
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
                     if no_running_thread
                         && active_thread_id != MAIN_GUEST_THREAD_ID
-                        && let Some(thread_handle) =
-                            unsafe { &*kernel_ptr }.guest_thread_handle_by_id(active_thread_id)
+                        && unsafe { &*kernel_ptr }
+                            .handles
+                            .thread_birth_key_by_id(active_thread_id)
+                            .is_some()
                     {
+                        let thread_handle = unsafe { &*kernel_ptr }
+                            .guest_thread_handle_by_id(active_thread_id)
+                            .unwrap_or(0);
                         let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                         remove_stale_blocked_waits_for_thread(
                             unsafe { &mut *kernel_ptr },
@@ -8618,7 +8649,7 @@ impl UnicornMips {
                             active_thread_id,
                         );
                         unsafe { &mut *kernel_ptr }
-                            .mark_guest_thread_exited(thread_handle, exit_code);
+                            .mark_guest_thread_exited_by_id(active_thread_id, exit_code);
                         release_guest_thread_stack_slot(
                             &guest_thread_stack_slots_hook,
                             active_thread_id,
@@ -9165,7 +9196,7 @@ impl UnicornMips {
                         active_thread_id,
                     ) {
                         unsafe { &mut *kernel_ptr }
-                            .mark_guest_thread_exited(callout.thread_handle, exit_code);
+                            .mark_guest_thread_exited_by_id(callout.worker_thread_id, exit_code);
                         release_guest_thread_stack_slot(
                             &guest_thread_stack_slots_hook,
                             callout.worker_thread_id,
@@ -9231,7 +9262,8 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    unsafe { &mut *kernel_ptr }.mark_guest_thread_exited(thread_handle, exit_code);
+                    unsafe { &mut *kernel_ptr }
+                        .mark_guest_thread_exited_by_id(worker_thread_id, exit_code);
                     release_guest_thread_stack_slot(
                         &guest_thread_stack_slots_hook,
                         worker_thread_id,
@@ -15058,6 +15090,7 @@ fn map_private_slab_pages<D>(
 fn unmap_private_slab_page_checked<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     mapped: &KernelMemoryMappings,
+    native_pins: &NativeMappingPins,
     page: u32,
 ) -> Result<()> {
     let before = uc
@@ -15071,22 +15104,48 @@ fn unmap_private_slab_page_checked<D>(
                 "private unmap page 0x{page:08x} has no full native region"
             ))
         })?;
-    let target = mapped.private_pages.get(&page).ok_or_else(|| {
-        Error::Backend(format!(
-            "private unmap page 0x{page:08x} has no native owner ledger"
-        ))
-    })?;
-    if region.perms != target.perms {
+    let region_end = region
+        .end
+        .checked_add(1)
+        .ok_or_else(|| Error::Backend(format!("private unmap 0x{page:08x} region wraps")))?;
+    if region.begin % STABLE_PRIVATE_PAGE_SIZE as u64 != 0
+        || region_end % STABLE_PRIVATE_PAGE_SIZE as u64 != 0
+        || region_end > u64::from(u32::MAX) + 1
+    {
         return Err(Error::Backend(format!(
-            "private unmap page 0x{page:08x} differs from native owner permissions"
+            "private unmap 0x{page:08x} has unaligned or out-of-range native extent"
         )));
     }
-    let siblings = mapped
-        .private_pages
-        .range((region.begin as u32)..=(region.end.min(u64::from(u32::MAX)) as u32))
-        .filter(|(other, _)| **other != page)
-        .map(|(other, record)| (*other, record.perms))
-        .collect::<Vec<_>>();
+    let mut covered = Vec::new();
+    let mut probe = region.begin;
+    let mut first_record: Option<NativePrivatePageRecord> = None;
+    while probe < region_end {
+        let guest_page = probe as u32;
+        let record = *mapped.private_pages.get(&guest_page).ok_or_else(|| {
+            Error::Backend(format!(
+                "private unmap 0x{page:08x} has native page 0x{guest_page:08x} without ledger"
+            ))
+        })?;
+        let first = *first_record.get_or_insert(record);
+        let host_offset = usize::try_from(probe - region.begin).map_err(|_| {
+            Error::Backend(format!("private unmap 0x{page:08x} host offset overflow"))
+        })?;
+        if record.perms != region.perms
+            || record.identity.page_base() != guest_page
+            || record.host_address % STABLE_PRIVATE_PAGE_SIZE != 0
+            || record.identity.owner() != first.identity.owner()
+            || record.identity.allocation_base() != first.identity.allocation_base()
+            || record.identity.allocation_incarnation() != first.identity.allocation_incarnation()
+            || first.host_address.checked_add(host_offset) != Some(record.host_address)
+            || !native_pins.has_private(record.identity, record.host_address)
+        {
+            return Err(Error::Backend(format!(
+                "private unmap 0x{page:08x} native run page 0x{guest_page:08x} lacks exact ledger/pin coverage"
+            )));
+        }
+        covered.push((guest_page, record.perms));
+        probe += STABLE_PRIVATE_PAGE_SIZE as u64;
+    }
     uc.mem_unmap(u64::from(page), STABLE_PRIVATE_PAGE_SIZE as u64)
         .map_err(|err| Error::Backend(format!("unmap private slab page 0x{page:08x}: {err:?}")))?;
     let after = uc.mem_regions().map_err(|err| {
@@ -15113,9 +15172,9 @@ fn unmap_private_slab_page_checked<D>(
         }
     };
     if !covers(page, None)
-        || siblings
+        || covered
             .iter()
-            .any(|(sibling, perms)| !covers(*sibling, Some(*perms)))
+            .any(|(sibling, perms)| *sibling != page && !covers(*sibling, Some(*perms)))
     {
         return Err(Error::Backend(format!(
             "private unmap 0x{page:08x} changed surviving native run; retain all affected pins"
@@ -15147,7 +15206,7 @@ fn reclaim_stale_private_slab_pages<D>(
         }) {
             continue;
         }
-        unmap_private_slab_page_checked(uc, mapped, page)?;
+        unmap_private_slab_page_checked(uc, mapped, native_pins, page)?;
         if !native_pins.release_private_after_unmap(recorded.identity, recorded.host_address) {
             return Err(Error::Backend(format!(
                 "checked unmap of private slab 0x{page:08x} has no matching native pin"
@@ -32374,6 +32433,38 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn saved_thread_exit_stub_retires_worker_without_a_public_alias() -> crate::error::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut scheduler = super::UnicornMips::new()?;
+        let (handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("worker birth");
+        kernel.close_handle(handle)?;
+        assert!(kernel.handles.contains_thread_birth(birth));
+
+        scheduler.set_initial_thread_id(super::MAIN_GUEST_THREAD_ID);
+        scheduler.current_thread_id = thread_id;
+        scheduler
+            .guest_thread_stack_slots
+            .insert(thread_id, thread_id);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[2] = 0x55;
+        scheduler.saved_context = Some(super::SavedCpuContext {
+            pc: super::THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+
+        assert!(scheduler.complete_saved_guest_thread_exit(&mut kernel));
+        assert!(!kernel.handles.contains_thread_birth(birth));
+        assert_eq!(kernel.open_thread_handle(thread_id), None);
+        assert!(!scheduler.guest_thread_stack_slots.contains_key(&thread_id));
+        Ok(())
+    }
+
+    #[test]
     fn ready_blocked_wait_selection_uses_ce_lower_numeric_priority_first() {
         let waits = vec![
             blocked_wait_for_thread(2, 0x200),
@@ -32795,7 +32886,7 @@ fn try_exit_guest_thread_callout<D>(
     if let Some(callout) =
         pop_pending_guest_thread_return_for_thread(pending_returns, exiting_thread_id)
     {
-        kernel.mark_guest_thread_exited(callout.thread_handle, exit_code);
+        kernel.mark_guest_thread_exited_by_id(callout.worker_thread_id, exit_code);
         release_guest_thread_stack_slot(stack_slots, callout.worker_thread_id);
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
         let _ = update_user_kdata_current_ids(
@@ -32816,11 +32907,11 @@ fn try_exit_guest_thread_callout<D>(
         return true;
     }
 
-    let Some((worker_thread_id, thread_handle)) = running_thread.borrow_mut().take() else {
+    let Some((worker_thread_id, _thread_handle)) = running_thread.borrow_mut().take() else {
         let _ = uc.emu_stop();
         return true;
     };
-    kernel.mark_guest_thread_exited(thread_handle, exit_code);
+    kernel.mark_guest_thread_exited_by_id(worker_thread_id, exit_code);
     release_guest_thread_stack_slot(stack_slots, worker_thread_id);
     let Some(suspended) = suspended_thread.borrow_mut().take() else {
         let _ = uc.emu_stop();
@@ -32853,8 +32944,14 @@ fn try_enter_create_thread_callout<D>(
         return false;
     }
 
+    let stack_size = args.get(1).copied().unwrap_or(0);
     let start_address = args.get(2).copied().unwrap_or(0);
-    if start_address == 0 || process_stack_top == 0 {
+    let create_flags = args.get(4).copied().unwrap_or(0);
+    if start_address == 0
+        || process_stack_top == 0
+        || stack_size & 0x8000_0000 != 0
+        || create_flags & !(0x0000_0004 | 0x0001_0000) != 0
+    {
         kernel.threads.set_last_error(
             creator_thread_id,
             crate::ce::thread::ERROR_INVALID_PARAMETER,
@@ -32863,10 +32960,32 @@ fn try_enter_create_thread_callout<D>(
         return true;
     }
     let parameter = args.get(3).copied().unwrap_or(0);
-    let suspended = args.get(4).copied().unwrap_or(0) & 0x0000_0004 != 0;
+    let suspended = create_flags & 0x0000_0004 != 0;
     let thread_id_ptr = args.get(5).copied().unwrap_or(0);
+    if thread_id_ptr != 0
+        && validate_native_guest_writable_u32(uc, sealed_host_write_guard, thread_id_ptr).is_err()
+    {
+        kernel.threads.set_last_error(
+            creator_thread_id,
+            crate::ce::thread::ERROR_INVALID_PARAMETER,
+        );
+        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+        return true;
+    }
     let (thread_handle, worker_thread_id) =
-        kernel.create_guest_thread(start_address, parameter, suspended);
+        match kernel.try_create_guest_thread(start_address, parameter, suspended) {
+            Ok(created) => created,
+            Err(error) => {
+                let code = if matches!(error, Error::OutOfStructures(_)) {
+                    crate::ce::thread::ERROR_OUT_OF_STRUCTURES
+                } else {
+                    crate::ce::thread::ERROR_INVALID_PARAMETER
+                };
+                kernel.threads.set_last_error(creator_thread_id, code);
+                let _ = uc.reg_write(RegisterMIPS::V0, 0);
+                return true;
+            }
+        };
     if thread_id_ptr != 0
         && checked_host_write(
             uc,
@@ -32876,7 +32995,11 @@ fn try_enter_create_thread_callout<D>(
         )
         .is_err()
     {
-        let _ = kernel.close_handle(thread_handle);
+        let discarded = kernel.discard_unpublished_guest_thread(thread_handle, worker_thread_id);
+        debug_assert!(
+            discarded,
+            "failed native CreateThread must discard unpublished birth"
+        );
         kernel.threads.set_last_error(
             creator_thread_id,
             crate::ce::thread::ERROR_INVALID_PARAMETER,
@@ -36035,7 +36158,17 @@ mod guest_thread_stack_tests {
         map_private_slab_pages(&mut uc, &kernel, &mut mapped, owner, &pins, None)?;
         assert_eq!(uc.mem_regions().unwrap().len(), 1);
         assert_eq!(pins.private_len(), 3);
-        super::unmap_private_slab_page_checked(&mut uc, &mapped, base + 0x1000)?;
+        let suffix = mapped.private_pages.remove(&(base + 0x2000)).unwrap();
+        let error = super::unmap_private_slab_page_checked(&mut uc, &mapped, &pins, base + 0x1000)
+            .unwrap_err();
+        assert!(format!("{error}").contains("without ledger"));
+        assert_eq!(pins.private_len(), 3);
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(base + 0x1000), 1).unwrap(),
+            [0x22]
+        );
+        mapped.private_pages.insert(base + 0x2000, suffix);
+        super::unmap_private_slab_page_checked(&mut uc, &mapped, &pins, base + 0x1000)?;
         let middle = mapped.private_pages.remove(&(base + 0x1000)).unwrap();
         assert!(pins.release_private_after_unmap(middle.identity, middle.host_address));
         super::remove_mapped_guest_page(&mut mapped, base + 0x1000);
@@ -36051,8 +36184,8 @@ mod guest_thread_stack_tests {
 
         // A ledger/native mismatch cannot release the surviving run's pins.
         uc.mem_unmap(u64::from(base + 0x2000), 0x1000).unwrap();
-        let error =
-            super::unmap_private_slab_page_checked(&mut uc, &mapped, base + 0x2000).unwrap_err();
+        let error = super::unmap_private_slab_page_checked(&mut uc, &mapped, &pins, base + 0x2000)
+            .unwrap_err();
         assert!(format!("{error}").contains("no full native region"));
         assert_eq!(pins.private_len(), 2);
         assert_eq!(mapped.private_pages.len(), 2);
@@ -53482,7 +53615,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
                             "injected checked private VM unmap failure".to_owned(),
                         ));
                     }
-                    unmap_private_slab_page_checked(self.uc, &mapped, page)?;
+                    unmap_private_slab_page_checked(self.uc, &mapped, mapping.native_pins, page)?;
                     mapping
                         .active_guards
                         .borrow_mut()
@@ -53835,6 +53968,18 @@ mod unicorn_tests {
         assert!(clean.check_write(0x3000, 1).is_ok());
         assert!(clean.check_write(0x2000, 0).is_ok());
         assert!(clean.check_write(u64::from(u32::MAX), 2).is_err());
+    }
+
+    #[test]
+    fn create_thread_output_preflight_checks_all_four_guest_write_bytes() {
+        let guard = super::SealedHostWriteGuard::from_mapped_blobs(&[]).unwrap();
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x1000, 0x2000, Prot::ALL).unwrap();
+        uc.mem_protect(0x2000, 0x1000, Prot::READ).unwrap();
+
+        assert!(super::validate_native_guest_writable_u32(&uc, &guard, 0x1ffc).is_ok());
+        assert!(super::validate_native_guest_writable_u32(&uc, &guard, 0x1ffd).is_err());
+        assert!(super::validate_native_guest_writable_u32(&uc, &guard, 0x3000).is_err());
     }
 
     #[test]
