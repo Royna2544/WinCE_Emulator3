@@ -56520,6 +56520,170 @@ mod unicorn_tests {
         Ok(())
     }
 
+    /// Public-ordinal counterpart to the E25 internal slab diagnostic. This
+    /// remains expected red while ordinary VirtualAlloc selects LegacySeed:
+    /// the guest store can reach native RAM, but not canonical private bytes.
+    /// Keep this control non-ignored so the public backing switch and its
+    /// fresh-owner proof land together.
+    #[test]
+    fn public_virtual_alloc_ordinal_store_survives_fresh_native_owner() -> crate::Result<()> {
+        use crate::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+
+        const WRITTEN: u32 = 0x1122_3345;
+        const PAGE_READWRITE: u32 = 0x04;
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let mut bytes = tiny_mips_spinner_pe();
+        let words = [
+            0x3c19_0000 | (trap >> 16),    // lui t9,VirtualAlloc trap high
+            0x3739_0000 | (trap & 0xffff), // ori t9,t9,trap low
+            0x0320_f809,                   // jalr t9: real guest public import
+            0,                             // delay-slot nop
+            0x3c09_1122,                   // lui t1,0x1122
+            0x3529_3345,                   // ori t1,t1,0x3345
+            0xac49_0000,                   // sw t1,0(v0): returned allocation
+            0x8c4a_0000,                   // lw t2,0(v0): fresh owner only
+            0x1000_ffff,                   // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("public-virtual-fresh.exe", &bytes)?;
+        let mut kernel = phase1_kernel("public-virtual-fresh.exe")?;
+        let boot_pid = kernel.current_process_id();
+        let boot_birth = kernel.current_process_birth_key().expect("boot birth");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("fixture PE entry");
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_VIRTUAL_ALLOC),
+                name: Some("VirtualAlloc".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let thread_id = cpu.current_thread_id;
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = 0; // lpAddress
+        regs.regs[5] = 0x1000; // dwSize
+        regs.regs[6] = MEM_COMMIT | MEM_RESERVE; // flAllocationType
+        regs.regs[7] = PAGE_READWRITE; // flProtect
+        regs.regs[29] = cpu.stack_top.expect("guest stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        cpu.running_guest_thread = Some((thread_id, u32::MAX));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let run_to = |stop_pc| super::UnicornRunLimits {
+            instruction_limit: 64,
+            wall_clock_limit_ms: 500,
+            stop_pc: Some(stop_pc),
+            live_pump: false,
+        };
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(entry + 0x1c),
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_id(), Some(boot_pid));
+        assert_eq!(first.report.end_process_id(), Some(boot_pid));
+        assert_eq!(first.report.start_process_birth(), Some(boot_birth));
+        assert_eq!(first.report.end_process_birth(), Some(boot_birth));
+        assert_eq!(first.report.start_thread_id(), Some(thread_id));
+        assert_eq!(first.report.end_thread_id(), Some(thread_id));
+        assert_eq!(
+            first.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert_eq!(kernel.current_process_id(), boot_pid);
+        let saved = cpu.saved_context.as_ref().expect("post-store continuation");
+        assert_eq!(saved.pc, entry + 0x1c, "guest store completed");
+        assert_eq!(saved.regs.regs[9], WRITTEN);
+        let public_ptr = saved.regs.regs[2];
+        assert_ne!(public_ptr, 0, "public VirtualAlloc returned a pointer");
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(boot_birth, public_ptr)
+                .expect("public allocation belongs to the exact process birth")
+                .source,
+            VirtualAllocationSource::Private
+        );
+        let snapshot = cpu.last_debug_snapshot().expect("first native snapshot");
+        assert_eq!(snapshot.pc, entry + 0x1c);
+        assert_eq!(
+            snapshot.pc_stop.as_ref().map(|stop| stop.pc),
+            Some(entry + 0x1c)
+        );
+        assert!(
+            snapshot.memory_fault.is_none(),
+            "no unhandled native fault; this does not prove pre-return mapping"
+        );
+        assert_eq!(
+            snapshot
+                .import_counts
+                .iter()
+                .filter(|count| {
+                    count.ordinal == Some(crate::ce::coredll_ordinals::ORD_VIRTUAL_ALLOC)
+                })
+                .map(|count| count.count)
+                .sum::<u64>(),
+            1,
+            "one real public VirtualAlloc import dispatched"
+        );
+
+        // This is the intentional legacy red checkpoint. The public call
+        // must make the guest-written bytes canonical before any owner close.
+        let pin = kernel
+            .memory
+            .private_page_pin(boot_birth, public_ptr)
+            .expect("public VirtualAlloc must publish canonical private backing");
+        let mut canonical = [0; 4];
+        pin.read_bytes(0, &mut canonical)
+            .expect("read canonical public allocation");
+        assert_eq!(canonical, WRITTEN.to_le_bytes());
+
+        // Existing diagnostic close forces a genuinely fresh next owner; a
+        // separate migration gate must still prove checked uc_close failures.
+        cpu.native_engine
+            .close_idle_owner_preserving_snapshot_for_test();
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            run_to(entry + 0x20),
+        );
+        second.result?;
+        assert_eq!(second.report.start_process_id(), Some(boot_pid));
+        assert_eq!(second.report.end_process_id(), Some(boot_pid));
+        assert_eq!(second.report.start_process_birth(), Some(boot_birth));
+        assert_eq!(second.report.end_process_birth(), Some(boot_birth));
+        assert_eq!(second.report.start_thread_id(), Some(thread_id));
+        assert_eq!(second.report.end_thread_id(), Some(thread_id));
+        assert_eq!(
+            second.report.final_outcome(),
+            super::NativeSliceOutcome::RequestedPcStop
+        );
+        assert_eq!(kernel.current_process_id(), boot_pid);
+        let saved = cpu
+            .saved_context
+            .as_ref()
+            .expect("fresh-owner continuation");
+        assert_eq!(saved.pc, entry + 0x20, "fresh guest load completed");
+        assert_eq!(saved.regs.regs[10], WRITTEN);
+        let snapshot = cpu.last_debug_snapshot().expect("fresh native snapshot");
+        assert_eq!(snapshot.pc, entry + 0x20);
+        assert_eq!(
+            snapshot.pc_stop.as_ref().map(|stop| stop.pc),
+            Some(entry + 0x20)
+        );
+        assert!(snapshot.memory_fault.is_none(), "no unhandled native fault");
+        Ok(())
+    }
+
     #[test]
     fn preflight_rotation_clears_incoming_stale_native_outcome() -> crate::Result<()> {
         let mut kernel = phase1_kernel("idle-parent.exe")?;
