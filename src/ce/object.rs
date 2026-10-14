@@ -191,6 +191,9 @@ pub struct FileMappingView {
     /// guest pages from its owner's CPU only; other processes' copies of the
     /// same pages are stale snapshots and must not overwrite the mapping data.
     pub process_id: u32,
+    /// Public slab views retain the issuing birth. Legacy injected/DIB views
+    /// have no birth and keep their old PID-only compatibility path.
+    pub process_birth: Option<ProcessBirthKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -876,6 +879,44 @@ impl HandleTable {
         })
     }
 
+    pub fn file_mapping_view_for_birth(
+        &self,
+        birth: ProcessBirthKey,
+        base: u32,
+    ) -> Option<(u32, &FileMappingObject, FileMappingView)> {
+        self.objects.iter().find_map(|(handle, object)| match object {
+            KernelObject::FileMapping(mapping) => mapping
+                .views
+                .iter()
+                .copied()
+                .find(|view| view.base == base && view.process_birth == Some(birth))
+                .map(|view| (*handle, mapping, view)),
+            _ => None,
+        })
+    }
+
+    pub fn remove_file_mapping_view_for_birth(
+        &mut self,
+        birth: ProcessBirthKey,
+        base: u32,
+    ) -> Option<(u32, FileMappingView)> {
+        let (handle, view) = self.objects.iter_mut().find_map(|(handle, object)| match object {
+            KernelObject::FileMapping(mapping) => mapping
+                .views
+                .iter()
+                .position(|view| view.base == base && view.process_birth == Some(birth))
+                .map(|index| (*handle, mapping.views.remove(index))),
+            _ => None,
+        })?;
+        if matches!(
+            self.objects.get(&handle),
+            Some(KernelObject::FileMapping(mapping)) if mapping.closed && mapping.views.is_empty()
+        ) {
+            let _ = self.objects.remove(&handle);
+        }
+        Some((handle, view))
+    }
+
     pub fn file_mapping_by_view_mut(
         &mut self,
         base: u32,
@@ -924,6 +965,10 @@ impl HandleTable {
             KernelObject::FileMapping(mapping) => Some(mapping),
             _ => None,
         })
+    }
+
+    pub fn has_file_mapping_object(&self, handle: u32) -> bool {
+        matches!(self.objects.get(&handle), Some(KernelObject::FileMapping(_)))
     }
 
     pub fn mark_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {

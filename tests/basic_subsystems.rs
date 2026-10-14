@@ -3994,6 +3994,7 @@ fn handle_table_event_open_file_mapping_views_thread_process_exit_and_set_reset_
             size: 0x1000,
             offset: 0,
             process_id: 1,
+            process_birth: None,
         });
     }
     assert!(table.has_file_mapping_view(0xA000_0000));
@@ -6505,6 +6506,7 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
             size: 0x1000,
             offset: 0,
             process_id: 1,
+            process_birth: None,
         });
     }
     // file_mappings_mut iterates all file-mapping objects.
@@ -6518,6 +6520,7 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
                 size: 0x2000,
                 offset: 0,
                 process_id: 1,
+                process_birth: None,
             });
         }
     }

@@ -6359,7 +6359,11 @@ impl CeKernel {
             }
             _ => {}
         }
+        let was_file_mapping = self.handles.has_file_mapping_object(handle);
         self.handles.close(handle)?;
+        if was_file_mapping {
+            self.memory.forget_shared_mapping(handle);
+        }
         if trace_close {
             self.record_event_trace(EventTraceRecord {
                 op: "CloseHandle",
