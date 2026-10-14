@@ -70,14 +70,15 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   Thread aliases share one mutable record and canonical wake index. Production
   thread births retain a checked ProcessBirthKey, including aliasless boot TID
   1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
-  Boot-main enumeration, durable child-primary identity, last-public-handle
-  execution, wait pins and clone relineage remain open. `TerminateProcess`
-  currently signals the process handle at request time
-  (`src/ce/object.rs::request_process_termination_by_id`) while keeping its
-  CPU execution live; CE signals the handle after process exit. A parked child
-  can be dropped on that request-only exit path before canonical cleanup.
-  Native/parked handoff, root-process completion, complete GMS reclamation and
-  live-app behavior are not established.
+  A follow-on source-tested child-exit slice now defers real process-handle
+  signaling until exact-birth completion, sweeps workers at that boundary and
+  retains a parked child on a request-only exit. `TerminateProcess` still has
+  no execution-stop handshake: a looping child may keep running and a waiter
+  may remain blocked. The current-process pseudo-handle uses a separate
+  synchronous compatibility path. Boot-main enumeration, last-public-handle
+  wait pins, exact worker identity across same-process TID reuse, root-process
+  completion, clone relineage, complete GMS reclamation and live-app behavior
+  remain open. This bounded slice is not full Stage 3 acceptance.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
