@@ -65,12 +65,17 @@ one-line change to `MemorySystem::virtual_alloc` is not that boundary.
 
 ## Gates that the transaction cannot bypass
 
-The current [monitor checkpoint guard](../../src/main.rs) rejects slab-backed
-save/restore, but generic `Clone` paths still exist and birth keys lack machine
-lineage. Either make *every* slab-backed checkpoint route return typed
-`Unsupported` before mutation, with negative save/restore tests, or implement
-one machine-level deep-copy/relineage operation that rejects source keys in
-the clone. A field-by-field clone is not the latter.
+E-35 uses the first checkpoint boundary: the monitor's save and restore routes
+call the [typed guard](../../src/main.rs) before cloning or replacing state, and
+return `Unsupported` when either the current machine or a saved snapshot has
+slab-backed private VM. The main-binary tests cover rejected save, rejected
+restore into a slab-backed destination, and rejected restore from a slab-backed
+snapshot into a clean destination. `MemorySystem::clone` deep-copies private
+page bytes; its isolation control belongs with the memory tests. These are
+the E-35 negative checkpoint and copy boundaries, not full independent
+checkpoint support. Machine-level birth-key relineage and enabled slab-backed
+checkpoint save/restore remain Stage 3 work. Record green test evidence before
+claiming this gate passed.
 
 The current [native lease](../../src/emulator/native_engine.rs) can check hook
 cleanup but its owning Unicorn wrapper discards `uc_close` status; pin
