@@ -1101,62 +1101,102 @@ impl MemorySystem {
         Some(result)
     }
 
-    /// Prepare only the faulting 4-KiB page of a fixed stack reservation.
-    /// The caller must check its native pointer map before publishing this
-    /// token with `commit_prepared_private_vm`. A previously committed page
-    /// produces no new pin or budget charge.
-    pub fn prepare_fixed_private_page(
+    /// Prepare every page of one host-accessed span in a fixed stack
+    /// reservation. The entire span must belong to this process birth and
+    /// reservation; neither a bad tail nor a short budget publishes any new
+    /// page. The caller must check every new native pointer map before
+    /// publishing the token with `commit_prepared_private_vm`. Already
+    /// committed pages retain their pins without another budget charge.
+    pub fn prepare_fixed_private_span(
         &self,
         owner: ProcessBirthKey,
-        fault_address: u32,
+        address: u32,
+        len: u32,
     ) -> Option<PreparedPrivateVm> {
+        if len == 0 {
+            return None;
+        }
+        let span_end = address.checked_add(len)?;
         let page_size = STABLE_PRIVATE_PAGE_SIZE as u32;
-        let page_base = align_down(fault_address, page_size);
+        let first_page = align_down(address, page_size);
+        let last_page = align_down(span_end.checked_sub(1)?, page_size);
         let original = self
             .virtual_allocations_for(owner)
             .find(|allocation| {
                 allocation.backing == VirtualAllocationBacking::StablePrivateSlab
                     && allocation.source == VirtualAllocationSource::ThreadStack
-                    && fault_address >= allocation.base
+                    && address >= allocation.base
                     && allocation
                         .base
                         .checked_add(allocation.size)
-                        .is_some_and(|end| fault_address < end)
+                        .is_some_and(|end| span_end <= end)
             })?
             .clone();
-        let mut proposed = original.clone();
-        let mut new_page_pins = Vec::new();
-        if proposed.private_committed_pages.contains_key(&page_base) {
-            self.private_page_pin(owner, page_base)?;
-        } else {
-            if !self.private_page_budget.can_fit(1) {
-                return None;
+        let mut missing_count = 0usize;
+        let mut page = first_page;
+        loop {
+            if original.private_committed_pages.contains_key(&page) {
+                // A committed page without its canonical pin cannot be
+                // silently replaced by a second byte authority.
+                self.private_page_pin(owner, page)?;
+            } else {
+                missing_count = missing_count.checked_add(1)?;
             }
-            new_page_pins.try_reserve_exact(1).ok()?;
-            new_page_pins.push(StablePrivatePagePin {
-                identity: PrivatePageIdentity {
-                    owner,
-                    allocation_base: original.base,
-                    allocation_incarnation: original.incarnation,
-                    page_base,
-                },
-                page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
-            });
-            proposed
-                .private_committed_pages
-                .insert(page_base, original.protect);
+            if page == last_page {
+                break;
+            }
+            page = page.checked_add(page_size)?;
+        }
+        if !self.private_page_budget.can_fit(missing_count) {
+            return None;
+        }
+        let mut new_page_pins = Vec::new();
+        new_page_pins.try_reserve_exact(missing_count).ok()?;
+        let mut proposed = original.clone();
+        let mut page = first_page;
+        loop {
+            if !original.private_committed_pages.contains_key(&page) {
+                new_page_pins.push(StablePrivatePagePin {
+                    identity: PrivatePageIdentity {
+                        owner,
+                        allocation_base: original.base,
+                        allocation_incarnation: original.incarnation,
+                        page_base: page,
+                    },
+                    page: Rc::new(StablePrivatePage::zeroed(&self.private_page_budget)?),
+                });
+                proposed
+                    .private_committed_pages
+                    .insert(page, original.protect);
+            }
+            if page == last_page {
+                break;
+            }
+            page = page.checked_add(page_size)?;
+        }
+        if !proposed.private_committed_pages.is_empty() {
             proposed.allocation_type |= MEM_COMMIT;
         }
         Some(PreparedPrivateVm {
             instance: Rc::clone(&self.instance),
             previous_owner_cursor: None,
             owner,
-            result_ptr: page_base,
+            result_ptr: first_page,
             proposed_allocation: proposed,
             original_allocation: Some(original),
             expected_virtual_generation: self.virtual_generation,
             new_page_pins,
         })
+    }
+
+    /// Prepare only the faulting 4-KiB page of a fixed stack reservation.
+    /// A previously committed page produces no new pin or budget charge.
+    pub fn prepare_fixed_private_page(
+        &self,
+        owner: ProcessBirthKey,
+        fault_address: u32,
+    ) -> Option<PreparedPrivateVm> {
+        self.prepare_fixed_private_span(owner, fault_address, 1)
     }
 
     /// Locate the owner-qualified process heap reservation. Callers can use
@@ -1492,8 +1532,6 @@ impl MemorySystem {
             || !(proposed_allocation.source.is_private()
                 || proposed_allocation.source.is_native_fixed())
             || (proposed_allocation.source.is_native_fixed() && original_allocation.is_none())
-            || (proposed_allocation.source == VirtualAllocationSource::ThreadStack
-                && new_page_pins.len() > 1)
         {
             return None;
         }
@@ -1529,6 +1567,23 @@ impl MemorySystem {
             .collect::<Vec<_>>();
         if expected_new_pages.len() != new_page_pins.len() {
             return None;
+        }
+        if proposed_allocation.source == VirtualAllocationSource::ThreadStack {
+            let reservation_end = proposed_allocation
+                .base
+                .checked_add(proposed_allocation.size)?;
+            if proposed_allocation
+                .private_committed_pages
+                .iter()
+                .any(|(&page, &protect)| {
+                    page < proposed_allocation.base
+                        || page >= reservation_end
+                        || page & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0
+                        || protect != proposed_allocation.protect
+                })
+            {
+                return None;
+            }
         }
         for (page, pin) in expected_new_pages.iter().zip(&new_page_pins) {
             let identity = pin.identity;
@@ -4433,6 +4488,186 @@ mod tests {
         assert_eq!(
             memory.private_commit_used_bytes(),
             3 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+    }
+
+    #[test]
+    fn fixed_stack_span_commits_all_untouched_pages_with_one_charge() {
+        const STACK_BASE: u32 = 0x7000_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        assert_eq!(
+            memory.reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                STACK_BASE,
+                0x4000,
+                4,
+            ),
+            Some(STACK_BASE)
+        );
+        let available_before = memory.private_commit_available_bytes();
+        let generation_before = memory.virtual_generation();
+        let prepared = memory
+            .prepare_fixed_private_span(owner, STACK_BASE + 0xff0, 0x1011)
+            .unwrap();
+        assert_eq!(prepared.result_ptr(), STACK_BASE);
+        assert_eq!(prepared.new_page_pins().len(), 3);
+        assert_eq!(
+            prepared
+                .new_page_pins()
+                .iter()
+                .map(|pin| pin.identity().page_base())
+                .collect::<Vec<_>>(),
+            [STACK_BASE, STACK_BASE + 0x1000, STACK_BASE + 0x2000]
+        );
+        assert_eq!(memory.virtual_generation(), generation_before);
+        assert!(memory.private_page_pins_for(owner).is_empty());
+        assert_eq!(
+            available_before - memory.private_commit_available_bytes(),
+            3 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert_eq!(
+            memory.commit_prepared_private_vm(prepared),
+            Some(STACK_BASE)
+        );
+        assert_eq!(memory.private_page_pins_for(owner).len(), 3);
+        for offset in [0, 0x1000, 0x2000] {
+            assert_eq!(
+                memory
+                    .private_vm_query(owner, STACK_BASE + offset)
+                    .unwrap()
+                    .page_protect,
+                Some(4)
+            );
+        }
+        assert_eq!(
+            memory
+                .private_vm_query(owner, STACK_BASE + 0x3000)
+                .unwrap()
+                .page_protect,
+            None
+        );
+        let repeat = memory
+            .prepare_fixed_private_span(owner, STACK_BASE + 0xff0, 0x1011)
+            .unwrap();
+        assert!(repeat.new_page_pins().is_empty());
+        assert_eq!(memory.commit_prepared_private_vm(repeat), Some(STACK_BASE));
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            3 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+    }
+
+    #[test]
+    fn fixed_stack_span_short_budget_or_bad_tail_publishes_no_pages() {
+        const STACK_BASE: u32 = 0x7000_0000;
+        let mut memory = MemorySystem::default();
+        let owner = boot_owner();
+        memory.set_private_commit_limit_bytes(2 * STABLE_PRIVATE_PAGE_SIZE as u64);
+        memory
+            .reserve_fixed_private_range(
+                owner,
+                VirtualAllocationSource::ThreadStack,
+                STACK_BASE,
+                0x3000,
+                4,
+            )
+            .unwrap();
+        let first = memory
+            .prepare_fixed_private_page(owner, STACK_BASE)
+            .unwrap();
+        assert_eq!(memory.commit_prepared_private_vm(first), Some(STACK_BASE));
+        let published = memory
+            .virtual_allocation(owner, STACK_BASE)
+            .unwrap()
+            .clone();
+        let generation = memory.virtual_generation();
+        let available = memory.private_commit_available_bytes();
+        assert!(
+            memory
+                .prepare_fixed_private_span(owner, STACK_BASE + 0xff0, 0x1011)
+                .is_none(),
+            "two missing pages must not partially charge a one-page budget"
+        );
+        assert!(
+            memory
+                .prepare_fixed_private_span(owner, STACK_BASE + 0x2ff0, 0x20)
+                .is_none(),
+            "a tail beyond the reservation must reject before mutation"
+        );
+        assert!(
+            memory
+                .prepare_fixed_private_span(owner, u32::MAX - 1, 3)
+                .is_none(),
+            "a wrapping span must reject before mutation"
+        );
+        assert_eq!(memory.virtual_generation(), generation);
+        assert_eq!(memory.private_commit_available_bytes(), available);
+        assert_eq!(
+            memory.virtual_allocation(owner, STACK_BASE),
+            Some(&published)
+        );
+        assert_eq!(memory.private_page_pins_for(owner).len(), 1);
+        assert!(
+            memory
+                .private_page_pin(owner, STACK_BASE + 0x1000)
+                .is_none()
+        );
+        assert!(
+            memory
+                .private_page_pin(owner, STACK_BASE + 0x2000)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn fixed_stack_span_same_va_keeps_process_births_independent() {
+        const STACK_BASE: u32 = 0x7000_0000;
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let first_owner = handles.process_birth_key(1).unwrap();
+        let _child_handle = handles.create_process(2);
+        let second_owner = handles.process_birth_key(2).unwrap();
+        let mut memory = MemorySystem::default();
+        for owner in [first_owner, second_owner] {
+            memory
+                .reserve_fixed_private_range(
+                    owner,
+                    VirtualAllocationSource::ThreadStack,
+                    STACK_BASE,
+                    0x3000,
+                    4,
+                )
+                .unwrap();
+            let prepared = memory
+                .prepare_fixed_private_span(owner, STACK_BASE + 0xff0, 0x1011)
+                .unwrap();
+            assert_eq!(prepared.new_page_pins().len(), 3);
+            assert_eq!(
+                memory.commit_prepared_private_vm(prepared),
+                Some(STACK_BASE)
+            );
+        }
+        let first = memory
+            .private_page_pin(first_owner, STACK_BASE + 0x2000)
+            .unwrap();
+        let second = memory
+            .private_page_pin(second_owner, STACK_BASE + 0x2000)
+            .unwrap();
+        assert_ne!(first.native_ptr(), second.native_ptr());
+        first.write_bytes(0, &[0x31]).unwrap();
+        second.write_bytes(0, &[0x72]).unwrap();
+        let mut byte = [0];
+        first.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x31]);
+        second.read_bytes(0, &mut byte).unwrap();
+        assert_eq!(byte, [0x72]);
+        assert_eq!(memory.private_page_pins_for(first_owner).len(), 3);
+        assert_eq!(memory.private_page_pins_for(second_owner).len(), 3);
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            6 * STABLE_PRIVATE_PAGE_SIZE as u64
         );
     }
 

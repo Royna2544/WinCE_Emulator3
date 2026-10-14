@@ -1,7 +1,7 @@
 use crate::ce::{
     coredll::{
         CoredllGuestMemory, allocate_guest_heap_checked, apply_prepared_reallocation,
-        read_guest_bytes, write_guest_bytes, write_guest_u16,
+        read_guest_bytes, write_guest_bytes, write_guest_u16, write_guest_u32,
     },
     file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS, OPEN_EXISTING},
     kernel::CeKernel,
@@ -374,12 +374,13 @@ pub(crate) fn wcstoul_raw<M: CoredllGuestMemory>(
     };
     let parsed = parse_unsigned_prefix(&text, base);
     if end_ptr != 0
-        && memory
-            .write_u32(
-                end_ptr,
-                text_ptr.wrapping_add((parsed.consumed as u32).saturating_mul(2)),
-            )
-            .is_err()
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add((parsed.consumed as u32).saturating_mul(2)),
+        )
     {
         kernel
             .threads
@@ -601,7 +602,9 @@ pub(crate) fn memcpy_raw<M: CoredllGuestMemory>(
     if len == 0 {
         return dest;
     }
-    if copy_guest_bytes_chunked(memory, dest, src, len).is_ok() {
+    if memory.prepare_host_write(kernel, dest, len).is_ok()
+        && copy_guest_bytes_chunked(memory, dest, src, len).is_ok()
+    {
         dest
     } else {
         kernel
@@ -886,7 +889,9 @@ pub(crate) fn memset_raw<M: CoredllGuestMemory>(
     if len == 0 {
         return dest;
     }
-    if memory.fill_bytes(dest, value as u8, len).is_ok() {
+    if memory.prepare_host_write(kernel, dest, len).is_ok()
+        && memory.fill_bytes(dest, value as u8, len).is_ok()
+    {
         dest
     } else {
         kernel
@@ -992,9 +997,13 @@ pub(crate) fn strtoul_raw<M: CoredllGuestMemory>(
     };
     let parsed = parse_unsigned_prefix(&text, base);
     if end_ptr != 0
-        && memory
-            .write_u32(end_ptr, text_ptr.wrapping_add(parsed.consumed as u32))
-            .is_err()
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add(parsed.consumed as u32),
+        )
     {
         kernel
             .threads
@@ -2694,7 +2703,13 @@ pub(crate) fn strtol_raw<M: CoredllGuestMemory>(
         let consumed = text.len() - trimmed.len()
             + usize::from(neg || trimmed.starts_with('+'))
             + parsed.consumed;
-        let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(consumed as u32));
+        let _ = write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add(consumed as u32),
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     let raw = parsed.value;
@@ -2723,7 +2738,13 @@ pub(crate) fn strtod_raw<M: CoredllGuestMemory>(
     let value = parse_float_prefix(&text);
     if end_ptr != 0 {
         let consumed = float_prefix_len(&text);
-        let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(consumed as u32));
+        let _ = write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add(consumed as u32),
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     value
@@ -3359,7 +3380,13 @@ pub(crate) fn wcstol_raw<M: CoredllGuestMemory>(
         let skip = text.len() - trimmed.len()
             + usize::from(neg || trimmed.starts_with('+'))
             + parsed.consumed;
-        let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(skip as u32 * 2));
+        let _ = write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add(skip as u32 * 2),
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     if neg {
@@ -3391,7 +3418,13 @@ pub(crate) fn wcstod_raw<M: CoredllGuestMemory>(
     let value = parse_float_prefix(&text);
     if end_ptr != 0 {
         let consumed = float_prefix_len(&text);
-        let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(consumed as u32 * 2));
+        let _ = write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            end_ptr,
+            text_ptr.wrapping_add(consumed as u32 * 2),
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     value

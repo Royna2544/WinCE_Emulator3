@@ -5048,10 +5048,23 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                         .set_last_error(thread_id, ERROR_IO_INCOMPLETE);
                     return Some(CoredllValue::Bool(false));
                 }
-                let mut cursor = kernel
-                    .pending_overlapped_serial_read(handle, overlapped_ptr)
-                    .map(|read| read.buffer)
-                    .unwrap_or(0);
+                let Some(pending) = kernel.pending_overlapped_serial_read(handle, overlapped_ptr)
+                else {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return Some(CoredllValue::Bool(false));
+                };
+                if memory
+                    .prepare_host_write(kernel, pending.buffer, pending.requested)
+                    .is_err()
+                {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return Some(CoredllValue::Bool(false));
+                }
+                let mut cursor = pending.buffer;
                 let mut write_failed = false;
                 let completed =
                     kernel.complete_overlapped_serial_read_into(handle, overlapped_ptr, |chunk| {
@@ -25978,6 +25991,16 @@ fn read_file_raw<M: CoredllGuestMemory>(
             .read_u32(overlapped_ptr.wrapping_add(16))
             .unwrap_or(0);
         if event_handle != 0 {
+            if memory
+                .prepare_host_write(kernel, buffer, requested)
+                .is_err()
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                write_optional_count(kernel, memory, thread_id, transferred_ptr, 0);
+                return false;
+            }
             let _ = kernel.reset_event(event_handle);
             kernel.register_overlapped_serial_read(
                 overlapped_ptr,
@@ -32416,14 +32439,35 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
             if lparam != 0 {
                 let screen_w = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32;
                 let screen_h = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32;
-                let _ = memory.write_u32(lparam.wrapping_add(0x08), screen_w);
-                let _ = memory.write_u32(lparam.wrapping_add(0x0c), screen_h);
-                let _ = memory.write_u32(lparam.wrapping_add(0x10), 0);
-                let _ = memory.write_u32(lparam.wrapping_add(0x14), 0);
-                let _ = memory.write_u32(lparam.wrapping_add(0x18), 0);
-                let _ = memory.write_u32(lparam.wrapping_add(0x1c), 0);
-                let _ = memory.write_u32(lparam.wrapping_add(0x20), screen_w);
-                let _ = memory.write_u32(lparam.wrapping_add(0x24), screen_h);
+                if memory
+                    .prepare_host_write(kernel, lparam.wrapping_add(0x08), 0x20)
+                    .is_err()
+                {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return 0;
+                }
+                for (offset, value) in [
+                    (0x08, screen_w),
+                    (0x0c, screen_h),
+                    (0x10, 0),
+                    (0x14, 0),
+                    (0x18, 0),
+                    (0x1c, 0),
+                    (0x20, screen_w),
+                    (0x24, screen_h),
+                ] {
+                    if !write_guest_u32(
+                        kernel,
+                        memory,
+                        thread_id,
+                        lparam.wrapping_add(offset),
+                        value,
+                    ) {
+                        return 0;
+                    }
+                }
             }
             kernel.threads.set_last_error(thread_id, 0);
             0
@@ -44693,9 +44737,9 @@ fn write_guest_wcs<M: CoredllGuestMemory>(
 
 // Write ANSI string to guest memory, NUL-terminate within cap_bytes.
 fn strsafe_write_bytes<M: CoredllGuestMemory>(
-    _kernel: &mut CeKernel,
+    kernel: &mut CeKernel,
     memory: &mut M,
-    _thread_id: u32,
+    thread_id: u32,
     dst: u32,
     src: &[u8],
     cap_bytes: u32,
@@ -44704,13 +44748,10 @@ fn strsafe_write_bytes<M: CoredllGuestMemory>(
         return false;
     }
     let copy = src.len().min((cap_bytes - 1) as usize);
-    for (i, &b) in src[..copy].iter().enumerate() {
-        if memory.write_u8(dst + i as u32, b).is_err() {
-            return false;
-        }
-    }
-    let _ = memory.write_u8(dst + copy as u32, 0);
-    copy == src.len()
+    let mut output = Vec::with_capacity(copy + 1);
+    output.extend_from_slice(&src[..copy]);
+    output.push(0);
+    write_guest_bytes(kernel, memory, thread_id, dst, &output) && copy == src.len()
 }
 
 fn strsafe_copy_w_raw<M: CoredllGuestMemory>(
@@ -67960,7 +68001,7 @@ fn read_guest_i16<M: CoredllGuestMemory>(
     read_guest_u16(kernel, memory, thread_id, addr).map(|value| value as i16)
 }
 
-fn write_guest_u32<M: CoredllGuestMemory>(
+pub(crate) fn write_guest_u32<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
