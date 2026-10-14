@@ -4,18 +4,18 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
-- **Blocks any live run:** each committed `StablePrivatePage` (private
-  VirtualAlloc, shared views, heap, stack) is a separate 4-KiB host
-  allocation and a separate `mem_map_ptr` region on every fresh owner.
-  - At 8,192 committed pages (32 MiB), mapping took 78,689.550 ms. Of that,
-    `mem_map_ptr` was 78,523.985 ms and the Rust scans only 164.176 ms. The
-    post-map teardown took about 75 s more and is not instrumented
-    (`evidence/om2-native-map-profile-20261014/fresh-owner-8192-release-attempt-01.raw.log`).
-  - iNavi's live heap reached 31.5 MB in E-38, so each fresh-owner slice
-    would cost on the order of a minute.
-  - Planned fix: 1-MiB contiguous host chunks allocated when their first page
-    is committed. Map only maximal committed runs and pin per chunk. Keep
-    per-page identity and per-page budget charging.
+- **Native memory performance remains a live-run gate:** a synthetic
+  8,192-page (32-MiB) fixed heap originally took 78,689.550 ms to map and
+  another 75.753 s to close its fresh owner. Fixed private heap/stack pages
+  now use sparse 1-MiB host blocks and per-page pins/budget; one interim
+  release control mapped the same 8,192 pages in 32 calls and 4.427 ms,
+  closing in 0.398 ms. This is not an iNavi speed, lag or RSS result
+  ([mapper receipt](evidence/om2-native-map-profile-20261014/validation.receipt.md)).
+- Public shared-view slabs and ordinary private `VirtualAlloc` slabs still
+  have independent 4-KiB host pages and one `mem_map_ptr` per mapped page.
+  They are deliberately outside the fixed heap/stack block migration; the
+  saved iNavi evidence does not report a shared-view page count. Their
+  real-run cost and any further grouping remain unresolved.
 - Stage 8 (persistent owner, paused): E-32 crashed at 135.3 s and the 650
   trial at 129.1 s, both in TCG code emission, cause unattributed. E-33 fixed
   only the small-arena commit-tail arithmetic. Still open: VEH-handler versus
