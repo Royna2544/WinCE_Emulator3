@@ -7588,6 +7588,7 @@ impl CeKernel {
             .record_wait_wake(SchedulerWakeReason::Timeout);
     }
 
+    #[cfg(test)]
     pub fn register_blocked_waiter(
         &mut self,
         thread_id: u32,
