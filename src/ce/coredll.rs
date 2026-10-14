@@ -50734,6 +50734,24 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     } else {
         None
     };
+    let section_extension = if let Some(bytes) = section_bytes.as_ref() {
+        let Ok(mapping) = kernel.handles.file_mapping(section) else {
+            kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        };
+        let old_len = mapping.legacy_data().map_or(0, |data| data.len());
+        let file_id = mapping.file_id;
+        let end = offset as usize + bytes.len();
+        match legacy_mapping_extension_from_file(kernel, file_id, old_len, end) {
+            Ok(extension) => Some(extension),
+            Err(_) => {
+                kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            }
+        }
+    } else {
+        None
+    };
     let Some(bits_ptr) = allocate_guest_heap(
         kernel,
         memory,
@@ -50758,25 +50776,29 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     }
     if let Some(bytes) = section_bytes.as_ref() {
         let process_id = kernel.current_process_id();
-        if let Ok(mapping) = kernel.handles.file_mapping_mut(section) {
-            let start = offset as usize;
-            let end = start.saturating_add(bytes.len());
-            let Some(data) = mapping.legacy_data_mut() else {
-                kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return 0;
-            };
-            if end > data.len() {
-                data.resize(end, 0);
-            }
-            data[start..end].copy_from_slice(bytes);
-            mapping.views.push(FileMappingView {
-                base: bits_ptr,
-                size: byte_count,
-                offset,
-                process_id,
-                process_birth: None,
-            });
+        let start = offset as usize;
+        let end = start + bytes.len();
+        let Ok(mapping) = kernel.handles.file_mapping_mut(section) else {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+            kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        };
+        let Some(data) = mapping.legacy_data_mut() else {
+            let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if end > data.len() {
+            data.extend_from_slice(section_extension.as_deref().unwrap_or_default());
         }
+        data[start..end].copy_from_slice(bytes);
+        mapping.views.push(FileMappingView {
+            base: bits_ptr,
+            size: byte_count,
+            offset,
+            process_id,
+            process_birth: None,
+        });
     }
     kernel.threads.set_last_error(thread_id, 0);
     let bitmap = kernel.resources.create_owned_bitmap_with_masks(

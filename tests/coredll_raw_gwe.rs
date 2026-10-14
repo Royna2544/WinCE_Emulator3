@@ -9548,6 +9548,7 @@ fn coredll_raw_deleteobject_flushes_section_backed_dib_bits() -> Result<()> {
         dirty_pixels
     );
     assert!(kernel.handles.file_mapping(mapping)?.is_slab());
+    assert_eq!(kernel.memory.private_commit_used_bytes(), original_used + 8192);
 
     // A new DIB view cannot reopen the old copy-backed path after migration.
     assert!(matches!(
