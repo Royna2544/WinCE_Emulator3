@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ce::{
-    object::{ProcessBirthKey, ThreadBirthKey},
+    object::{ProcessBirthKey, TaskWaitPin, ThreadBirthKey},
     task_wait::{TaskWaitRecord, TaskWaitStore, TickDeadline},
 };
 
@@ -111,9 +111,15 @@ pub enum WaitObjectKey {
 pub struct SchedulerBlockedWait {
     pub id: u64,
     pub thread_id: u32,
+    /// Exact owner identity when Kernel registered this frame for a live task.
+    /// Standalone/host compatibility wait records have no known birth.
+    pub owner_birth: Option<ThreadBirthKey>,
     pub thread_handle: u32,
     pub wait_handles: Vec<u32>,
     pub wait_keys: Vec<WaitObjectKey>,
+    /// One acquired canonical lifetime reference per ordered task slot. The
+    /// owning Kernel releases these when this record is removed.
+    pub pinned_targets: Vec<Option<TaskWaitPin>>,
     pub kind: SchedulerBlockedWaitKind,
     pub wait_started_ms: u32,
     pub timeout_ms: u32,
@@ -227,10 +233,43 @@ impl Scheduler {
         wait_started_ms: u32,
         timeout_ms: u32,
     ) -> u64 {
+        let pinned_targets = vec![None; wait_handles.len()];
+        self.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            None,
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+    }
+
+    /// Publishes a fully prepared ordered wait set. Each `Some` pin was
+    /// acquired by Kernel before publication and remains attached to its slot.
+    pub fn register_blocked_wait_with_keys_and_pins(
+        &mut self,
+        thread_id: u32,
+        owner_birth: Option<ThreadBirthKey>,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        wait_keys: Vec<WaitObjectKey>,
+        pinned_targets: Vec<Option<TaskWaitPin>>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
         assert_eq!(
             wait_handles.len(),
             wait_keys.len(),
             "each raw wait handle must have one ordered wake key"
+        );
+        assert_eq!(
+            wait_handles.len(),
+            pinned_targets.len(),
+            "each raw wait handle must have one ordered pin slot"
         );
         self.next_wait_id = self.next_wait_id.wrapping_add(1).max(1);
         self.next_wait_sequence = self.next_wait_sequence.wrapping_add(1);
@@ -238,9 +277,11 @@ impl Scheduler {
         let wait = SchedulerBlockedWait {
             id,
             thread_id,
+            owner_birth,
             thread_handle,
             wait_handles,
             wait_keys,
+            pinned_targets,
             kind,
             wait_started_ms,
             timeout_ms,
@@ -370,6 +411,14 @@ impl Scheduler {
     /// subscriptions and pulse/comm-event bookkeeping are retired normally.
     pub fn waiter_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
         self.blocked_waits.wait_ids_for_thread(thread_id)
+    }
+
+    pub fn waiter_ids_for_birth(&self, owner_birth: ThreadBirthKey) -> Vec<u64> {
+        self.blocked_waits
+            .values()
+            .filter(|wait| wait.owner_birth == Some(owner_birth))
+            .map(|wait| wait.id)
+            .collect()
     }
 
     pub fn waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
