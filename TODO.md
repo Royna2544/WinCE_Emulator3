@@ -14,9 +14,9 @@ Refreshed on 2026-10-14. This file is limited to active, plan-aligned work.
   ([repair receipt](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
   Do not conflate this handler fix with attribution of the app crash or
   default-cache footprint acceptance. A second writable-mount run needs new
-  user authorization; no app run followed this repair. The production-source
-  fix precedes `docs/PLAN.md`'s Stage 8 native-allocator gate; obtain an
-  explicit sequencing decision before treating this as an accepted exception.
+  user authorization; no app run followed this repair. The one production-source
+  safety exception is recorded as [D-009](docs/DECISIONS.md); stop further
+  arena investigation until Stage 8 instead of expanding this fix.
 
 - Begin the user-authorized scheduler-core rewrite within the staged
   plan-first/common-anchor gates. Read reviewed
