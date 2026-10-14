@@ -19,7 +19,7 @@ references for historical reconstruction.
 - The separate GMS follow-up passed its four public API tests in both broad
   suites above, after a focused 4/0/0 gate. Boot-reserved physical RAM and
   stable private pages share one admission/reporting budget; it does **not**
-  charge heap allocations or legacy file-view backing and is not a full
+  charge heap, image or legacy file-view backing and is not a full
   guest-memory census. No GMS app run occurred
   ([GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 

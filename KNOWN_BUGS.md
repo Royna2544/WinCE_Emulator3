@@ -15,7 +15,8 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   the reason for the later no-completion gap or persistent splash
   ([E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
   E-33 repaired that isolated handler arithmetic defect and passed native and
-  broad tests, but no post-repair app run has tested this failure.
+  broad tests. The later fresh-owner E-38 run survived 330 s, but its changed
+  source and owner mode cannot attribute that result to the E-33 repair.
 - Persistent-owner 650 trial: host AV at 129.1 s with 1.66 GiB RSS in TCG
   TranslationBlock initialization; cause unattributed. EXE/PDB/minidump are
   preserved under `evidence/legacy-target-release-20261013` (ledger E-2 to E-4).

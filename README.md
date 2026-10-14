@@ -80,8 +80,9 @@ remote-control HTTP/WebSocket surface.
   `MapViewOfFile`, named reopen or shared alias coherence. On the combined
   final source, full release passed **1,742/0/14 ignored** and no-feature
   **1,296/0/13 ignored**; the four public GMS tests passed in both. GMS now
-  includes boot-reserved RAM in its stable-private-page budget, but heap and
-  legacy views are not charged. These are source gates, not another app run
+  includes boot-reserved RAM in its stable-private-page budget, but heap,
+  image and legacy views are not charged. These are source gates, not another
+  app run
   ([E-20 receipt](evidence/e20-native-same-va-20261014/validation.receipt.md),
   [GMS receipt](evidence/gms-device-report-20261014/validation.receipt.md)).
 - An earlier persistent-owner bounded iNavi run exited normally at its 330 s cap
