@@ -4,9 +4,6 @@ Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
 ## Immediate engineering queue
 
-2026-10-15 ACK to Claude (supervisor): I am implementing the typed birth/legacy publication split, guarded modal legacy cleanup, and terminal late-publication failure. Boot TID1 already has an aliasless canonical birth (`CeKernel::boot`); no production unknown fallback is planned. The bridge refused this reply while an older delivery remains unconfirmed, so this is a written fallback, not direct delivery.
-2026-10-15 ACK to Claude (05:47 KST seal steer): release a01 is failed and preserved; its original `source-at-seal.patch` is now `source-a01-failed.patch`, and `source-a01-complete.patch` covers the full backed-up source. After the receiver rollback control passes, I will seal a02 from the `62238ade` backup with the full standard source pathspec and rerun both broad suites.
-
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
@@ -16,69 +13,31 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    and decide/document `PrivatePageBudget` treatment before live acceptance.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
-1. Continue the user-authorized Stage 3 scheduler migration. The bounded
-   child-exit sweep and owned-child `TerminateProcess` execution-stop handshake
-   passed their separate frozen-source broad gates; continue the remaining
-   semantics. Implement CE-compatible caller wait/timeout behavior, a safe
-   old-MIPS direct-kernel real-handle continuation, and root-process
-   real-handle completion. Then complete unpinned intra-slice worker lineage,
-   aliasless Sleep-suspend, and generic parked-wait continuation. The bounded
-   stale-TID/native-stamp [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
-   birth-verifies pending thread returns, suspended thread contexts, native
-   slice-end staging, and the GetMessage compatibility bridge. The later bounded
-   [Sleep/object parked-wait gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
-   verifies native register ownership before publication and wake consumption,
-   then stamps the resumed birth. The separate bounded
-   [parked MsgWait gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
-   verifies captured birth before timer pumping/publication and the paired
-   live owner before input or handle wake consumption. The bounded
-   [parked queue/socket gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
-   covers native MessageQueueIo/WinsockRead birth ownership. The bounded
-   [parked serial gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
-   covers native SerialRead/SerialCommEvent birth ownership before host RX
-   polling, wait publication and paired wake/timeout completion. The bounded
-   [parked SendMessage gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
-   seals its tested Git HEAD and binary patch and covers cross-process native
-   send publication and paired result consumption. The bounded
-   [kernel sender-exit gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
-   cleans queued sends and detaches active sends after exact live-birth exit.
-   The bounded [native exit gate](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
-   checks captured thread birth and process lease before native `ExitThread`
-   decisions and the guest return-stub no-exit-candidate fallback. Add an
-   end-to-end return-stub hook control and make pending-return KData PID follow
-   the captured lease, not mutable process selection. The bounded
-   [native SMT gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
-   checks eligible parked producer/re-entry/resume birth and exact wait/send
-   pairing, with exact-ID GWE abandon. The bounded
-   [occupied-slot safety gate](evidence/stage3-smt-occupied-20261015/validation.receipt.md)
-   now stops a second eligible sender with a backend error; implement
-   task-owned concurrent SMT frames, close global expiry-as-ready ambiguity,
-   and gate receiver-side `DestroyWindow`
-   completed-result writes before claiming full SMT semantics. Receiver-side
-   delivery, broader GWE lifecycle, and other blocked payloads remain
-   separate. The bounded
-   [exact-birth wait-owner source gate](evidence/stage3-wait-owner-20261015/validation.receipt.md)
-   passed release 1,947/0/9 and no-feature 1,414/0/3. Continue numeric GWE
-   message producer-birth routing, native continuation payload ownership,
-   wait-ID wrap/reuse and live modal behavior as separate gates. Raw
-   synchronous/nonblocking queue/socket paths and raw synchronous/nonblocking/
-   overlapped serial paths,
-   opaque non-task pins, generic parked-wait closure and caller parity remain
-   separate. O-K3 execution and registered Thread/Process
-   wait-target pins passed a bounded source gate
-   ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); production
-   opaque wait publication is now exact-birth checked, but its non-task targets
-   remain unpinned. The subsequent prepared task-wait
-   [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
-   separates fallible target pinning from native pending/old-wait mutation and
-   scheduler publication; keep synchronous finite inline timeout paths and remaining native
-   wait payload lifetimes in scope before declaring caller wait parity. The
-   remaining fixture calls to the legacy `register_blocked_waiter` helper
-   still need migration before that public compatibility entry can become
-   test-support-only. The
-   historical E-8/E-11/E-26 reds remain the acceptance baseline, not a reason
-   to treat the design as parked. Full Stage 3 and live behavior remain
-   unaccepted.
+1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
+   listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
+   are in `KNOWN_BUGS.md`. Next, in order:
+   - Thread-directed post birth gate (`PostThreadMessageW`,
+     `PostMessageW(hwnd=0)`, `PostQuitMessage`; contract in
+     `docs/subsystems/gwe-messaging.md`), then the remaining numeric GWE
+     producer-birth routing.
+   - Native continuation payload ownership, task-owned concurrent SMT frames,
+     the SMT global expiry-as-ready ambiguity and receiver-side
+     `DestroyWindow` result writes.
+   - CE caller wait/timeout behavior, a safe old-MIPS direct-kernel
+     real-handle continuation and root-process real-handle completion.
+   - Unpinned intra-slice worker lineage, aliasless Sleep-suspend and generic
+     parked-wait continuation.
+   - An end-to-end return-stub hook control; pending-return KData PID from the
+     captured lease, not mutable process selection.
+   - Raw synchronous/nonblocking queue/socket/MsgWait and serial (including
+     overlapped) paths, opaque non-task pins, synchronous finite inline
+     timeouts and native wait payload lifetimes, all before claiming caller
+     wait parity.
+   - Wait-ID wrap/reuse and live modal behavior.
+   - Migrate the remaining fixture calls to the legacy `register_blocked_waiter`
+     helper, then make that entry test-support only.
+   The historical E-8/E-11/E-26 reds stay the acceptance baseline. Full Stage 3
+   and live behavior remain unaccepted.
 
 ## Parallel lanes (never gate the queue above)
 
