@@ -4816,6 +4816,46 @@ impl UnicornMips {
         }
         let mut kept = VecDeque::new();
         while let Some(mut process) = self.parked_child_processes.pop_front() {
+            if let Some((launch, requested_code)) =
+                Self::requested_parked_child_termination(&process, kernel)
+            {
+                let completed = if let Some(framebuffer) = framebuffer.as_mut() {
+                    kernel.mark_process_launch_exited_with_framebuffer(
+                        &launch,
+                        requested_code,
+                        Some(&mut **framebuffer),
+                    )
+                } else {
+                    kernel.mark_process_launch_exited(&launch, requested_code)
+                };
+                if completed {
+                    kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                        op: "CreateProcessTerminationCompleted",
+                        application: launch.application.clone(),
+                        command_line: launch.command_line.clone(),
+                        path: Some(process.module_host_path.display().to_string()),
+                        process_handle: Some(launch.process_handle),
+                        thread_handle: Some(launch.thread_handle),
+                        process_id: Some(launch.process_id),
+                        thread_id: Some(launch.thread_id),
+                        result: Some(requested_code),
+                        error: None,
+                        detail: Some("parked_cpu_stop".to_owned()),
+                    });
+                    process.cpu.seal_completed_active_process_cpu();
+                    if let Some(modal_state) = process.cpu.take_terminal_blocked_modal(kernel) {
+                        if let Some(framebuffer) = framebuffer.as_mut() {
+                            modal_state.restore_framebuffer(&mut **framebuffer);
+                        }
+                    }
+                    kept.append(&mut process.cpu.parked_child_processes);
+                    continue;
+                }
+                // The requested birth could have been retired between the
+                // lookup and completion. Its CPU must remain owned and inert.
+                kept.push_back(process);
+                continue;
+            }
             if Self::parked_process_handle_exit_code(&process, kernel).is_some() {
                 continue;
             }
@@ -4904,9 +4944,8 @@ impl UnicornMips {
                 continue;
             }
             if Self::parked_process_has_request_only_signal(&process, kernel) {
-                // TerminateProcess has signaled the object, but this CPU still
-                // owns live execution. Duplicate pruning is not a completion
-                // witness and must not discard it either.
+                // A request without the CPU's checked original birth cannot
+                // authorize signaling or discarding this execution owner.
                 kept.push_back(process);
                 continue;
             }
@@ -4967,6 +5006,92 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn requested_parked_child_termination(
+        process: &ParkedProcess,
+        kernel: &CeKernel,
+    ) -> Option<(crate::ce::kernel::PendingProcessLaunch, u32)> {
+        let launch = process.cpu.owned_process_launch.as_ref()?;
+        let birth = launch.process_birth?;
+        if launch.process_id != process.process_state.process_id
+            || launch.thread_id != process.cpu.initial_thread_id
+            || kernel.handles.process_birth_key(launch.process_id) != Some(birth)
+        {
+            return None;
+        }
+        let code = kernel
+            .handles
+            .process_termination_requested_exit_code_by_birth(birth)?;
+        Some((launch.clone(), code))
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn requested_active_child_termination(
+        &self,
+        kernel: &CeKernel,
+    ) -> Option<(crate::ce::kernel::PendingProcessLaunch, u32)> {
+        let launch = self.owned_process_launch.as_ref()?;
+        let birth = launch.process_birth?;
+        if launch.process_id != kernel.current_process_id()
+            || launch.thread_id != self.initial_thread_id
+            || kernel.handles.process_birth_key(launch.process_id) != Some(birth)
+        {
+            return None;
+        }
+        let code = kernel
+            .handles
+            .process_termination_requested_exit_code_by_birth(birth)?;
+        Some((launch.clone(), code))
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn complete_requested_active_child_termination(
+        &mut self,
+        kernel: &mut CeKernel,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        let Some((launch, requested_code)) = self.requested_active_child_termination(kernel) else {
+            return false;
+        };
+        let completed = if let Some(framebuffer) = framebuffer.as_mut() {
+            kernel.mark_process_launch_exited_with_framebuffer(
+                &launch,
+                requested_code,
+                Some(&mut **framebuffer),
+            )
+        } else {
+            kernel.mark_process_launch_exited(&launch, requested_code)
+        };
+        if !completed {
+            return false;
+        }
+        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+            op: "CreateProcessTerminationCompleted",
+            application: launch.application.clone(),
+            command_line: launch.command_line.clone(),
+            path: Some(kernel.process_module_host_path().map_or_else(
+                || kernel.process_module_path().to_owned(),
+                |path| path.display().to_string(),
+            )),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_id: Some(launch.process_id),
+            thread_id: Some(launch.thread_id),
+            result: Some(requested_code),
+            error: None,
+            detail: Some("active_cpu_stop".to_owned()),
+        });
+        if let Some(modal_state) = self.take_terminal_blocked_modal(kernel) {
+            if let Some(framebuffer) = framebuffer.as_mut() {
+                modal_state.restore_framebuffer(&mut **framebuffer);
+            }
+        }
+        self.seal_completed_active_process_cpu();
+        self.remove_parked_process_tree_by_identity(launch.process_id, launch.thread_id);
+        let _ = self.switch_to_next_parked_process(kernel, false);
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn complete_active_process_thread_exit_with_framebuffer(
         &mut self,
         kernel: &mut CeKernel,
@@ -4979,10 +5104,18 @@ impl UnicornMips {
     fn complete_active_process_thread_exit(
         &mut self,
         kernel: &mut CeKernel,
-        framebuffer: Option<&mut dyn Framebuffer>,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
         if self.completed_active_process_exit {
             return false;
+        }
+        let completed_request = if let Some(framebuffer) = framebuffer.as_mut() {
+            self.complete_requested_active_child_termination(kernel, Some(&mut **framebuffer))
+        } else {
+            self.complete_requested_active_child_termination(kernel, None)
+        };
+        if completed_request {
+            return true;
         }
         if self.complete_saved_guest_thread_exit(kernel) {
             return false;
@@ -6749,6 +6882,36 @@ impl UnicornMips {
                 )),
             };
         }
+        if let Some(launch) = self.owned_process_launch.as_ref() {
+            let owned_birth = launch.process_birth;
+            if launch.process_id != kernel.current_process_id()
+                || launch.thread_id != self.initial_thread_id
+                || owned_birth.is_none()
+                || kernel.handles.process_birth_key(launch.process_id) != owned_birth
+                || !owned_birth.is_some_and(|birth| {
+                    kernel.handles.process_execution_live_by_birth(birth)
+                })
+            {
+                report.failure_operation = Some("stale owned process birth preflight");
+                return AttemptExecution {
+                    report,
+                    result: Err(Error::Backend(
+                        "child CPU does not own the selected live process birth".to_owned(),
+                    )),
+                };
+            }
+        }
+        let completed_request = if self.requested_active_child_termination(kernel).is_some() {
+            self.complete_requested_active_child_termination(kernel, Some(framebuffer))
+        } else {
+            false
+        };
+        if completed_request {
+            return AttemptExecution {
+                report,
+                result: Ok(()),
+            };
+        }
         if self.run_slice_generation != 0
             && self.saved_context.is_none()
             && (self.owned_process_launch.is_some() || self.has_active_blocked_state(kernel))
@@ -7103,6 +7266,15 @@ impl UnicornMips {
         // Capture once, before any import can create the first public slab.
         // A later selected-PID change must not retarget this native attempt.
         let native_owner_birth = kernel.current_process_birth_key();
+        let native_owned_launch_birth = self
+            .owned_process_launch
+            .as_ref()
+            .filter(|launch| {
+                launch.process_id == native_owner_pid
+                    && launch.thread_id == self.initial_thread_id
+            })
+            .and_then(|launch| launch.process_birth)
+            .filter(|birth| Some(*birth) == native_owner_birth);
         let system_slab_ranges = reserve_fixed_system_slabs(
             &self.memory,
             &self.mapped_blobs,
@@ -10754,6 +10926,44 @@ impl UnicornMips {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(err);
                     return;
                 }
+                if native_owned_launch_birth.is_some_and(|birth| {
+                    unsafe { &*kernel_ptr }
+                        .handles
+                        .process_termination_requested_exit_code_by_birth(birth)
+                        .is_some()
+                }) {
+                    // The real-handle request is not a process exit yet.
+                    // Stop this CPU at the import boundary, before its next
+                    // guest instruction; only the checked post-native tail
+                    // may synchronize state and signal the process object.
+                    let stop = (|| {
+                        if raw_caller_pc == 0 {
+                            return Err(Error::Backend(
+                                "self TerminateProcess has no nonzero import return PC".to_owned(),
+                            ));
+                        }
+                        memory
+                            .uc
+                            .reg_write(RegisterMIPS::V0, u64::from(result))
+                            .map_err(|err| Error::Backend(format!(
+                                "set self TerminateProcess result: {err:?}"
+                            )))?;
+                        memory
+                            .uc
+                            .reg_write(RegisterMIPS::PC, u64::from(raw_caller_pc))
+                            .map_err(|err| Error::Backend(format!(
+                                "set self TerminateProcess return PC: {err:?}"
+                            )))?;
+                        memory.uc.emu_stop().map_err(|err| {
+                            Error::Backend(format!("stop self TerminateProcess CPU: {err:?}"))
+                        })
+                    })();
+                    if let Err(err) = stop {
+                        *immediate_process_sync_error_hook.borrow_mut() = Some(err);
+                        let _ = memory.uc.emu_stop();
+                    }
+                    return;
+                }
                 #[cfg(feature = "trace")]
                 if inavi_slot_trace_enabled
                     && let (Some(trap), Some(watched_slot)) =
@@ -12498,6 +12708,22 @@ impl UnicornMips {
             let _ = self.clear_orphaned_direct_send_callouts(kernel);
             let _ = self.clear_orphaned_send_depths(kernel);
             self.refresh_finalized_wait_snapshot(kernel);
+            if self.requested_active_child_termination(kernel).is_some() {
+                // The native owner is now closed and its views/continuation
+                // have been synchronized. Complete before rotation can
+                // requeue this terminated CPU or select a different PID.
+                if !self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
+                    self.private_slab_attempt_poisoned = true;
+                    self.saved_context = None;
+                    report.failure_operation = Some("complete requested child termination");
+                    return Err(Error::Backend(
+                        "checked child termination request was rejected after native stop"
+                            .to_owned(),
+                    ));
+                }
+                *outcome_before_handoff = Some(NativeSliceOutcome::GuestProcessExit);
+                return Ok(());
+            }
             *outcome_before_handoff = Some(self.last_native_slice_outcome);
             self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
             self.prune_exited_and_active_processes_from_parked(kernel);
@@ -12548,6 +12774,18 @@ impl UnicornMips {
         let _ = self.clear_orphaned_direct_send_callouts(kernel);
         let _ = self.clear_orphaned_send_depths(kernel);
         self.refresh_finalized_wait_snapshot(kernel);
+        if self.requested_active_child_termination(kernel).is_some() {
+            if !self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
+                report.failure_operation = Some("complete requested child termination");
+                return Err(Error::Backend(
+                    "checked child termination request was rejected after native stop".to_owned(),
+                ));
+            }
+            *outcome_before_handoff = Some(NativeSliceOutcome::GuestProcessExit);
+            return Ok(());
+        }
         // Keep the outgoing CPU selected until its native lease has passed
         // checked hook teardown. A failed finish belongs to that CPU and must
         // not publish a handoff to an unrun child.

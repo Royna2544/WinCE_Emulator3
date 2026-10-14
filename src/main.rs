@@ -986,7 +986,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if active_process_exited(cpu) {
+        if active_process_exited(cpu, kernel) {
             if should_keep_remote_active_exit_alive(
                 args.remote_server.is_some(),
                 cpu.active_process_has_visible_receiver_work(kernel),
@@ -1402,11 +1402,15 @@ fn rotate_to_same_process_visible_receiver_thread(
         && cpu.rotate_to_active_visible_receiver_thread(kernel, &[])
 }
 
-fn active_process_exited(cpu: &UnicornMips) -> bool {
+fn active_process_exited(cpu: &UnicornMips, kernel: &CeKernel) -> bool {
     cpu.active_process_execution_completed()
-        || cpu
+        || (cpu
             .last_debug_snapshot()
             .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
+            && kernel.is_wait_ready(
+                wince_emulation_v3::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+                0,
+            ) == Some(true))
 }
 
 fn should_keep_remote_active_exit_alive(
@@ -1417,7 +1421,7 @@ fn should_keep_remote_active_exit_alive(
 }
 
 fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
-    if active_process_exited(cpu) {
+    if active_process_exited(cpu, kernel) {
         return cpu.switch_to_next_parked_child_process(kernel);
     }
     if !cpu.last_stop_is_guest_thread_return_stub() {
@@ -2535,7 +2539,7 @@ fn monitor_run_once(
         let wall_expired =
             wall_clock_limit_expired(limits.wall_clock_limit_ms, run_started.elapsed());
         if wall_expired
-            && !monitor_has_immediate_process_handoff(cpu)
+            && !monitor_has_immediate_process_handoff(cpu, kernel)
             && !cpu.has_ready_parked_send_unblock(kernel)
         {
             break;
@@ -2587,11 +2591,9 @@ fn monitor_continue_process_handoff(
         *continued += 1;
         return true;
     }
-    let active_process_exited = cpu
-        .last_debug_snapshot()
-        .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some());
+    let active_exit_completed = active_process_exited(cpu, kernel);
     let active_context_returned_without_continuation = cpu.last_stop_is_guest_thread_return_stub();
-    let process_handoff_switched = if active_process_exited {
+    let process_handoff_switched = if active_exit_completed {
         cpu.switch_to_next_parked_child_process(kernel)
     } else if active_context_returned_without_continuation {
         if cpu.preserve_current_on_process_handoff(kernel) {
@@ -2638,11 +2640,9 @@ fn monitor_continue_process_handoff(
     false
 }
 
-fn monitor_has_immediate_process_handoff(cpu: &UnicornMips) -> bool {
+fn monitor_has_immediate_process_handoff(cpu: &UnicornMips, kernel: &CeKernel) -> bool {
     cpu.last_stop_is_guest_thread_return_stub()
-        || cpu
-            .last_debug_snapshot()
-            .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
+        || active_process_exited(cpu, kernel)
         || cpu
             .last_debug_snapshot()
             .is_some_and(|snapshot| snapshot.cross_process_send_yield.is_some())
