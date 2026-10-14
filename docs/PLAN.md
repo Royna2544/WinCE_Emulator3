@@ -218,8 +218,11 @@ close only their named gates, not Stage 2 or live acceptance.
   One wait store now distinguishes exact birth from explicit legacy unknown;
   production publication is fallible, late failure is terminal, and exact
   exit/modal-HWND cleanup does not sweep a reused TID. A failed a01 attempt
-  remains preserved. Numeric GWE message hints, native continuation payloads,
-  wait-ID wrap/reuse and live modal behavior remain later gates
+  remains preserved. The separate bounded thread-directed GWE birth
+  [source gate](../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md)
+  passed release 1,952/0/9 and no-feature 1,417/0/3; remaining numeric GWE
+  producers, native continuation payloads, wait-ID wrap/reuse and live modal
+  behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
   remain unpinned, while synchronous finite inline timeout paths are outside
   the published-wait pin transaction. CE

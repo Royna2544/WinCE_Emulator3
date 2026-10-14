@@ -18,6 +18,16 @@ KernelTimer stores numeric TID/HWND/id, u32 due_ms, period and pending_message. 
 
 The native loop and [main](../../src/main.rs) mix host limits, instruction count servicing, timer polling, idle throttle and deferred work. Current ctl_get_timeout usage is a configured-duration observation, not the actual Query(TIMEOUT) flag. Honest RunOutcome migration is a prerequisite; a one-line query replacement can otherwise remove existing cleanup/rotation without defining its replacement.
 
+### Bounded HWND-less thread-timer birth gate (design before implementation)
+
+This Stage 3 ownership slice consumes the existing exact `ThreadBirthKey` contract (anchor A2) without changing guest-clock policy (A5). `TimerSystem` remains the sole timer store. Guest `SetTimer(NULL,...)` and `KillTimer(NULL,...)` must resolve the caller's live birth before timer, trace, queue, status or wake mutation; a captured stale A cannot rearm, overwrite or cancel B after numeric TID reuse. Native import preflight checks that captured register birth for only the `HWND == 0` forms before raw dispatch. The existing HWND timer path and explicit host/numeric test compatibility stay separate, never an implicit fallback for guest thread timers.
+
+A thread-timer key includes the exact birth and timer ID; each set/rearm has a checked timer-instance generation. At due delivery, revalidate the birth before trace or publication, post `WM_TIMER` to that birth's GWE FIFO with its unchanged ID/callback `lParam`, and wake only eligible waits of that birth. Exact exit retires only A's timers and already-queued A timer messages; B's timer and window timers survive. If a stale due candidate is encountered, discard it without publishing success or work to a replacement TID.
+
+The queued timer message needs host-only origin metadata containing birth and timer instance, without changing guest MSG bytes. Removing Get/Peek clears `pending_message` only for that exact still-live timer instance; non-removing Peek does not clear it. A synthetic `PostThreadMessage(WM_TIMER)` or an older same-ID timer message cannot clear B's coalescing flag. Preserve requested/auto IDs, callback behavior, current one-pending-message suppression, window teardown semantics and existing timer ordering. No timer minimum, wrap, overrun, pacing or CE LastError parity change is authorized by this slice; those questions remain O-C4 and Stage 6 work.
+
+The expected-red control creates A with a HWND-less timer, exits A, reuses its TID for B and proves that neither a pre-queued nor later-due A timer yields B `QS_TIMER`, `WM_TIMER`, trace, timestamp or wake. B's same-ID timer must still deliver. Additional controls reject late A Set/Kill without altering B, preserve callback and non-removing Peek/coalescing, and keep numeric HWND timers intact. Seal source before counted release/no-feature suites; a source pass does not establish live iNavi or full checkpoint relineage. Primary evidence is the current `TimerSystem`/Kernel/GWE/native route cited above; CE6 SetTimer delivery details not established by local evidence remain explicitly open.
+
 ## Target clock interfaces
 
 Proposed responsibilities, not final Rust signatures:
