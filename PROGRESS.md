@@ -4,6 +4,23 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Stage 3 prepared task-wait transaction
+
+- Native Thread/Process object-wait paths now prepare all ordered targets before
+  changing pending-callout or prior-wait state, then publish one scheduler wait.
+  The unpublished guard holds exact-birth pins and releases every acquired slot,
+  including duplicates, if preparation or handoff does not publish. Invalid or
+  stale targets return `WAIT_FAILED`/`ERROR_INVALID_HANDLE`; pin-count
+  exhaustion returns `WAIT_FAILED`/`ERROR_NOT_ENOUGH_MEMORY` without a host
+  panic, new wait, or loss of the old pending/blocked state. Focused kernel and
+  native failure/retry controls cover those boundaries. Non-object scheduler
+  subscriptions now use an explicit opaque, unpinned compatibility path, so
+  coincidentally equal socket/message tokens do not acquire task pins. This
+  bounded [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
+  passed 1,395/0/3 ignored no-feature tests, 1,883/0/9 ignored release tests,
+  and the no-trace compile check. It does not establish complete CE wait
+  semantics, full Stage 3, or live-app behavior.
+
 ## 2026-10-15 Stage 3 CE WaitAny raw-error source slice
 
 - The raw `WaitForMultipleObjects` wrapper now preserves the kernel's

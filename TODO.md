@@ -23,9 +23,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    parked-wait continuation. O-K3 execution and registered Thread/Process
    wait-target pins passed a bounded source gate
    ([receipt](evidence/stage3-pins-20261015/validation.receipt.md)); opaque
-   non-task wait slots remain compatibility-only and unpinned. The historical
-   E-8/E-11/E-26 reds remain the acceptance baseline, not a reason to treat
-   the design as parked. Full Stage 3 and live behavior remain unaccepted.
+   non-task wait slots remain compatibility-only and unpinned. The subsequent
+   prepared task-wait [source gate](evidence/stage3-waitprep-20261015/validation.receipt.md)
+   separates fallible target pinning from native pending/old-wait mutation and
+   scheduler publication; keep synchronous finite inline timeout paths and remaining native
+   wait payload lifetimes in scope before declaring caller wait parity. The
+   historical E-8/E-11/E-26 reds remain the acceptance baseline, not a reason
+   to treat the design as parked. Full Stage 3 and live behavior remain
+   unaccepted.
 
 ## Parallel lanes (never gate the queue above)
 

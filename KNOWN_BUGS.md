@@ -85,8 +85,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   The root process has no owned child-launch handoff for real-handle requests.
   Registered Thread/Process waits now pin exact task births through public
   alias closure and release acquired references on completion, timeout,
-  cancellation or failed preparation. Opaque non-task wait slots and duplicated
-  native wait payloads remain unpinned. Boot-main enumeration, aliasless
+  cancellation or failed preparation. The native prepared-wait path now
+  returns `WAIT_FAILED` with a CE last error on invalid/stale targets or pin
+  exhaustion before mutating a pending callout or prior blocked wait; focused
+  failure controls passed, but this is not caller wait/timeout parity. Opaque
+  non-task wait slots and duplicated native wait payloads remain unpinned;
+  synchronous finite inline timeout paths do not publish a scheduler wait and
+  are outside this pin transaction. Boot-main enumeration, aliasless
   Sleep-suspend, stale intra-slice TID continuation and unpinned-worker lineage
   (currently fails closed), generic parked-wait continuation, clone relineage,
   complete GMS reclamation and live-app behavior remain open. None of these
