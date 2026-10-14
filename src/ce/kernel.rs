@@ -8295,6 +8295,33 @@ impl CeKernel {
         message
     }
 
+    /// Consume the already-selected ready message without another timeout,
+    /// remote-input, or timer pump. COREDLL uses this after a non-removing
+    /// heap-payload preflight so it cannot prepare one LPARAM then remove a
+    /// different message during a second selector pass.
+    pub(crate) fn take_ready_peek_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let message =
+            self.gwe
+                .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, PeekFlags::REMOVE)?;
+        self.clear_timer_message_pending(thread_id, &message);
+        self.gwe
+            .record_thread_dispatched(thread_id, self.timers.tick_count());
+        self.record_message_op(
+            "peek_message_remove",
+            thread_id,
+            &message,
+            Some(1),
+            Some(format_filter_detail(hwnd, min_msg, max_msg)),
+        );
+        Some(message)
+    }
+
     pub fn post_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> bool {
         self.post_message_w_for_thread(0, hwnd, msg, wparam, lparam)
     }
