@@ -1404,6 +1404,9 @@ fn rotate_to_same_process_visible_receiver_thread(
 
 fn active_process_exited(cpu: &UnicornMips, kernel: &CeKernel) -> bool {
     cpu.active_process_execution_completed()
+        // An encoded kernel exit can target another process's real handle.
+        // Only the synchronous current-process pseudo lane makes that snapshot
+        // sufficient for a caller handoff; real child completion is CPU-owned.
         || (cpu
             .last_debug_snapshot()
             .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some())
