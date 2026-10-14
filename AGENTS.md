@@ -182,9 +182,11 @@ selected process.
 The bounded [native SMT gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
 checks eligible parked `BlockedSendMessageTimeout` publication, re-entry and
 resume against captured birth and the exact wait/send pair; stale cleanup
-abandons only the exact GWE send ID. An occupied native slot can still use the
-raw fallback, global timeout may appear as ready/success, and receiver-side
-`DestroyWindow` completed-result writes remain ungated.
+abandons only the exact GWE send ID. The bounded
+[occupied-slot gate](evidence/stage3-smt-occupied-20261015/validation.receipt.md)
+stops an eligible second sender with a backend error instead of raw fallback;
+it does not support concurrent A+B sends. Global timeout may appear as
+ready/success, and receiver-side `DestroyWindow` result writes remain ungated.
 Raw synchronous/nonblocking/overlapped serial paths, raw queue/socket and
 MsgWait fallbacks, aliasless Sleep-suspend, other SMT semantics, receiver-side
 delivery, and other parked-wait families remain open. These

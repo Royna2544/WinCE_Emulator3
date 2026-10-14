@@ -205,10 +205,13 @@ close only their named gates, not Stage 2 or live acceptance.
   exact scheduler/native/GWE transaction, abandoning only an exact stale GWE
   send ID. Captured HEAD `d5738222` plus the sealed patch was incorporated as
   the same source at final HEAD `7533b528`; clean full release a02 passed
-  1,929/0/9 ignored and no-feature a01 passed 1,402/0/3 ignored tests. An
-  occupied native slot can still fall back to raw SMT, global expiry may be
-  misreported as ready/success, and receiver-side `DestroyWindow` result
-  writes and broader GWE lifecycle remain separate.
+  1,929/0/9 ignored and no-feature a01 passed 1,402/0/3 ignored tests. The
+  subsequent bounded [occupied-slot gate](../evidence/stage3-smt-occupied-20261015/validation.receipt.md)
+  fails a second eligible sender with a backend error before raw dispatch;
+  release passed 1,932/0/9 and no-feature 1,402/0/3 on the sealed source.
+  This is not concurrent A+B support. Global expiry may be misreported as
+  ready/success, and receiver-side `DestroyWindow` result writes and broader
+  GWE lifecycle remain separate.
   The next proposed structural Stage 3 gate is the exact-birth wait-owner
   migration in [tasks-scheduler](subsystems/tasks-scheduler.md): one wait store,
   fallible publication and exact-birth cancellation, including the broad

@@ -27,9 +27,18 @@ locator. The wait record's TID must equal its birth's TID. Preserve global
 wait-ID order, duplicate frames, deadlines and independent mutable clones.
 Known-birth exit cancellation uses the exact birth bucket; an unknown legacy
 wait is never promoted to a later task that reuses its TID.
-Unknown records can be retired by exact wait ID or an explicitly legacy-only
-cleanup, not by canonical task exit; numeric message hints remain a separate
-unmigrated boundary below.
+Only explicit legacy fixture/compatibility entries may construct
+`LegacyUnknownTid`; production producers require a verified live birth and
+must not publish unknown. Before re-keying, audit every non-test compatibility
+caller and move all 20 native opaque registrations to one fallible production
+API that accepts a captured `ThreadBirthKey` and revalidates it at insertion.
+Popup menu, clipboard render and receiver-context SendMessage first need a
+native-birth preflight before they mutate state. An unavailable/stale birth or
+late publish rejection is a terminal backend failure, never a guest timeout or
+wait failure; already-created sends require exact-ID rollback. Unknown records
+retire by exact wait ID or explicit legacy cleanup, not canonical task exit;
+a no-leak control must end with an empty store. Shrink the compatibility lane
+through the 41-call legacy test migration. Numeric message hints remain open.
 
 `PreparedTaskWait` must revalidate its captured live birth immediately before
 publication; stale publication fails without a record or wake index and its
@@ -40,13 +49,17 @@ or a fabricated resume. Remove the broad numeric-TID sweep after modal
 process completion; exact process/thread exit and the modal wait ID already
 retire its owned waits. Modal-button GetMessage cancellation must select the
 requested dialog HWND (or exact modal wait ID), check its exact live birth,
-and match each cancelled wait's owner birth (unknown-only fixture compatibility). Opaque compatibility
-producers remain separately audited; this slice does not migrate their frames.
+and match each cancelled wait's owner birth (unknown-only fixture compatibility).
+Opaque producers migrate their scheduler registrations in this gate; their
+native continuation payloads remain a separate birth-authority boundary.
 
 Expected-red controls: prepared A→exit/TID-reused B→publish, unknown-A versus
-B exit/cancellation, exact A cancellation with duplicate pins/pending wake,
-modal completion and modal-button cancellation preserving B, and a native
-late-publication terminal error. Preserve order/clone/deadline controls.
+B exit then explicit no-leak cleanup, exact A cancellation with duplicate pins/pending wake,
+modal completion and modal-button cancellation preserving B, opaque producer
+birth rejection/rollback, and a native late-publication terminal error.
+Preserve order/clone/deadline controls. Production MessageBox currently
+returns synchronously on first entry, so modal fixture controls do not prove
+a live modal continuation.
 Numeric-TID message queues remain derived wake hints: B's edge can still queue
 A or unknown, though native consumption has separate exact-birth guards.
 Same-TID GetMessage wake/delivery needs a later GWE producer-birth migration;
