@@ -4806,6 +4806,12 @@ impl UnicornMips {
                         thread_handle,
                         process_id: process.process_state.process_id,
                         thread_id: process.thread_id,
+                        process_birth: process
+                            .process_handle
+                            .and_then(|handle| kernel.handles.process_birth_key_for_handle(handle)),
+                        primary_thread_birth: process
+                            .thread_handle
+                            .and_then(|handle| kernel.handles.thread_birth_key_for_handle(handle)),
                     };
                     let mut process_cpu = process.cpu;
                     if let Some(modal_state) = process_cpu.take_terminal_blocked_modal(kernel) {
@@ -5210,6 +5216,12 @@ impl UnicornMips {
                 thread_handle: record.thread_handle?,
                 process_id,
                 thread_id: record.thread_id?,
+                process_birth: kernel
+                    .handles
+                    .process_birth_key_for_handle(record.process_handle?),
+                primary_thread_birth: kernel
+                    .handles
+                    .thread_birth_key_for_handle(record.thread_handle?),
             })
         })
     }
@@ -5254,6 +5266,10 @@ impl UnicornMips {
                 thread_handle: record.thread_handle?,
                 process_id: record.process_id?,
                 thread_id: record.thread_id?,
+                process_birth: kernel.handles.process_birth_key_for_handle(process_handle),
+                primary_thread_birth: kernel
+                    .handles
+                    .thread_birth_key_for_handle(record.thread_handle?),
             })
         })
     }
