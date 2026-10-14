@@ -120,6 +120,7 @@ fn should_repair_native_deadline_jr_import_thunk(
 #[derive(Debug, Clone, Copy)]
 struct NativeMixedJrStopProbe {
     jr_pc: u32,
+    native_timeout_us: u64,
     pause_after_checked_stop: std::time::Duration,
     service_forced: bool,
     checked_stop_seen: bool,
@@ -10296,6 +10297,14 @@ impl UnicornMips {
             live_pump_native_timeout_us()
         } else {
             limits.wall_clock_limit_ms.saturating_mul(1_000)
+        };
+        #[cfg(test)]
+        let native_timeout_us = if limits.live_pump {
+            self.native_mixed_jr_stop_probe
+                .as_ref()
+                .map_or(native_timeout_us, |probe| probe.get().native_timeout_us)
+        } else {
+            native_timeout_us
         };
         let native_start_pid = native_owner_pid;
         // All pointer-mapped pages are fenced before the guest runs. Hook-time
@@ -56950,6 +56959,7 @@ mod unicorn_tests {
         assert!(active.active_should_yield_to_visible_parked_process(&kernel));
         let probe = Rc::new(std::cell::Cell::new(NativeMixedJrStopProbe {
             jr_pc,
+            native_timeout_us: 1_000_000,
             pause_after_checked_stop: std::time::Duration::from_millis(1_500),
             service_forced: false,
             checked_stop_seen: false,
@@ -56976,6 +56986,8 @@ mod unicorn_tests {
         assert_eq!(report.end_process_id(), Some(parent_state.process_id));
         assert_eq!(report.start_process_birth(), Some(parent_birth));
         assert_eq!(report.end_process_birth(), Some(parent_birth));
+        assert_eq!(report.start_thread_id(), Some(1));
+        assert_eq!(report.end_thread_id(), Some(1));
         assert_eq!(report.start_pc(), Some(jump_pc));
         assert_eq!(report.native_result(), &AttemptObservation::Value(()));
         assert_eq!(report.count_stop_query(), &AttemptObservation::Value(false));
@@ -56987,6 +56999,7 @@ mod unicorn_tests {
         assert_eq!(report.hook_stop_reason(), Some(NativeHookStopReason::VisibleParkedPeerYield));
         assert_eq!(report.requested_pc_stop(), None);
         assert_eq!(report.raw_stop_pc(), &AttemptObservation::Value(jr_pc));
+        assert_eq!(report.final_outcome(), super::NativeSliceOutcome::NativeDeadline);
         assert_eq!(kernel.current_process_id(), launch.process_id);
         let outgoing = active
             .parked_child_processes
@@ -57016,7 +57029,7 @@ mod unicorn_tests {
         assert!(active.rotate_to_next_parked_process(&mut kernel));
         assert_eq!(kernel.current_process_id(), parent_state.process_id);
         active.slice_end_rotation_pending = true;
-        active.run_until_import_trap_with_framebuffer_limits(
+        let resumed = active.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
@@ -57025,9 +57038,21 @@ mod unicorn_tests {
                 stop_pc: None,
                 live_pump: false,
             },
-        )?;
+        );
+        resumed.result?;
+        assert_eq!(resumed.report.start_process_id(), Some(parent_state.process_id));
+        let resumed_parent = if kernel.current_process_id() == parent_state.process_id {
+            &active
+        } else {
+            &active
+                .parked_child_processes
+                .iter()
+                .find(|process| process.process_state.process_id == parent_state.process_id)
+                .expect("resumed parent remains parked after handoff")
+                .cpu
+        };
         assert!(
-            active
+            resumed_parent
                 .last_debug_snapshot()
                 .expect("resumed parent snapshot")
                 .import_counts
