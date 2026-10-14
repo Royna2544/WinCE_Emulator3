@@ -44517,7 +44517,7 @@ mod guest_thread_stack_tests {
         let mut sender_regs = MipsGuestContext::zero();
         sender_regs.regs[16] = 0x1020_3040;
         let sender_return_pc = 0x0040_4321;
-        let sender_handle = 0x228;
+        let sender_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let wait_kind = BlockedWaitKind::SendMessage {
             send_id,
             receiver_thread_id: receiver_thread,
@@ -44612,7 +44612,7 @@ mod guest_thread_stack_tests {
             .expect("queued send");
         let wait_started_ms = kernel.timers.tick_count();
         let sender_return_pc = 0x0040_9876;
-        let sender_handle = 0x229;
+        let sender_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
         let wait_kind = BlockedWaitKind::SendMessage {
             send_id,
             receiver_thread_id: receiver_thread,
