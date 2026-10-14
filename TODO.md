@@ -31,7 +31,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   `ThreadStack` has no per-slot low-water state; do not add this speculatively.
 - Splash stall (app evidence lane): run the E-29 post-120 s trace as one
   instrumentation change plus one run using `NativeAttemptReport`
-  (`docs/evidence/e29-post120-native-attempt-trace-design.md`). Record the
+  (`docs/subsystems/native-attempt-observability.md`). Record the
   any/all mode of the TID 10 wait; wait id 833 needs a boot-forward trace. Each
   writable-mount live run needs fresh user approval and a verified backup
   (`scripts/backup_rw_mounts.ps1`).

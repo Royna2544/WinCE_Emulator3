@@ -4,6 +4,18 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Blocks any live run:** each committed `StablePrivatePage` (private
+  VirtualAlloc, shared views, heap, stack) is a separate 4-KiB host
+  allocation and a separate `mem_map_ptr` region on every fresh owner.
+  - At 8,192 committed pages (32 MiB), mapping took 78,689.550 ms. Of that,
+    `mem_map_ptr` was 78,523.985 ms and the Rust scans only 164.176 ms. The
+    post-map teardown took about 75 s more and is not instrumented
+    (`evidence/om2-native-map-profile-20261014/fresh-owner-8192-release-attempt-01.raw.log`).
+  - iNavi's live heap reached 31.5 MB in E-38, so each fresh-owner slice
+    would cost on the order of a minute.
+  - Planned fix: 1-MiB contiguous host chunks allocated when their first page
+    is committed. Map only maximal committed runs and pin per chunk. Keep
+    per-page identity and per-page budget charging.
 - Stage 8 (persistent owner, paused): E-32 crashed at 135.3 s and the 650
   trial at 129.1 s, both in TCG code emission, cause unattributed. E-33 fixed
   only the small-arena commit-tail arithmetic. Still open: VEH-handler versus
