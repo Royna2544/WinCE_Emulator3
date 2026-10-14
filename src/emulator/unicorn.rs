@@ -376,6 +376,35 @@ fn verified_native_register_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn verified_native_guest_thread_exit_birth(
+    kernel: &CeKernel,
+    current_thread: &NativeCurrentThread,
+    worker_thread_id: u32,
+    pending_birth: Option<crate::ce::object::ThreadBirthKey>,
+    running_handle: Option<u32>,
+    native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+) -> Option<crate::ce::object::ThreadBirthKey> {
+    let birth = verified_native_register_birth(kernel, current_thread, worker_thread_id)?;
+    if pending_birth.is_some_and(|expected| expected != birth)
+        || kernel.handles.thread_creation_owner_by_id(worker_thread_id) != native_owner_birth
+        || native_owner_birth.is_none()
+    {
+        return None;
+    }
+    // Closing the public CreateThread handle does not stop its worker. A live
+    // handle must still name this exact birth; a closed handle is harmless
+    // because the native register stamp and canonical live birth agree.
+    if running_handle.is_some_and(|handle| {
+        !CeKernel::is_current_thread_pseudo_handle(handle)
+            && kernel.handles.get(handle).is_ok()
+            && kernel.handles.thread_birth_key_for_handle(handle) != Some(birth)
+    }) {
+        return None;
+    }
+    Some(birth)
+}
+
+#[cfg(feature = "unicorn")]
 fn verified_get_message_wait_birth(
     kernel: &CeKernel,
     wait_id: u64,
@@ -1039,6 +1068,58 @@ fn pop_pending_guest_thread_return_for_thread(
     {
         return None;
     }
+    Some(pending_returns.remove(index))
+}
+
+#[cfg(feature = "unicorn")]
+fn verified_native_exit_pending_return(
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    kernel: &CeKernel,
+    current_thread: &NativeCurrentThread,
+    thread_id: u32,
+    native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+) -> Result<Option<PendingGuestThreadReturn>, String> {
+    let pending_returns = pending_returns.borrow();
+    if !pending_returns
+        .iter()
+        .any(|pending| pending.worker_thread_id == thread_id)
+    {
+        return Ok(None);
+    }
+    let birth = verified_native_guest_thread_exit_birth(
+        kernel,
+        current_thread,
+        thread_id,
+        None,
+        None,
+        native_owner_birth,
+    )
+    .ok_or_else(|| format!("unverified native worker birth for TID {thread_id}"))?;
+    let Some(pending) = pending_returns
+        .iter()
+        .rfind(|pending| pending.worker_thread_id == thread_id && pending.worker_birth == birth)
+    else {
+        // A retired birth's pending return does not own these live registers.
+        // The live worker may still have a separate running-thread fallback.
+        return Ok(None);
+    };
+    if let Some(reason) =
+        pending_guest_thread_return_stale_reason(kernel, std::slice::from_ref(pending), thread_id)
+    {
+        return Err(reason);
+    }
+    Ok(Some(pending.clone()))
+}
+
+#[cfg(feature = "unicorn")]
+fn pop_pending_guest_thread_return_for_birth(
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    birth: crate::ce::object::ThreadBirthKey,
+) -> Option<PendingGuestThreadReturn> {
+    let mut pending_returns = pending_returns.borrow_mut();
+    let index = pending_returns
+        .iter()
+        .rposition(|pending| pending.worker_birth == birth)?;
     Some(pending_returns.remove(index))
 }
 
@@ -10131,13 +10212,34 @@ impl UnicornMips {
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
                     let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                     let active_thread_id = current_thread_id_hook.get().0;
-                    if let Some(callout) = pop_pending_guest_thread_return_for_thread(
+                    let pending = match verified_native_exit_pending_return(
                         &pending_guest_thread_returns_hook,
                         unsafe { &*kernel_ptr },
+                        &current_thread_id_hook,
                         active_thread_id,
+                        native_owner_birth,
                     ) {
-                        unsafe { &mut *kernel_ptr }
-                            .mark_guest_thread_exited_by_id(callout.worker_thread_id, exit_code);
+                        Ok(pending) => pending,
+                        Err(reason) => {
+                            tracing::warn!(target: "ce.scheduler", active_thread_id, reason, "refused guest return stub pending return");
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                    };
+                    if let Some(expected) = pending {
+                        let Some(callout) = pop_pending_guest_thread_return_for_birth(
+                            &pending_guest_thread_returns_hook,
+                            expected.worker_birth,
+                        ) else {
+                            let _ = uc.emu_stop();
+                            return;
+                        };
+                        if !unsafe { &mut *kernel_ptr }
+                            .mark_guest_thread_exited_by_birth(callout.worker_birth, exit_code)
+                        {
+                            let _ = uc.emu_stop();
+                            return;
+                        }
                         release_guest_thread_stack_slot(
                             &guest_thread_stack_slots_hook,
                             callout.worker_thread_id,
@@ -10169,7 +10271,7 @@ impl UnicornMips {
                         return;
                     }
                     let Some((worker_thread_id, thread_handle)) =
-                        running_guest_thread_hook.borrow_mut().take()
+                        *running_guest_thread_hook.borrow()
                     else {
                         if try_wait_and_resume_blocked_wait(
                             unsafe { &mut *kernel_ptr },
@@ -10203,8 +10305,25 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    unsafe { &mut *kernel_ptr }
-                        .mark_guest_thread_exited_by_id(worker_thread_id, exit_code);
+                    let Some(worker_birth) = verified_native_guest_thread_exit_birth(
+                        unsafe { &*kernel_ptr },
+                        &current_thread_id_hook,
+                        worker_thread_id,
+                        None,
+                        Some(thread_handle),
+                        native_owner_birth,
+                    ) else {
+                        tracing::warn!(target: "ce.scheduler", worker_thread_id, thread_handle, "refused guest return stub with unverified running worker birth");
+                        let _ = uc.emu_stop();
+                        return;
+                    };
+                    if !unsafe { &mut *kernel_ptr }
+                        .mark_guest_thread_exited_by_birth(worker_birth, exit_code)
+                    {
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                    running_guest_thread_hook.borrow_mut().take();
                     release_guest_thread_stack_slot(
                         &guest_thread_stack_slots_hook,
                         worker_thread_id,
@@ -10797,6 +10916,7 @@ impl UnicornMips {
                         &args,
                         &pending_guest_thread_returns_hook,
                         &current_thread_id_hook,
+                        native_owner_birth,
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
                         &guest_thread_stack_slots_hook,
@@ -36273,6 +36393,7 @@ mod wait_scheduler_tests {
             &[0x22],
             &pending_returns,
             &current_thread_id,
+            Some(owner),
             &suspended_thread,
             &running_thread,
             &stack_slots,
@@ -39854,6 +39975,7 @@ fn try_exit_guest_thread_callout<D>(
     args: &[u32],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     stack_slots: &GuestThreadStackSlots,
@@ -39868,13 +39990,31 @@ fn try_exit_guest_thread_callout<D>(
 
     let exit_code = args.first().copied().unwrap_or(0);
     let exiting_thread_id = current_thread_id.get().0;
-    if stop_stale_pending_guest_thread_return(kernel, uc, pending_returns, exiting_thread_id) {
-        return true;
-    }
-    if let Some(callout) =
-        pop_pending_guest_thread_return_for_thread(pending_returns, kernel, exiting_thread_id)
-    {
-        kernel.mark_guest_thread_exited_by_id(callout.worker_thread_id, exit_code);
+    let pending = match verified_native_exit_pending_return(
+        pending_returns,
+        kernel,
+        current_thread_id,
+        exiting_thread_id,
+        native_owner_birth,
+    ) {
+        Ok(pending) => pending,
+        Err(reason) => {
+            tracing::warn!(target: "ce.scheduler", exiting_thread_id, reason, "refused guest ExitThread pending return");
+            let _ = uc.emu_stop();
+            return true;
+        }
+    };
+    if let Some(expected) = pending {
+        let Some(callout) =
+            pop_pending_guest_thread_return_for_birth(pending_returns, expected.worker_birth)
+        else {
+            let _ = uc.emu_stop();
+            return true;
+        };
+        if !kernel.mark_guest_thread_exited_by_birth(callout.worker_birth, exit_code) {
+            let _ = uc.emu_stop();
+            return true;
+        }
         release_guest_thread_stack_slot(stack_slots, callout.worker_thread_id);
         current_thread_id.set_verified(callout.creator_birth);
         let _ = update_user_kdata_current_ids(
@@ -39895,11 +40035,27 @@ fn try_exit_guest_thread_callout<D>(
         return true;
     }
 
-    let Some((worker_thread_id, _thread_handle)) = running_thread.borrow_mut().take() else {
+    let Some((worker_thread_id, thread_handle)) = *running_thread.borrow() else {
         let _ = uc.emu_stop();
         return true;
     };
-    kernel.mark_guest_thread_exited_by_id(worker_thread_id, exit_code);
+    let Some(worker_birth) = verified_native_guest_thread_exit_birth(
+        kernel,
+        current_thread_id,
+        worker_thread_id,
+        None,
+        Some(thread_handle),
+        native_owner_birth,
+    ) else {
+        tracing::warn!(target: "ce.scheduler", worker_thread_id, thread_handle, "refused guest ExitThread with unverified running worker birth");
+        let _ = uc.emu_stop();
+        return true;
+    };
+    if !kernel.mark_guest_thread_exited_by_birth(worker_birth, exit_code) {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    running_thread.borrow_mut().take();
     release_guest_thread_stack_slot(stack_slots, worker_thread_id);
     let Some(suspended) = suspended_thread.borrow_mut().take() else {
         let _ = uc.emu_stop();
