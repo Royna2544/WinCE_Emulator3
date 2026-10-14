@@ -4,8 +4,9 @@ use crate::ce::{
         read_guest_bytes, write_guest_bytes, write_guest_u16, write_guest_u32,
     },
     file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_ALWAYS, OPEN_EXISTING},
+    memory::HEAP_MAX_ALLOC,
     kernel::CeKernel,
-    thread::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
+    thread::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY},
 };
 
 const CRT_ACP_CODE_PAGE: u32 = 949;
@@ -537,7 +538,11 @@ pub(crate) fn malloc_raw<M: CoredllGuestMemory>(
 }
 
 pub(crate) fn msize_raw(kernel: &mut CeKernel, thread_id: u32, ptr: u32) -> u32 {
-    match kernel.memory.allocation(ptr) {
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    match kernel.memory.allocation(owner, ptr) {
         Some(allocation) if allocation.heap == kernel.memory.get_process_heap() => {
             kernel.threads.set_last_error(thread_id, 0);
             allocation.actual_size
@@ -565,8 +570,12 @@ pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
         free_raw(kernel, ptr);
         return 0;
     }
+    let Some(owner) = kernel.current_process_birth_key() else {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
     let heap = kernel.memory.get_process_heap();
-    match kernel.memory.prepare_heap_re_alloc(heap, 0, ptr, bytes) {
+    match kernel.memory.prepare_heap_re_alloc(owner, heap, 0, ptr, bytes) {
         Some(prepared) => {
             let result = apply_prepared_reallocation(kernel, memory, thread_id, prepared);
             if result != 0 {
@@ -575,9 +584,14 @@ pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
             result
         }
         None => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            let error = if bytes <= HEAP_MAX_ALLOC
+                && kernel.memory.heap_size(owner, heap, 0, ptr).is_some()
+            {
+                ERROR_NOT_ENOUGH_MEMORY
+            } else {
+                ERROR_INVALID_PARAMETER
+            };
+            kernel.threads.set_last_error(thread_id, error);
             0
         }
     }
@@ -585,9 +599,11 @@ pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
 
 pub(crate) fn free_raw(kernel: &mut CeKernel, ptr: u32) {
     if ptr != 0 {
-        let _ = kernel
-            .memory
-            .heap_free(kernel.memory.get_process_heap(), 0, ptr);
+        if let Some(owner) = kernel.current_process_birth_key() {
+            let _ = kernel
+                .memory
+                .heap_free(owner, kernel.memory.get_process_heap(), 0, ptr);
+        }
     }
 }
 

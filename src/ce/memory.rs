@@ -30,6 +30,7 @@ pub const MEM_RELEASE: u32 = 0x0000_8000;
 
 const POINTER_FLOOR: u32 = 0x0001_0000;
 const HEAP_PTR_BASE: u32 = 0x3000_0000;
+const HEAP_PTR_LIMIT: u32 = 0x4000_0000;
 const VIRTUAL_PTR_BASE: u32 = 0x5000_0000;
 const HEAP_ALIGN: u32 = 16;
 const VIRTUAL_ALIGN: u32 = 0x0001_0000;
@@ -42,7 +43,8 @@ pub struct MemorySystem {
     instance: Rc<()>,
     process_heap: u32,
     next_heap: u32,
-    next_heap_ptr: u32,
+    next_heap_ptr_by_owner: BTreeMap<ProcessBirthKey, u32>,
+    retired_heap_owners: BTreeSet<ProcessBirthKey>,
     // Owner high-water marks are authoritative metadata. The global floor is
     // retained until native virtual pages are mapped by owner rather than VA.
     next_virtual_ptr: u32,
@@ -51,7 +53,7 @@ pub struct MemorySystem {
     virtual_generation: u64,
     next_virtual_incarnation: u64,
     heaps: BTreeMap<u32, Heap>,
-    allocations: BTreeMap<u32, MemoryAllocation>,
+    allocations: BTreeMap<(ProcessBirthKey, u32), MemoryAllocation>,
     virtual_allocations: BTreeMap<(ProcessBirthKey, u32), VirtualAllocation>,
     // A prepared private reservation is not guest-visible. Keep its VA out of
     // reuse even if its token is dropped after a native mapping side effect.
@@ -70,6 +72,9 @@ pub struct MemorySystem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heap {
     pub handle: u32,
+    /// `None` is the shared numeric process-heap handle; its blocks remain
+    /// separately owned by each process birth.
+    pub owner: Option<ProcessBirthKey>,
     pub options: u32,
     pub initial_size: u32,
     pub maximum_size: u32,
@@ -78,6 +83,7 @@ pub struct Heap {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryAllocation {
+    pub owner: ProcessBirthKey,
     pub ptr: u32,
     pub heap: u32,
     pub requested_size: u32,
@@ -91,6 +97,7 @@ pub struct MemoryAllocation {
 #[derive(Debug)]
 #[must_use = "prepared allocations must be committed or aborted"]
 pub struct PreparedAllocation {
+    instance: Rc<()>,
     allocation: MemoryAllocation,
 }
 
@@ -120,6 +127,7 @@ pub struct Reallocation {
 #[derive(Debug)]
 #[must_use = "prepared reallocations must be committed or aborted"]
 pub struct PreparedReallocation {
+    instance: Rc<()>,
     result: Reallocation,
     original_allocation: MemoryAllocation,
     requested_size: u32,
@@ -630,7 +638,8 @@ impl Clone for MemorySystem {
             instance: Rc::new(()),
             process_heap: self.process_heap,
             next_heap: self.next_heap,
-            next_heap_ptr: self.next_heap_ptr,
+            next_heap_ptr_by_owner: self.next_heap_ptr_by_owner.clone(),
+            retired_heap_owners: self.retired_heap_owners.clone(),
             next_virtual_ptr: self.next_virtual_ptr,
             next_virtual_ptr_by_owner: self.next_virtual_ptr_by_owner.clone(),
             heap_generation: self.heap_generation,
@@ -666,6 +675,7 @@ impl Default for MemorySystem {
             PROCESS_HEAP_HANDLE,
             Heap {
                 handle: PROCESS_HEAP_HANDLE,
+                owner: None,
                 options: 0,
                 initial_size: 0,
                 maximum_size: 0,
@@ -676,7 +686,8 @@ impl Default for MemorySystem {
             instance: Rc::new(()),
             process_heap: PROCESS_HEAP_HANDLE,
             next_heap: PROCESS_HEAP_HANDLE + 0x1000,
-            next_heap_ptr: HEAP_PTR_BASE,
+            next_heap_ptr_by_owner: BTreeMap::new(),
+            retired_heap_owners: BTreeSet::new(),
             next_virtual_ptr: VIRTUAL_PTR_BASE,
             next_virtual_ptr_by_owner: BTreeMap::new(),
             heap_generation: 0,
@@ -704,12 +715,17 @@ impl MemorySystem {
     }
 
     /// Metadata-only convenience; raw APIs must map/initialize before commit.
-    pub fn local_alloc(&mut self, flags: u32, bytes: u32) -> Option<u32> {
-        let prepared = self.prepare_local_alloc(flags, bytes)?;
+    pub fn local_alloc(&mut self, owner: ProcessBirthKey, flags: u32, bytes: u32) -> Option<u32> {
+        let prepared = self.prepare_local_alloc(owner, flags, bytes)?;
         self.commit_allocation(prepared)
     }
 
-    pub fn prepare_local_alloc(&mut self, flags: u32, bytes: u32) -> Option<PreparedAllocation> {
+    pub fn prepare_local_alloc(
+        &mut self,
+        owner: ProcessBirthKey,
+        flags: u32,
+        bytes: u32,
+    ) -> Option<PreparedAllocation> {
         if flags & !LMEM_VALID_FLAGS != 0 {
             return None;
         }
@@ -718,12 +734,18 @@ impl MemorySystem {
         } else {
             0
         };
-        self.prepare_heap_alloc(self.process_heap, heap_flags, bytes)
+        self.prepare_heap_alloc(owner, self.process_heap, heap_flags, bytes)
     }
 
     /// Metadata-only local reallocation; it does not copy or zero guest bytes.
-    pub fn local_re_alloc(&mut self, ptr: u32, bytes: u32, flags: u32) -> Option<u32> {
-        self.local_re_alloc_detail(ptr, bytes, flags)
+    pub fn local_re_alloc(
+        &mut self,
+        owner: ProcessBirthKey,
+        ptr: u32,
+        bytes: u32,
+        flags: u32,
+    ) -> Option<u32> {
+        self.local_re_alloc_detail(owner, ptr, bytes, flags)
             .map(|result| result.ptr)
     }
 
@@ -732,16 +754,18 @@ impl MemorySystem {
     /// their copy and zero-fill operations succeed.
     pub fn local_re_alloc_detail(
         &mut self,
+        owner: ProcessBirthKey,
         ptr: u32,
         bytes: u32,
         flags: u32,
     ) -> Option<Reallocation> {
-        let prepared = self.prepare_local_re_alloc(ptr, bytes, flags)?;
+        let prepared = self.prepare_local_re_alloc(owner, ptr, bytes, flags)?;
         self.commit_reallocation(prepared)
     }
 
     pub fn prepare_local_re_alloc(
         &mut self,
+        owner: ProcessBirthKey,
         ptr: u32,
         bytes: u32,
         flags: u32,
@@ -754,24 +778,27 @@ impl MemorySystem {
         } else {
             0
         };
-        self.prepare_heap_re_alloc(self.process_heap, heap_flags, ptr, bytes)
+        self.prepare_heap_re_alloc(owner, self.process_heap, heap_flags, ptr, bytes)
     }
 
-    pub fn local_size(&self, ptr: u32) -> Option<u32> {
-        self.heap_size(self.process_heap, 0, ptr)
+    pub fn local_size(&self, owner: ProcessBirthKey, ptr: u32) -> Option<u32> {
+        self.heap_size(owner, self.process_heap, 0, ptr)
     }
 
-    pub fn local_free(&mut self, ptr: u32) -> bool {
-        ptr == 0 || self.heap_free(self.process_heap, 0, ptr)
+    pub fn local_free(&mut self, owner: ProcessBirthKey, ptr: u32) -> bool {
+        ptr == 0 || self.heap_free(owner, self.process_heap, 0, ptr)
     }
 
     pub fn heap_create(
         &mut self,
+        owner: ProcessBirthKey,
         options: u32,
         initial_size: u32,
         maximum_size: u32,
     ) -> Option<u32> {
-        if options & !(HEAP_NO_SERIALIZE | HEAP_SHARED_READONLY) != 0 {
+        if self.retired_heap_owners.contains(&owner)
+            || options & !(HEAP_NO_SERIALIZE | HEAP_SHARED_READONLY) != 0
+        {
             return None;
         }
         let handle = self.next_heap;
@@ -780,6 +807,7 @@ impl MemorySystem {
             handle,
             Heap {
                 handle,
+                owner: Some(owner),
                 options,
                 initial_size,
                 maximum_size,
@@ -790,44 +818,56 @@ impl MemorySystem {
         Some(handle)
     }
 
-    pub fn heap_destroy(&mut self, heap: u32) -> bool {
+    pub fn heap_destroy(&mut self, owner: ProcessBirthKey, heap: u32) -> bool {
         if heap == self.process_heap {
             return false;
         }
         let Some(item) = self.heaps.get_mut(&heap) else {
             return false;
         };
-        if item.destroyed {
+        if item.destroyed || item.owner != Some(owner) || self.retired_heap_owners.contains(&owner)
+        {
             return false;
         }
         item.destroyed = true;
         self.allocations
-            .retain(|_, allocation| allocation.heap != heap);
+            .retain(|(allocation_owner, _), allocation| {
+                *allocation_owner != owner || allocation.heap != heap
+            });
         self.bump_heap_generation();
         true
     }
 
     /// Metadata-only convenience; it does not map or zero guest bytes.
-    pub fn heap_alloc(&mut self, heap: u32, flags: u32, bytes: u32) -> Option<u32> {
-        let prepared = self.prepare_heap_alloc(heap, flags, bytes)?;
+    pub fn heap_alloc(
+        &mut self,
+        owner: ProcessBirthKey,
+        heap: u32,
+        flags: u32,
+        bytes: u32,
+    ) -> Option<u32> {
+        let prepared = self.prepare_heap_alloc(owner, heap, flags, bytes)?;
         self.commit_allocation(prepared)
     }
 
     pub fn prepare_heap_alloc(
         &mut self,
+        owner: ProcessBirthKey,
         heap: u32,
         flags: u32,
         bytes: u32,
     ) -> Option<PreparedAllocation> {
         if flags & !(HEAP_GENERATE_EXCEPTIONS | HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY) != 0
-            || !self.is_live_heap(heap)
+            || !self.is_live_heap(owner, heap)
         {
             return None;
         }
         let actual_size = sanitize_size(bytes)?;
-        let ptr = self.allocate_heap_ptr(actual_size)?;
+        let ptr = self.allocate_heap_ptr(owner, actual_size)?;
         Some(PreparedAllocation {
+            instance: Rc::clone(&self.instance),
             allocation: MemoryAllocation {
+                owner,
                 ptr,
                 heap,
                 requested_size: bytes,
@@ -839,11 +879,15 @@ impl MemorySystem {
 
     pub fn commit_allocation(&mut self, prepared: PreparedAllocation) -> Option<u32> {
         let allocation = prepared.allocation;
-        if !self.is_live_heap(allocation.heap) || self.allocations.contains_key(&allocation.ptr) {
+        let key = (allocation.owner, allocation.ptr);
+        if !Rc::ptr_eq(&self.instance, &prepared.instance)
+            || !self.is_live_heap(allocation.owner, allocation.heap)
+            || self.allocations.contains_key(&key)
+        {
             return None;
         }
         let ptr = allocation.ptr;
-        self.allocations.insert(ptr, allocation);
+        self.allocations.insert(key, allocation);
         self.bump_heap_generation();
         Some(ptr)
     }
@@ -852,8 +896,15 @@ impl MemorySystem {
     pub fn abort_allocation(&mut self, _prepared: PreparedAllocation) {}
 
     /// Metadata-only heap reallocation; it does not copy or zero guest bytes.
-    pub fn heap_re_alloc(&mut self, heap: u32, flags: u32, ptr: u32, bytes: u32) -> Option<u32> {
-        self.heap_re_alloc_detail(heap, flags, ptr, bytes)
+    pub fn heap_re_alloc(
+        &mut self,
+        owner: ProcessBirthKey,
+        heap: u32,
+        flags: u32,
+        ptr: u32,
+        bytes: u32,
+    ) -> Option<u32> {
+        self.heap_re_alloc_detail(owner, heap, flags, ptr, bytes)
             .map(|result| result.ptr)
     }
 
@@ -862,17 +913,19 @@ impl MemorySystem {
     /// their copy and zero-fill operations succeed.
     pub fn heap_re_alloc_detail(
         &mut self,
+        owner: ProcessBirthKey,
         heap: u32,
         flags: u32,
         ptr: u32,
         bytes: u32,
     ) -> Option<Reallocation> {
-        let prepared = self.prepare_heap_re_alloc(heap, flags, ptr, bytes)?;
+        let prepared = self.prepare_heap_re_alloc(owner, heap, flags, ptr, bytes)?;
         self.commit_reallocation(prepared)
     }
 
     pub fn prepare_heap_re_alloc(
         &mut self,
+        owner: ProcessBirthKey,
         heap: u32,
         flags: u32,
         ptr: u32,
@@ -884,18 +937,19 @@ impl MemorySystem {
                 | HEAP_REALLOC_IN_PLACE_ONLY
                 | HEAP_ZERO_MEMORY)
             != 0
-            || !self.is_live_heap(heap)
+            || !self.is_live_heap(owner, heap)
         {
             return None;
         }
         let actual_size = sanitize_size(bytes)?;
-        let allocation = self.allocations.get(&ptr)?.clone();
+        let allocation = self.allocations.get(&(owner, ptr))?.clone();
         if allocation.heap != heap || ptr < POINTER_FLOOR {
             return None;
         }
         let old_actual_size = allocation.actual_size;
         if actual_size <= allocation.actual_size {
             return Some(PreparedReallocation {
+                instance: Rc::clone(&self.instance),
                 result: Reallocation {
                     ptr,
                     old_ptr: ptr,
@@ -911,8 +965,9 @@ impl MemorySystem {
         if flags & HEAP_REALLOC_IN_PLACE_ONLY != 0 {
             return None;
         }
-        let new_ptr = self.allocate_heap_ptr(actual_size)?;
+        let new_ptr = self.allocate_heap_ptr(owner, actual_size)?;
         Some(PreparedReallocation {
+            instance: Rc::clone(&self.instance),
             result: Reallocation {
                 ptr: new_ptr,
                 old_ptr: ptr,
@@ -927,10 +982,13 @@ impl MemorySystem {
     }
 
     pub fn commit_reallocation(&mut self, prepared: PreparedReallocation) -> Option<Reallocation> {
+        let owner = prepared.original_allocation.owner;
         let old_ptr = prepared.result.old_ptr;
         let destination_conflict =
-            prepared.result.moved && self.allocations.contains_key(&prepared.result.ptr);
-        if self.allocations.get(&old_ptr) != Some(&prepared.original_allocation)
+            prepared.result.moved && self.allocations.contains_key(&(owner, prepared.result.ptr));
+        if !Rc::ptr_eq(&self.instance, &prepared.instance)
+            || !self.is_live_heap(owner, prepared.original_allocation.heap)
+            || self.allocations.get(&(owner, old_ptr)) != Some(&prepared.original_allocation)
             || destination_conflict
         {
             return None;
@@ -938,10 +996,11 @@ impl MemorySystem {
 
         let result = prepared.result.clone();
         if result.moved {
-            self.allocations.remove(&old_ptr);
+            self.allocations.remove(&(owner, old_ptr));
             self.allocations.insert(
-                result.ptr,
+                (owner, result.ptr),
                 MemoryAllocation {
+                    owner,
                     ptr: result.ptr,
                     heap: prepared.original_allocation.heap,
                     requested_size: prepared.requested_size,
@@ -950,7 +1009,7 @@ impl MemorySystem {
                 },
             );
         } else {
-            let allocation = self.allocations.get_mut(&old_ptr)?;
+            let allocation = self.allocations.get_mut(&(owner, old_ptr))?;
             allocation.requested_size = prepared.requested_size;
             allocation.actual_size = result.new_actual_size;
             allocation.zeroed |= prepared.zero_requested;
@@ -962,34 +1021,48 @@ impl MemorySystem {
     /// Discard uncommitted metadata without reusing a possibly written address.
     pub fn abort_reallocation(&mut self, _prepared: PreparedReallocation) {}
 
-    pub fn heap_free(&mut self, heap: u32, flags: u32, ptr: u32) -> bool {
-        if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(heap) {
+    pub fn heap_free(&mut self, owner: ProcessBirthKey, heap: u32, flags: u32, ptr: u32) -> bool {
+        if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(owner, heap)
+        {
             return false;
         }
-        let Some(allocation) = self.allocations.remove(&ptr) else {
+        let key = (owner, ptr);
+        let Some(allocation) = self.allocations.get(&key) else {
             return false;
         };
         if allocation.heap != heap {
-            self.allocations.insert(ptr, allocation);
             return false;
         }
+        self.allocations.remove(&key);
         self.bump_heap_generation();
         true
     }
 
-    pub fn heap_size(&self, heap: u32, flags: u32, ptr: u32) -> Option<u32> {
-        if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(heap) {
+    pub fn heap_size(
+        &self,
+        owner: ProcessBirthKey,
+        heap: u32,
+        flags: u32,
+        ptr: u32,
+    ) -> Option<u32> {
+        if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(owner, heap)
+        {
             return None;
         }
-        let allocation = self.allocations.get(&ptr)?;
+        let allocation = self.allocations.get(&(owner, ptr))?;
         (allocation.heap == heap).then_some(allocation.actual_size)
     }
 
-    pub fn heap_validate(&self, heap: u32, flags: u32, ptr: u32) -> bool {
-        if flags & !HEAP_NO_SERIALIZE != 0 || !self.is_live_heap(heap) {
+    pub fn heap_validate(&self, owner: ProcessBirthKey, heap: u32, flags: u32, ptr: u32) -> bool {
+        if flags & !HEAP_NO_SERIALIZE != 0 || !self.is_live_heap(owner, heap) {
             return false;
         }
-        ptr == 0 || (ptr >= POINTER_FLOOR && self.allocations.contains_key(&ptr))
+        ptr == 0
+            || (ptr >= POINTER_FLOOR
+                && self
+                    .allocations
+                    .get(&(owner, ptr))
+                    .is_some_and(|allocation| allocation.heap == heap))
     }
 
     /// Publish a fixed process heap or stack reservation in the same
@@ -2284,16 +2357,32 @@ impl MemorySystem {
         }
     }
 
-    pub fn allocation(&self, ptr: u32) -> Option<&MemoryAllocation> {
-        self.allocations.get(&ptr)
+    pub fn allocation(&self, owner: ProcessBirthKey, ptr: u32) -> Option<&MemoryAllocation> {
+        self.allocations.get(&(owner, ptr))
     }
 
     pub fn allocations(&self) -> impl Iterator<Item = &MemoryAllocation> {
         self.allocations.values()
     }
 
+    pub fn allocations_for(
+        &self,
+        owner: ProcessBirthKey,
+    ) -> impl Iterator<Item = &MemoryAllocation> {
+        self.allocations
+            .range((owner, u32::MIN)..=(owner, u32::MAX))
+            .map(|(_, allocation)| allocation)
+    }
+
     pub fn heaps(&self) -> impl Iterator<Item = &Heap> {
         self.heaps.values().filter(|heap| !heap.destroyed)
+    }
+
+    pub fn heaps_for(&self, owner: ProcessBirthKey) -> impl Iterator<Item = &Heap> {
+        self.heaps().filter(move |heap| {
+            !self.retired_heap_owners.contains(&owner)
+                && (heap.handle == self.process_heap || heap.owner == Some(owner))
+        })
     }
 
     pub fn virtual_allocation(
@@ -2582,8 +2671,29 @@ impl MemorySystem {
                 .is_some_and(|page| Rc::ptr_eq(page, &pin.page))
     }
 
-    pub fn heap_high_water_mark(&self) -> u32 {
-        self.next_heap_ptr
+    pub fn heap_high_water_mark(&self, owner: ProcessBirthKey) -> u32 {
+        self.next_heap_ptr_by_owner
+            .get(&owner)
+            .copied()
+            .unwrap_or(HEAP_PTR_BASE)
+    }
+
+    /// Retire only this process birth's heap metadata after its execution
+    /// lifetime ends. A stale prepared token cannot republish into this birth.
+    pub fn retire_heap_state_for_owner(&mut self, owner: ProcessBirthKey) -> usize {
+        let before = self.allocations.len();
+        self.allocations
+            .retain(|(allocation_owner, _), _| *allocation_owner != owner);
+        let removed = before - self.allocations.len();
+        let cursor_removed = self.next_heap_ptr_by_owner.remove(&owner).is_some();
+        let before_heaps = self.heaps.len();
+        self.heaps.retain(|_, heap| heap.owner != Some(owner));
+        let heap_removed = before_heaps != self.heaps.len();
+        let newly_retired = self.retired_heap_owners.insert(owner);
+        if removed != 0 || cursor_removed || heap_removed || newly_retired {
+            self.bump_heap_generation();
+        }
+        removed
     }
 
     pub fn heap_generation(&self) -> u64 {
@@ -2638,7 +2748,7 @@ impl MemorySystem {
         let Some(end) = ptr.checked_add(size) else {
             return false;
         };
-        self.allocations.values().any(|allocation| {
+        self.allocations_for(owner).any(|allocation| {
             let Some(allocation_end) = allocation.ptr.checked_add(allocation.actual_size) else {
                 return false;
             };
@@ -2676,9 +2786,9 @@ impl MemorySystem {
         })
     }
 
-    pub fn heap_range_status(&self, ptr: u32, size: u32) -> Option<bool> {
+    pub fn heap_range_status(&self, owner: ProcessBirthKey, ptr: u32, size: u32) -> Option<bool> {
         let end = ptr.checked_add(size)?;
-        self.allocations.values().find_map(|allocation| {
+        self.allocations_for(owner).find_map(|allocation| {
             let actual_end = allocation.ptr.checked_add(allocation.actual_size)?;
             if ptr < allocation.ptr || ptr >= actual_end {
                 return None;
@@ -2690,41 +2800,46 @@ impl MemorySystem {
         })
     }
 
-    fn is_live_heap(&self, heap: u32) -> bool {
-        self.heaps.get(&heap).is_some_and(|item| !item.destroyed)
+    fn is_live_heap(&self, owner: ProcessBirthKey, heap: u32) -> bool {
+        !self.retired_heap_owners.contains(&owner)
+            && self.heaps.get(&heap).is_some_and(|item| {
+                !item.destroyed && (heap == self.process_heap || item.owner == Some(owner))
+            })
     }
 
-    fn allocate_heap_ptr(&mut self, size: u32) -> Option<u32> {
+    fn allocate_heap_ptr(&mut self, owner: ProcessBirthKey, size: u32) -> Option<u32> {
         let step = align_up(size.max(1), HEAP_ALIGN)?;
-        let mut ptr = self.next_heap_ptr;
+        let mut ptr = self.heap_high_water_mark(owner);
         loop {
             let next = ptr.checked_add(step)?;
-            // Heap pointers are still globally addressed. Skip even another
-            // owner's private reservation instead of assigning a future heap
-            // block onto a VM extent that was empty when it was reserved.
+            if next > HEAP_PTR_LIMIT {
+                return None;
+            }
+            // Only this birth's private VM reservations and globally mapped
+            // legacy bytes can conflict with its fixed heap window.
             let collision_end = self
                 .virtual_allocations
                 .values()
                 .filter(|allocation| {
                     allocation.source != VirtualAllocationSource::ProcessHeapArena
+                        && (allocation.owner == owner
+                            || allocation.backing == VirtualAllocationBacking::LegacySeed)
                         && ranges_overlap(ptr, step, allocation.base, allocation.size)
                 })
                 .filter_map(|allocation| allocation.base.checked_add(allocation.size))
-                .chain(
-                    self.pending_private_holes
-                        .iter()
-                        .filter_map(|((_, base), size)| {
-                            ranges_overlap(ptr, step, *base, *size)
-                                .then(|| base.checked_add(*size))
-                                .flatten()
-                        }),
-                )
+                .chain(self.pending_private_holes.iter().filter_map(
+                    |((hole_owner, base), size)| {
+                        (*hole_owner == owner && ranges_overlap(ptr, step, *base, *size))
+                            .then(|| base.checked_add(*size))
+                            .flatten()
+                    },
+                ))
                 .max();
             if let Some(end) = collision_end {
                 ptr = align_up(end, HEAP_ALIGN)?;
                 continue;
             }
-            self.next_heap_ptr = next;
+            self.next_heap_ptr_by_owner.insert(owner, next);
             return Some(ptr);
         }
     }
@@ -2756,10 +2871,10 @@ impl MemorySystem {
                 *other_owner == owner && ranges_overlap(base, size, *other_base, *other_size)
             })
             || self
-                .next_heap_ptr
+                .heap_high_water_mark(owner)
                 .checked_sub(HEAP_PTR_BASE)
                 .is_some_and(|consumed| ranges_overlap(base, size, HEAP_PTR_BASE, consumed))
-            || self.allocations.values().any(|allocation| {
+            || self.allocations_for(owner).any(|allocation| {
                 ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
             })
     }
@@ -2853,6 +2968,15 @@ mod tests {
         handles.process_birth_key(1).expect("boot birth")
     }
 
+    fn two_owners() -> (ProcessBirthKey, ProcessBirthKey) {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let parent = handles.process_birth_key(1).expect("boot birth");
+        let _child_handle = handles.create_process(2);
+        let child = handles.process_birth_key(2).expect("child birth");
+        (parent, child)
+    }
+
     fn committed_private_slab(
         memory: &mut MemorySystem,
         owner: ProcessBirthKey,
@@ -2877,106 +3001,129 @@ mod tests {
     #[test]
     fn prepared_allocation_is_not_live_until_commit_and_abort_keeps_hole() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         let generation = memory.heap_generation();
-        let prepared = memory.prepare_local_alloc(LMEM_ZEROINIT, 0).unwrap();
+        let prepared = memory.prepare_local_alloc(owner, LMEM_ZEROINIT, 0).unwrap();
         let ptr = prepared.allocation().ptr;
         assert_eq!(prepared.allocation().actual_size, 1);
         assert_eq!(prepared.allocation().requested_size, 0);
         assert!(prepared.allocation().zeroed);
-        assert!(memory.allocation(ptr).is_none());
+        assert!(memory.allocation(owner, ptr).is_none());
         assert_eq!(memory.heap_generation(), generation);
         memory.abort_allocation(prepared);
-        assert_eq!(memory.heap_high_water_mark(), ptr + HEAP_ALIGN);
+        assert_eq!(memory.heap_high_water_mark(owner), ptr + HEAP_ALIGN);
         let prepared = memory
-            .prepare_heap_alloc(PROCESS_HEAP_HANDLE, 0, 9)
+            .prepare_heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 9)
             .unwrap();
         let next = prepared.allocation().ptr;
         assert_eq!(next, ptr + HEAP_ALIGN);
         assert_eq!(memory.commit_allocation(prepared), Some(next));
-        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, next), Some(9));
+        assert_eq!(
+            memory.heap_size(owner, PROCESS_HEAP_HANDLE, 0, next),
+            Some(9)
+        );
         assert_eq!(memory.heap_generation(), generation + 1);
     }
 
     #[test]
     fn prepared_allocation_commit_rejects_destroyed_heap_without_reuse() {
         let mut memory = MemorySystem::default();
-        let heap = memory.heap_create(0, 0, 0).unwrap();
+        let owner = boot_owner();
+        let heap = memory.heap_create(owner, 0, 0, 0).unwrap();
         let prepared = memory
-            .prepare_heap_alloc(heap, HEAP_ZERO_MEMORY, 32)
+            .prepare_heap_alloc(owner, heap, HEAP_ZERO_MEMORY, 32)
             .unwrap();
         let ptr = prepared.allocation().ptr;
-        assert!(memory.heap_destroy(heap));
+        assert!(memory.heap_destroy(owner, heap));
         assert!(memory.commit_allocation(prepared).is_none());
-        assert!(memory.allocation(ptr).is_none());
-        assert_eq!(memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 1), Some(ptr + 32));
+        assert!(memory.allocation(owner, ptr).is_none());
+        assert_eq!(
+            memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 1),
+            Some(ptr + 32)
+        );
     }
 
     #[test]
     fn local_alloc_size_and_free_follow_ce_return_shape() {
         let mut memory = MemorySystem::default();
-        let ptr = memory.local_alloc(LMEM_ZEROINIT, 0).unwrap();
+        let owner = boot_owner();
+        let ptr = memory.local_alloc(owner, LMEM_ZEROINIT, 0).unwrap();
 
         assert!(ptr >= POINTER_FLOOR);
-        assert_eq!(memory.local_size(ptr), Some(1));
-        assert!(memory.allocation(ptr).unwrap().zeroed);
-        assert!(memory.local_free(ptr));
-        assert_eq!(memory.local_size(ptr), None);
-        assert!(memory.local_free(0));
+        assert_eq!(memory.local_size(owner, ptr), Some(1));
+        assert!(memory.allocation(owner, ptr).unwrap().zeroed);
+        assert!(memory.local_free(owner, ptr));
+        assert_eq!(memory.local_size(owner, ptr), None);
+        assert!(memory.local_free(owner, 0));
     }
 
     #[test]
     fn heap_alloc_requires_live_heap_and_valid_flags() {
         let mut memory = MemorySystem::default();
-        let heap = memory.heap_create(HEAP_NO_SERIALIZE, 0x1000, 0).unwrap();
-        let ptr = memory.heap_alloc(heap, HEAP_ZERO_MEMORY, 32).unwrap();
+        let owner = boot_owner();
+        let heap = memory
+            .heap_create(owner, HEAP_NO_SERIALIZE, 0x1000, 0)
+            .unwrap();
+        let ptr = memory
+            .heap_alloc(owner, heap, HEAP_ZERO_MEMORY, 32)
+            .unwrap();
 
-        assert_eq!(memory.heap_size(heap, 0, ptr), Some(32));
-        assert!(memory.heap_validate(heap, 0, ptr));
-        assert!(!memory.heap_free(heap, HEAP_GENERATE_EXCEPTIONS, ptr));
-        assert!(memory.heap_free(heap, 0, ptr));
-        assert!(memory.heap_destroy(heap));
-        assert!(memory.heap_alloc(heap, 0, 8).is_none());
+        assert_eq!(memory.heap_size(owner, heap, 0, ptr), Some(32));
+        assert!(memory.heap_validate(owner, heap, 0, ptr));
+        assert!(!memory.heap_free(owner, heap, HEAP_GENERATE_EXCEPTIONS, ptr));
+        assert!(memory.heap_free(owner, heap, 0, ptr));
+        assert!(memory.heap_destroy(owner, heap));
+        assert!(memory.heap_alloc(owner, heap, 0, 8).is_none());
     }
 
     #[test]
     fn realloc_growth_moves_to_avoid_overlapping_later_allocations() {
         let mut memory = MemorySystem::default();
-        let first = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
-        let second = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let owner = boot_owner();
+        let first = memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .unwrap();
+        let second = memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .unwrap();
 
         let grown = memory
-            .heap_re_alloc_detail(PROCESS_HEAP_HANDLE, 0, first, 64)
+            .heap_re_alloc_detail(owner, PROCESS_HEAP_HANDLE, 0, first, 64)
             .unwrap();
 
         assert!(grown.moved);
         assert_ne!(grown.ptr, first);
         assert!(grown.ptr >= second + 16);
         assert_eq!(
-            memory.heap_size(PROCESS_HEAP_HANDLE, 0, grown.ptr),
+            memory.heap_size(owner, PROCESS_HEAP_HANDLE, 0, grown.ptr),
             Some(64)
         );
-        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, first), None);
-        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, second), Some(16));
+        assert_eq!(memory.heap_size(owner, PROCESS_HEAP_HANDLE, 0, first), None);
+        assert_eq!(
+            memory.heap_size(owner, PROCESS_HEAP_HANDLE, 0, second),
+            Some(16)
+        );
     }
 
     #[test]
     fn aborted_moved_reallocation_retains_its_reserved_address_hole() {
         let mut memory = MemorySystem::default();
-        let source = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 5).unwrap();
-        let original = memory.allocation(source).unwrap().clone();
+        let owner = boot_owner();
+        let source = memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 5).unwrap();
+        let original = memory.allocation(owner, source).unwrap().clone();
         let prepared = memory
-            .prepare_heap_re_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, source, 32)
+            .prepare_heap_re_alloc(owner, PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, source, 32)
             .unwrap();
         let destination = prepared.result().ptr;
-        let reserved_end = memory.heap_high_water_mark();
+        let reserved_end = memory.heap_high_water_mark(owner);
 
         memory.abort_reallocation(prepared);
 
-        assert_eq!(memory.allocation(source), Some(&original));
-        assert!(memory.allocation(destination).is_none());
-        assert_eq!(memory.heap_high_water_mark(), reserved_end);
+        assert_eq!(memory.allocation(owner, source), Some(&original));
+        assert!(memory.allocation(owner, destination).is_none());
+        assert_eq!(memory.heap_high_water_mark(owner), reserved_end);
         assert_eq!(
-            memory.heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, 32),
+            memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, 32),
             Some(reserved_end)
         );
     }
@@ -2984,30 +3131,232 @@ mod tests {
     #[test]
     fn conflicting_moved_reallocation_does_not_reuse_reserved_destination() {
         let mut memory = MemorySystem::default();
-        let source = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 5).unwrap();
+        let owner = boot_owner();
+        let source = memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 5).unwrap();
         let prepared = memory
-            .prepare_heap_re_alloc(PROCESS_HEAP_HANDLE, 0, source, 32)
+            .prepare_heap_re_alloc(owner, PROCESS_HEAP_HANDLE, 0, source, 32)
             .unwrap();
         let destination = prepared.result().ptr;
-        let reserved_end = memory.heap_high_water_mark();
-        assert!(memory.heap_free(PROCESS_HEAP_HANDLE, 0, source));
+        let reserved_end = memory.heap_high_water_mark(owner);
+        assert!(memory.heap_free(owner, PROCESS_HEAP_HANDLE, 0, source));
 
         assert!(memory.commit_reallocation(prepared).is_none());
 
-        assert!(memory.allocation(source).is_none());
-        assert!(memory.allocation(destination).is_none());
-        assert_eq!(memory.heap_high_water_mark(), reserved_end);
+        assert!(memory.allocation(owner, source).is_none());
+        assert!(memory.allocation(owner, destination).is_none());
+        assert_eq!(memory.heap_high_water_mark(owner), reserved_end);
         assert_eq!(
-            memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 32),
+            memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 32),
             Some(reserved_end)
         );
+    }
+
+    #[test]
+    fn heap_allocations_at_same_va_are_birth_qualified_and_charge_only_own_growth() {
+        let (parent, child) = two_owners();
+        let mut memory = MemorySystem::default();
+        let arena_size = HEAP_PTR_LIMIT - HEAP_PTR_BASE;
+        memory.set_private_commit_limit_bytes(3 * STABLE_PRIVATE_PAGE_SIZE as u64);
+        for owner in [parent, child] {
+            assert_eq!(
+                memory.reserve_fixed_private_range(
+                    owner,
+                    VirtualAllocationSource::ProcessHeapArena,
+                    HEAP_PTR_BASE,
+                    arena_size,
+                    4,
+                ),
+                Some(HEAP_PTR_BASE)
+            );
+        }
+
+        let parent_ptr = memory
+            .heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 0x2000)
+            .expect("parent allocation");
+        assert_eq!(parent_ptr, HEAP_PTR_BASE);
+        let parent_growth = memory
+            .prepare_fixed_heap_growth(parent, memory.heap_high_water_mark(parent))
+            .expect("parent's two pages fit");
+        assert_eq!(parent_growth.new_page_pins().len(), 2);
+        assert!(memory.commit_prepared_private_vm(parent_growth).is_some());
+
+        let child_ptr = memory
+            .heap_alloc(child, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("child allocation at its own base");
+        assert_eq!(child_ptr, parent_ptr);
+        let child_growth = memory
+            .prepare_fixed_heap_growth(child, memory.heap_high_water_mark(child))
+            .expect("child only charges its first page");
+        assert_eq!(child_growth.new_page_pins().len(), 1);
+        assert!(memory.commit_prepared_private_vm(child_growth).is_some());
+        assert_eq!(
+            memory.private_commit_used_bytes(),
+            3 * STABLE_PRIVATE_PAGE_SIZE as u64
+        );
+        assert_eq!(memory.heap_high_water_mark(parent), HEAP_PTR_BASE + 0x2000);
+        assert_eq!(memory.heap_high_water_mark(child), HEAP_PTR_BASE + 16);
+        assert_eq!(
+            memory.allocation(parent, parent_ptr).unwrap().actual_size,
+            0x2000
+        );
+        assert_eq!(memory.allocation(child, child_ptr).unwrap().actual_size, 16);
+    }
+
+    #[test]
+    fn foreign_heap_free_size_validate_and_dynamic_handle_access_fail_closed() {
+        let (parent, child) = two_owners();
+        let mut memory = MemorySystem::default();
+        let ptr = memory
+            .heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 32)
+            .expect("parent allocation");
+        assert_eq!(ptr, HEAP_PTR_BASE);
+        assert_eq!(memory.heap_size(child, PROCESS_HEAP_HANDLE, 0, ptr), None);
+        assert!(!memory.heap_validate(child, PROCESS_HEAP_HANDLE, 0, ptr));
+        assert!(!memory.heap_free(child, PROCESS_HEAP_HANDLE, 0, ptr));
+        assert_eq!(memory.heap_range_status(child, ptr, 1), None);
+        assert!(!memory.contains_allocated_range(child, ptr, 1));
+        assert!(memory.allocation(parent, ptr).is_some());
+
+        let dynamic = memory.heap_create(parent, 0, 0, 0).expect("parent heap");
+        assert!(memory.heap_alloc(child, dynamic, 0, 16).is_none());
+        assert!(!memory.heap_destroy(child, dynamic));
+        assert!(memory.heaps_for(parent).any(|heap| heap.handle == dynamic));
+        assert!(!memory.heaps_for(child).any(|heap| heap.handle == dynamic));
+
+        let child_ptr = memory
+            .heap_alloc(child, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("child's independent allocation");
+        assert_eq!(child_ptr, ptr);
+        assert!(memory.heap_free(child, PROCESS_HEAP_HANDLE, 0, child_ptr));
+        assert!(memory.allocation(parent, ptr).is_some());
+    }
+
+    #[test]
+    fn aborted_heap_holes_and_retirement_are_exact_to_one_birth() {
+        let (parent, child) = two_owners();
+        let mut memory = MemorySystem::default();
+        let prepared = memory
+            .prepare_heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("parent reservation");
+        assert_eq!(prepared.allocation().ptr, HEAP_PTR_BASE);
+        memory.abort_allocation(prepared);
+        let child_ptr = memory
+            .heap_alloc(child, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("child may use the same base");
+        assert_eq!(child_ptr, HEAP_PTR_BASE);
+        let parent_ptr = memory
+            .heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("parent preserves its hole");
+        assert_eq!(parent_ptr, HEAP_PTR_BASE + 16);
+        let stale = memory
+            .prepare_heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("unpublished parent token");
+        assert_eq!(memory.retire_heap_state_for_owner(parent), 1);
+        assert_eq!(memory.commit_allocation(stale), None);
+        assert!(
+            memory
+                .heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 16)
+                .is_none()
+        );
+        assert_eq!(memory.allocation(child, child_ptr).unwrap().actual_size, 16);
+        assert_eq!(memory.heap_high_water_mark(child), HEAP_PTR_BASE + 16);
+    }
+
+    #[test]
+    fn reused_pid_receives_new_heap_authority_and_rejects_old_birth_token() {
+        let mut handles = HandleTable::default();
+        handles.register_boot_process(1);
+        let old_handle = handles.create_process(2);
+        let old_birth = handles.process_birth_key(2).expect("first PID birth");
+        let mut memory = MemorySystem::default();
+        let pending = memory
+            .prepare_heap_alloc(old_birth, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("old-birth token");
+        assert!(handles.close(old_handle).is_ok());
+        assert!(handles.finish_process_execution_by_id(2, 0).is_some());
+        assert!(handles.process_birth_key(2).is_none());
+        assert_eq!(memory.retire_heap_state_for_owner(old_birth), 0);
+        let _new_handle = handles.create_process(2);
+        let new_birth = handles.process_birth_key(2).expect("reused PID birth");
+        assert_ne!(old_birth, new_birth);
+        assert_eq!(memory.commit_allocation(pending), None);
+        assert_eq!(
+            memory.heap_alloc(new_birth, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(HEAP_PTR_BASE)
+        );
+        assert_eq!(memory.allocation(old_birth, HEAP_PTR_BASE), None);
+        assert!(memory.allocation(new_birth, HEAP_PTR_BASE).is_some());
+    }
+
+    #[test]
+    fn cloned_heap_tokens_and_allocations_do_not_cross_lineage() {
+        let owner = boot_owner();
+        let mut memory = MemorySystem::default();
+        let prepared = memory
+            .prepare_heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("source reservation");
+        let mut clone = memory.clone();
+        assert_eq!(clone.commit_allocation(prepared), None);
+        assert_eq!(clone.allocations_for(owner).count(), 0);
+        assert_eq!(memory.allocations_for(owner).count(), 0);
+    }
+
+    #[test]
+    fn heap_window_crosses_old_sixteen_mib_boundary_and_fails_at_top_without_charge() {
+        let (parent, child) = two_owners();
+        let mut memory = MemorySystem::default();
+        memory.set_private_commit_limit_bytes(0);
+        let crossing = memory
+            .prepare_heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 0x0200_0010)
+            .expect("the fixed window extends beyond thirty-two MiB");
+        assert_eq!(crossing.allocation().ptr, HEAP_PTR_BASE);
+        assert_eq!(
+            memory.heap_high_water_mark(parent),
+            HEAP_PTR_BASE + 0x0200_0010
+        );
+        memory.abort_allocation(crossing);
+        let rest = HEAP_PTR_LIMIT - memory.heap_high_water_mark(parent);
+        let final_token = memory
+            .prepare_heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, rest)
+            .expect("the final reservation fits exactly");
+        assert_eq!(memory.heap_high_water_mark(parent), HEAP_PTR_LIMIT);
+        memory.abort_allocation(final_token);
+        assert!(
+            memory
+                .prepare_heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 1)
+                .is_none()
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        assert_eq!(
+            memory.heap_alloc(child, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(HEAP_PTR_BASE),
+            "one birth's top-boundary OOM does not advance another birth"
+        );
+    }
+
+    #[test]
+    fn a_foreign_birth_private_reservation_does_not_skip_own_heap_cursor() {
+        let (parent, child) = two_owners();
+        let mut memory = MemorySystem::default();
+        assert_eq!(
+            memory.heap_alloc(parent, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(HEAP_PTR_BASE)
+        );
+        assert_eq!(
+            committed_private_slab(&mut memory, child, HEAP_PTR_BASE, 0x1000),
+            HEAP_PTR_BASE
+        );
+        assert_eq!(memory.heap_high_water_mark(parent), HEAP_PTR_BASE + 16);
+        assert_eq!(memory.heap_high_water_mark(child), HEAP_PTR_BASE);
     }
 
     #[test]
     fn contains_allocated_range_checks_heap_and_virtual_bounds() {
         let mut memory = MemorySystem::default();
         let owner = boot_owner();
-        let heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let heap_ptr = memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .unwrap();
         let virtual_ptr = memory
             .virtual_alloc(
                 owner,
@@ -3972,10 +4321,12 @@ mod tests {
             memory.commit_prepared_private_vm(token),
             Some(reserved_heap_va)
         );
-        let heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let heap_ptr = memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .unwrap();
         assert_eq!(heap_ptr, reserved_heap_va + VIRTUAL_ALIGN);
         let pending_heap = memory
-            .prepare_heap_alloc(PROCESS_HEAP_HANDLE, 0, 16)
+            .prepare_heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
             .unwrap();
         let pending_ptr = pending_heap.allocation().ptr;
         assert!(
@@ -4335,31 +4686,33 @@ mod tests {
     #[test]
     fn local_re_alloc_grows_in_place_when_no_later_allocation_blocks() {
         let mut memory = MemorySystem::default();
-        let ptr = memory.local_alloc(0, 16).unwrap();
+        let owner = boot_owner();
+        let ptr = memory.local_alloc(owner, 0, 16).unwrap();
 
-        let grown = memory.local_re_alloc(ptr, 64, 0).unwrap();
+        let grown = memory.local_re_alloc(owner, ptr, 64, 0).unwrap();
 
         // With no subsequent allocation, the realloc may or may not move,
         // but the new size must be at least 64.
-        assert_eq!(memory.local_size(grown), Some(64));
+        assert_eq!(memory.local_size(owner, grown), Some(64));
     }
 
     #[test]
     fn heap_range_status_distinguishes_requested_actual_and_outside() {
         let mut memory = MemorySystem::default();
+        let owner = boot_owner();
         // 8-byte allocation: actual_size = align_up(8, 16) = 16, requested_size = 8.
-        let ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 8).unwrap();
+        let ptr = memory.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 8).unwrap();
 
         // Within requested range → Some(true).
-        assert_eq!(memory.heap_range_status(ptr, 8), Some(true));
-        assert_eq!(memory.heap_range_status(ptr, 1), Some(true));
+        assert_eq!(memory.heap_range_status(owner, ptr, 8), Some(true));
+        assert_eq!(memory.heap_range_status(owner, ptr, 1), Some(true));
 
         // Past requested size but within actual allocation → Some(false).
-        assert_eq!(memory.heap_range_status(ptr, 9), Some(false));
+        assert_eq!(memory.heap_range_status(owner, ptr, 9), Some(false));
 
         // Completely outside (past actual end, and before ptr) → None.
-        assert_eq!(memory.heap_range_status(ptr + 16, 1), None);
-        assert_eq!(memory.heap_range_status(ptr - 1, 1), None);
+        assert_eq!(memory.heap_range_status(owner, ptr + 16, 1), None);
+        assert_eq!(memory.heap_range_status(owner, ptr - 1, 1), None);
     }
 
     #[test]
@@ -4368,7 +4721,9 @@ mod tests {
         let mut memory = MemorySystem::default();
         let owner = boot_owner();
         memory.set_private_commit_limit_bytes(0);
-        let first_heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let first_heap_ptr = memory
+            .heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16)
+            .unwrap();
         assert_eq!(first_heap_ptr, HEAP_PTR_BASE);
         assert_eq!(
             memory.reserve_fixed_private_range(
@@ -4410,7 +4765,7 @@ mod tests {
             "an exact repeated reservation retains its incarnation and pages"
         );
         let pending_allocation = memory
-            .prepare_heap_alloc(PROCESS_HEAP_HANDLE, 0, 0x2000)
+            .prepare_heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 0x2000)
             .unwrap();
         assert_eq!(pending_allocation.allocation().ptr, HEAP_PTR_BASE + 16);
         let high_water = pending_allocation.allocation().ptr + 0x2000;

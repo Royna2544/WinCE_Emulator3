@@ -3877,21 +3877,21 @@ fn memory_system_allocation_accessors_and_generation_counters() {
         .expect("boot birth");
 
     // heap_high_water_mark starts at the base (0x3000_0000).
-    let hwm0 = mem.heap_high_water_mark();
+    let hwm0 = mem.heap_high_water_mark(owner);
     let gen0 = mem.heap_generation();
     let vgen0 = mem.virtual_generation();
 
-    let ptr = mem.heap_alloc(PROCESS_HEAP_HANDLE, 0, 32).unwrap();
+    let ptr = mem.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 32).unwrap();
 
     // High-water mark advances after allocation.
-    assert!(mem.heap_high_water_mark() > hwm0);
+    assert!(mem.heap_high_water_mark(owner) > hwm0);
     // Heap generation bumps.
     assert!(mem.heap_generation() > gen0);
     // Virtual generation unchanged so far.
     assert_eq!(mem.virtual_generation(), vgen0);
 
     // allocation() returns the right metadata.
-    let alloc = mem.allocation(ptr).unwrap();
+    let alloc = mem.allocation(owner, ptr).unwrap();
     assert_eq!(alloc.ptr, ptr);
     assert_eq!(alloc.heap, PROCESS_HEAP_HANDLE);
     assert_eq!(alloc.requested_size, 32);
@@ -6354,86 +6354,88 @@ fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range
     assert_eq!(mem.get_process_heap(), PROCESS_HEAP_HANDLE);
 
     // local_alloc with LMEM_ZEROINIT succeeds and is tracked.
-    let lptr = mem.local_alloc(LMEM_ZEROINIT, 64).unwrap();
+    let lptr = mem.local_alloc(owner, LMEM_ZEROINIT, 64).unwrap();
     assert!(lptr != 0);
     // local_size returns the actual size (>= requested).
-    let lsize = mem.local_size(lptr).unwrap();
+    let lsize = mem.local_size(owner, lptr).unwrap();
     assert!(lsize >= 64);
     // local_alloc with invalid flags returns None.
-    assert!(mem.local_alloc(0xFFFF_0000, 64).is_none());
+    assert!(mem.local_alloc(owner, 0xFFFF_0000, 64).is_none());
 
     // local_re_alloc: grow to a larger size (may move).
-    let lptr2 = mem.local_re_alloc(lptr, 128, 0).unwrap();
+    let lptr2 = mem.local_re_alloc(owner, lptr, 128, 0).unwrap();
     assert!(lptr2 != 0);
     // The new allocation is tracked with the new size.
-    assert!(mem.local_size(lptr2).unwrap() >= 128);
+    assert!(mem.local_size(owner, lptr2).unwrap() >= 128);
 
     // local_free(0) is a no-op that returns true (CE semantics).
-    assert!(mem.local_free(0));
+    assert!(mem.local_free(owner, 0));
     // local_free the reallocated pointer.
-    assert!(mem.local_free(lptr2));
+    assert!(mem.local_free(owner, lptr2));
     // Double-free returns false.
-    assert!(!mem.local_free(lptr2));
+    assert!(!mem.local_free(owner, lptr2));
 
     // heap_create: invalid options return None.
-    assert!(mem.heap_create(0xDEAD_0000, 0, 0).is_none());
+    assert!(mem.heap_create(owner, 0xDEAD_0000, 0, 0).is_none());
     // heap_create with valid options returns a new handle.
-    let h1 = mem.heap_create(HEAP_NO_SERIALIZE, 0x1000, 0).unwrap();
+    let h1 = mem
+        .heap_create(owner, HEAP_NO_SERIALIZE, 0x1000, 0)
+        .unwrap();
     assert_ne!(h1, PROCESS_HEAP_HANDLE);
     // A second heap gets a different handle.
-    let h2 = mem.heap_create(0, 0, 0).unwrap();
+    let h2 = mem.heap_create(owner, 0, 0, 0).unwrap();
     assert_ne!(h2, h1);
 
     // heap_alloc on a user heap.
-    let p1 = mem.heap_alloc(h1, 0, 100).unwrap();
+    let p1 = mem.heap_alloc(owner, h1, 0, 100).unwrap();
     // heap_size reports at least the requested size.
-    assert!(mem.heap_size(h1, 0, p1).unwrap() >= 100);
+    assert!(mem.heap_size(owner, h1, 0, p1).unwrap() >= 100);
     // heap_size with wrong heap returns None.
-    assert!(mem.heap_size(h2, 0, p1).is_none());
+    assert!(mem.heap_size(owner, h2, 0, p1).is_none());
     // heap_alloc with invalid flags returns None.
-    assert!(mem.heap_alloc(h1, 0xFFFF_0000, 100).is_none());
+    assert!(mem.heap_alloc(owner, h1, 0xFFFF_0000, 100).is_none());
 
     // heap_validate with ptr=0 is always valid for a live heap.
-    assert!(mem.heap_validate(h1, 0, 0));
+    assert!(mem.heap_validate(owner, h1, 0, 0));
     // heap_validate with a valid ptr returns true.
-    assert!(mem.heap_validate(h1, 0, p1));
+    assert!(mem.heap_validate(owner, h1, 0, p1));
     // heap_validate with unknown ptr returns false.
-    assert!(!mem.heap_validate(h1, 0, 0xDEAD_1234));
+    assert!(!mem.heap_validate(owner, h1, 0, 0xDEAD_1234));
     // heap_validate with invalid flags returns false.
-    assert!(!mem.heap_validate(h1, 0xFFFF_0000, 0));
+    assert!(!mem.heap_validate(owner, h1, 0xFFFF_0000, 0));
 
     // heap_re_alloc: shrink in-place.
-    let p1_shrunk = mem.heap_re_alloc(h1, 0, p1, 50).unwrap();
+    let p1_shrunk = mem.heap_re_alloc(owner, h1, 0, p1, 50).unwrap();
     assert_eq!(p1_shrunk, p1); // shrink is always in-place
-    assert!(mem.heap_size(h1, 0, p1_shrunk).unwrap() >= 50);
+    assert!(mem.heap_size(owner, h1, 0, p1_shrunk).unwrap() >= 50);
 
     // heap_re_alloc with HEAP_REALLOC_IN_PLACE_ONLY when growth required → None.
-    let p_inplace = mem.heap_alloc(h1, 0, 32).unwrap();
+    let p_inplace = mem.heap_alloc(owner, h1, 0, 32).unwrap();
     assert!(
-        mem.heap_re_alloc(h1, HEAP_REALLOC_IN_PLACE_ONLY, p_inplace, 9999)
+        mem.heap_re_alloc(owner, h1, HEAP_REALLOC_IN_PLACE_ONLY, p_inplace, 9999)
             .is_none()
     );
 
     // heap_re_alloc with HEAP_ZERO_MEMORY: grows and zeroes new bytes.
     let p_grow = mem
-        .heap_re_alloc(h1, HEAP_ZERO_MEMORY, p_inplace, 64)
+        .heap_re_alloc(owner, h1, HEAP_ZERO_MEMORY, p_inplace, 64)
         .unwrap();
     assert!(p_grow != 0);
 
     // heap_free: correct heap succeeds; wrong heap fails.
-    let p2 = mem.heap_alloc(h2, 0, 48).unwrap();
-    assert!(!mem.heap_free(h1, 0, p2)); // wrong heap
-    assert!(mem.heap_free(h2, 0, p2)); // correct heap
-    assert!(!mem.heap_free(h2, 0, p2)); // double-free
+    let p2 = mem.heap_alloc(owner, h2, 0, 48).unwrap();
+    assert!(!mem.heap_free(owner, h1, 0, p2)); // wrong heap
+    assert!(mem.heap_free(owner, h2, 0, p2)); // correct heap
+    assert!(!mem.heap_free(owner, h2, 0, p2)); // double-free
 
     // heap_destroy: cannot destroy the process heap.
-    assert!(!mem.heap_destroy(PROCESS_HEAP_HANDLE));
+    assert!(!mem.heap_destroy(owner, PROCESS_HEAP_HANDLE));
     // heap_destroy h2 succeeds and removes its allocations.
-    assert!(mem.heap_destroy(h2));
+    assert!(mem.heap_destroy(owner, h2));
     // Double-destroy returns false.
-    assert!(!mem.heap_destroy(h2));
+    assert!(!mem.heap_destroy(owner, h2));
     // heap_alloc on a destroyed heap returns None.
-    assert!(mem.heap_alloc(h2, 0, 32).is_none());
+    assert!(mem.heap_alloc(owner, h2, 0, 32).is_none());
 
     // contains_allocated_range: size=0 is always true.
     assert!(mem.contains_allocated_range(owner, 0, 0));
@@ -6444,16 +6446,16 @@ fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range
 
     // heap_range_status: ptr inside requested area → Some(true).
     // First allocate a known-size block.
-    let rp = mem.heap_alloc(h1, 0, 40).unwrap();
-    let rsize = mem.heap_size(h1, 0, rp).unwrap();
+    let rp = mem.heap_alloc(owner, h1, 0, 40).unwrap();
+    let rsize = mem.heap_size(owner, h1, 0, rp).unwrap();
     // Query within the requested bytes (≤40) → Some(true).
-    assert_eq!(mem.heap_range_status(rp, 40), Some(true));
+    assert_eq!(mem.heap_range_status(owner, rp, 40), Some(true));
     // Query beyond the requested bytes but within actual allocation → Some(false) if actual > requested.
     if rsize > 40 {
-        assert_eq!(mem.heap_range_status(rp, rsize), Some(false));
+        assert_eq!(mem.heap_range_status(owner, rp, rsize), Some(false));
     }
     // Query for a pointer not in any allocation → None.
-    assert!(mem.heap_range_status(0x0000_0001, 1).is_none());
+    assert!(mem.heap_range_status(owner, 0x0000_0001, 1).is_none());
 }
 
 #[test]
@@ -10117,10 +10119,13 @@ fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
 
     let mut mem = MemorySystem::default();
     let heap = mem.get_process_heap();
+    let owner = CeKernel::boot(RuntimeConfig::load_default().unwrap())
+        .current_process_birth_key()
+        .expect("boot birth");
 
     // --- heap_re_alloc_detail: shrink (in-place) ---
-    let p = mem.heap_alloc(heap, 0, 128).unwrap();
-    let r = mem.heap_re_alloc_detail(heap, 0, p, 64).unwrap();
+    let p = mem.heap_alloc(owner, heap, 0, 128).unwrap();
+    let r = mem.heap_re_alloc_detail(owner, heap, 0, p, 64).unwrap();
     assert!(!r.moved); // shrink is in-place
     assert_eq!(r.ptr, p);
     assert_eq!(r.old_ptr, p);
@@ -10128,46 +10133,52 @@ fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
     assert!(r.new_actual_size <= r.old_actual_size);
 
     // heap_re_alloc_detail: grow (ptr moves).
-    let r2 = mem.heap_re_alloc_detail(heap, 0, p, 4096).unwrap();
+    let r2 = mem.heap_re_alloc_detail(owner, heap, 0, p, 4096).unwrap();
     // After grow the old ptr is invalid; new ptr is different.
     assert!(r2.moved);
     assert!(r2.ptr != r2.old_ptr);
     assert!(r2.new_actual_size >= 4096);
 
     // heap_re_alloc_detail: HEAP_REALLOC_IN_PLACE_ONLY when grow required → None.
-    let p2 = mem.heap_alloc(heap, 0, 64).unwrap();
+    let p2 = mem.heap_alloc(owner, heap, 0, 64).unwrap();
     assert!(
-        mem.heap_re_alloc_detail(heap, HEAP_REALLOC_IN_PLACE_ONLY, p2, 9999)
+        mem.heap_re_alloc_detail(owner, heap, HEAP_REALLOC_IN_PLACE_ONLY, p2, 9999)
             .is_none()
     );
 
     // heap_re_alloc_detail: invalid flags → None.
     assert!(
-        mem.heap_re_alloc_detail(heap, 0xFFFF_0000, p2, 64)
+        mem.heap_re_alloc_detail(owner, heap, 0xFFFF_0000, p2, 64)
             .is_none()
     );
 
     // heap_re_alloc_detail: invalid heap → None.
-    assert!(mem.heap_re_alloc_detail(0xDEAD_0000, 0, p2, 64).is_none());
+    assert!(
+        mem.heap_re_alloc_detail(owner, 0xDEAD_0000, 0, p2, 64)
+            .is_none()
+    );
 
     // heap_re_alloc_detail with HEAP_ZERO_MEMORY: zeroed flag set in result allocation.
-    let p3 = mem.heap_alloc(heap, 0, 64).unwrap();
+    let p3 = mem.heap_alloc(owner, heap, 0, 64).unwrap();
     let r3 = mem
-        .heap_re_alloc_detail(heap, HEAP_ZERO_MEMORY, p3, 32)
+        .heap_re_alloc_detail(owner, heap, HEAP_ZERO_MEMORY, p3, 32)
         .unwrap();
     // Result ptr (in-place): verify the allocation is now tracked as zeroed.
-    let alloc = mem.allocation(r3.ptr).unwrap();
+    let alloc = mem.allocation(owner, r3.ptr).unwrap();
     assert!(alloc.zeroed);
 
     // --- local_re_alloc_detail: invalid flags (LMEM_MODIFY is valid, 0xFFFF_0000 is not) ---
-    let lp = mem.local_alloc(0, 64).unwrap();
+    let lp = mem.local_alloc(owner, 0, 64).unwrap();
     // Valid with LMEM_ZEROINIT | LMEM_MODIFY (both in valid mask).
     let lr = mem
-        .local_re_alloc_detail(lp, 32, LMEM_ZEROINIT | LMEM_MODIFY)
+        .local_re_alloc_detail(owner, lp, 32, LMEM_ZEROINIT | LMEM_MODIFY)
         .unwrap();
     assert!(!lr.moved); // shrink in-place
     // Invalid flags → None.
-    assert!(mem.local_re_alloc_detail(lp, 32, 0xFFFF_0000).is_none());
+    assert!(
+        mem.local_re_alloc_detail(owner, lp, 32, 0xFFFF_0000)
+            .is_none()
+    );
 }
 
 #[test]
