@@ -29,6 +29,43 @@ same-thread, invalid/destroyed/broadcast HWND, unsupported flags and hung
 `SMTO_ABORTIFHUNG` retain raw handling. This is not concurrent A+B support;
 per-task SMT frames remain required. Controls: `occupied_send_message_timeout_slot_fails_closed_for_second_sender`, `occupied_send_message_timeout_slot_preserves_raw_compatibility`.
 
+### Bounded thread-directed birth gate (design before implementation)
+
+The next Stage 3 slice concerns only `PostThreadMessageW`, `PostMessageW` with
+`hwnd == 0`, and the caller's `PostQuitMessage`. Window, broadcast, timer,
+keyboard, remote-input, sent, paint and modal producers retain their current
+numeric compatibility paths; this slice does not certify those families. A
+production thread-directed post captures a *live* target `ThreadBirthKey`
+before publishing queue, quit, changed-status, ready-timestamp, trace or wake
+effects. A stale captured birth fails before those effects, never resolving a
+replacement birth through the same numeric TID. Self-quit must validate the
+native caller's captured birth, not merely resolve its current numeric TID.
+The current success/error behavior for an unknown target is not a CE parity
+claim; local CE headers show an HTHREAD queue owner but do not settle the
+precise API return and LastError contract. Explicit legacy-unknown posting is
+fixture-only, never a production fallback.
+
+Keep the existing per-TID FIFO and sent → posted → quit → paint priority. Each
+posted entry has one delivery owner: exact thread birth for these three
+producers, explicit legacy-unknown fixture owner, or unscoped numeric/window
+compatibility for unmigrated producers. Query, Get/Peek, queue-status, new-input
+and ready-timestamp readers must filter the exact entries and quit/status
+effects for their captured live birth while preserving the first eligible
+entry under the existing HWND/message filters. An A entry must not become B's
+input when its TID is reused; an unscoped window entry must not be silently
+discarded by the new filter. A's exact exit retires only A-owned thread posts,
+quit and associated status/timestamp, leaving B, legacy-unknown and unmigrated
+window entries intact. Scheduler wake *and* direct readiness selection must
+reject stale A waits even if a B or unscoped entry exists for the same TID.
+
+The connected source gate needs executed-red A→exit→same-TID-B controls for
+Peek remove/no-remove, GetMessage, `WM_QUIT`, `QS_POSTMESSAGE`/MsgWait, exact
+wake, mixed FIFO/filtering, stale captured publication and native self-quit.
+Preserve a direct stale-native-resume guard control after selector behavior
+changes. Existing numeric-only test fixtures must either create canonical
+thread births or use an explicitly named legacy-unknown API. Source checks
+do not establish live iNavi acceptance or full GWES/TaskDirectory migration.
+
 ## Failure and lifetime rules
 
 Preserve the existing prepare-before-consume boundary: preflight mapped writable MSG output, map/init persistent guest payload, then consume the exact message/send ID and expose its pointer. A missing destination-memory context must retain typed work for a real resume path, not deliver a host placeholder. Queue expiry/replacement between peek and commit must reject a mismatched ID without consuming its successor. Preparation failure preserves live queue/wait/caller state and authentic API failure; it is not an unhandled import fallthrough.
