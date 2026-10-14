@@ -1116,6 +1116,27 @@ timestamp changes and unchanged hashes/lengths for both touched files. The
 records three adjacent verified archives. O-P1, Stage 2, S3-A and map
 acceptance remain open.
 
+## E-30 Host report consumer and E-31 O-P1 red baseline (2026-10-14, executed)
+
+E-30 connected both live and monitor host loops to the owned outgoing
+`AttemptExecution` before ordinary error handling, with optional observers
+(`None` in production). Two no-feature tests first failed at zero observed
+reports, then passed; the final E-30 source passed release 1,691/0/16 ignored
+and no-feature 1,265/0/14 ignored. This is not the bounded E-29 trace or
+canonical Task/Frame authority. Exact commands, hashes and logs are in the
+[E-30 receipt](../../evidence/e30-native-attempt-observer-20261014/validation.receipt.md).
+
+E-31 extracted the first native-deadline JR repair predicate without changing
+its production behavior. A typed visible-peer-yield plus deadline pure
+control failed at the intended marker-based assertion and is now ignored
+pending a real-MIPS mixed-stop/raw-and-saved-PC fixture; the second post-run
+JR repair is not covered by that predicate test. Final-source release passed
+1,691/0/17 ignored and no-feature 1,265/0/14 ignored; both no-trace checks,
+format and diff checks passed. The [red](../../evidence/e31-native-deadline-jr-repair-20261014/expected-red.receipt.md)
+and [validation](../../evidence/e31-native-deadline-jr-repair-20261014/validation.receipt.md)
+retain source, executable and log hashes. O-P1 remains open; no app run or
+mounted-file change occurred.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
