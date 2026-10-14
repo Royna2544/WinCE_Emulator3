@@ -166,10 +166,14 @@ applies captured-birth checks to native MessageQueueIo/WinsockRead publication
 and paired resume. The bounded
 [parked serial gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
 checks native SerialRead/SerialCommEvent register ownership before host serial
-polling or wait publication and before paired wake/timeout completion. Raw
-synchronous/nonblocking/overlapped serial paths, raw queue/socket and MsgWait
-fallbacks, aliasless Sleep-suspend, SendMessage and other parked-wait families
-remain open. These slices do not complete the
+polling or wait publication and before paired wake/timeout completion. The
+bounded [parked SendMessage gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
+checks native sender birth before queueing and the exact scheduler/native pair
+before result consumption or register restoration; its tested source is sealed
+by a Git HEAD and binary patch. Raw synchronous/nonblocking/overlapped serial
+paths, raw queue/socket and MsgWait fallbacks, aliasless Sleep-suspend,
+`BlockedSendMessageTimeout`, standalone `ExitThread` queued-send cleanup, and
+other parked-wait families remain open. These slices do not complete the
 machine-owned Task/continuation/scheduler core, Stage 3, or live-app
 acceptance. See `PROGRESS.md` and `docs/PLAN.md` for current gates.
 

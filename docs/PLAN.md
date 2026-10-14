@@ -182,14 +182,21 @@ close only their named gates, not Stage 2 or live acceptance.
   wake or finite-timeout completion, and stamps verified birth on normal
   resume. Raw synchronous/nonblocking/overlapped serial paths and opaque
   non-task serial target pins remain separate.
+  The bounded [parked SendMessage source gate](../evidence/stage3-send-birth-20261015/validation.receipt.md)
+  verifies cross-process native sender birth before queueing, checks the exact
+  scheduler/native pair before result consumption, and stamps a verified birth
+  on normal resume. The gate seals the tested Git HEAD plus binary patch and
+  passed full release 1,916/0/9 ignored and no-feature 1,395/0/3 ignored
+  tests. Ordinary `BlockedSendMessageTimeout`, receiver-side delivery, and
+  standalone `ExitThread` cleanup of queued sends remain separate.
   Opaque non-task subscriptions have an explicit unpinned compatibility path;
   duplicated native wait payloads remain unpinned, while synchronous finite
   inline timeout paths are outside the published-wait pin transaction. CE
   caller wait/timeout semantics, old-MIPS direct-kernel real-handle continuation,
   root-process real-handle completion, intra-slice unpinned-worker lineage,
   aliasless Sleep-suspend and generic parked-wait continuation remain open.
-  SendMessage and other blocked payload families have not been migrated by
-  these parked-wait gates.
+  Other blocked payload families have not been migrated by these parked-wait
+  gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
