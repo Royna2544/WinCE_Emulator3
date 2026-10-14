@@ -4,6 +4,19 @@ Refreshed on 2026-10-14 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-14 E-33 Windows TCG Commit-Tail Repair
+
+- The pristine vendored Windows handler's final-commit branch requested the
+  full 4 MiB beyond a small reserved code arena. A one-MiB real-MIPS native
+  test reproduced host `0xC0000005` before the fix. The narrow local clamp
+  now limits each commit to the remaining reserved bytes; independent 1/2-MiB
+  and combined 1/2/8-MiB/default MIPS controls passed. Full release passed
+  **1,695/0/17 ignored**, no-feature **1,265/0/14 ignored**; alternate feature
+  checks, release build, format and diff checks passed. The default arena size
+  was not changed. The E-32 crash dump does not prove this branch caused its
+  failure, and no app rerun occurred. [E-33 receipt](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)
+  records source/test/build hashes and limits.
+
 ## 2026-10-14 E-32 Bounded iNavi Run and Native TCG Crash
 
 - On the source-matched E-31 build, the one newly approved original-mount

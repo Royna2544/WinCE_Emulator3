@@ -14,6 +14,8 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   Retained 121 post-120 completed slices disprove total native idleness, not
   the reason for the later no-completion gap or persistent splash
   ([E-32 receipt](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
+  E-33 repaired that isolated handler arithmetic defect and passed native and
+  broad tests, but no post-repair app run has tested this failure.
 - The first persistent-engine 650 live trial host-crashed at 129.1081087 s with
   `0xC0000005`, no watchdog/empty stderr; peak RSS/private were
   1,662.59 / 1,663.40 MiB. GUID-matched 650 symbols/disassembly place fault
@@ -35,16 +37,16 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   whereas stable/lease/map controls stayed near 7 MiB. Native residency and
   the 650 failure mechanism remain unattributed; bounded fixture success is
   not full-backend or application stability.
-- Pre-init native arena requests of1MiB and2MiB both faulted0xC0000005
+- Historically, pre-init native arena requests of1MiB and2MiB both faulted0xC0000005
   while the initializing size query ran; no actual native size was returned.
   Both WER faults point to GUID-matched tcg_out8 at RVA0xA2D31. The pinned
-  Windows translation-arena handler requests4MiB at a time and its end branch
-  does not clamp to the reserved end. This source mechanism is consistent
+  pristine Windows translation-arena handler requested4MiB at a time and its
+  end branch did not clamp to the reserved end. This source mechanism is consistent
   with these tiny-reservation failures, but the pristine failure's exact fault
   address/handler result and any connection to the650 app fault remain
   unproven. An8MiB tiny smoke
   passed; that did not validate later tail behavior or a production cap. A
-  copied-source bounds clamp now passes fresh1/2/8MiB/default tiny controls;
+  E-6 copied-source bounds clamp passed fresh1/2/8MiB/default tiny controls;
   its8MiB distinct-PC probe observes second-half page commitment before any
   TB flush and a later successful translation. The matching pristine-handler
   copy still AVs on1/2MiB and before tail observation. This differential
@@ -64,7 +66,13 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only.
   this is not a normal translation-block tail or production-budget proof.
   Sequential VEH owner close/recreate passed twice with handler removal,
   arena/closure release and a surviving owner's successful tail. The
-  concurrent in-flight callback versus teardown race remains untested.
+  concurrent in-flight callback versus teardown race remains untested. E-33
+  applied the narrow clamp to the vendored production source and passed a new
+  pristine-red/modified-green 1MiB native control, isolated 2MiB control, and
+  combined 1/2/8MiB/default controls plus broad suites. This resolves the
+  isolated small-arena arithmetic defect, not default-cache footprint,
+  concurrent teardown, full-backend app stability, or E-2/E-32 causality
+  ([repair receipt](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
 - Phase1 experimental migration is underway, not complete. Native per-process engines now
   persist through checked hook-free reuse; exact primary TID/scalar keys can
   restore full native CPU snapshots. Legacy in-slice per-API thread/callback

@@ -80,6 +80,9 @@ remote-control HTTP/WebSocket surface.
   limits are retained; the Windows handler's known commit-tail defect is not
   yet proven to have caused this crash
   ([E-32 analysis](evidence/e22-live-20261014T002535Z/analysis.receipt.md)).
+  A narrow vendored Windows fix subsequently passed isolated real-MIPS native
+  controls and the broad suites; no post-fix app run has tested whether it
+  affects the E-32 failure ([E-33 repair](evidence/e33-windows-tcg-commit-tail-20261014/validation.receipt.md)).
 - Historical comparison, not current acceptance: the persistent-owner 650
   build passed 1,618 tests before a normal app run crashed at 129.108 s with
   `0xC0000005` and about 1.62 GiB RSS. The installed BED2 fallback's later
