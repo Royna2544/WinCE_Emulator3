@@ -171,6 +171,15 @@ authority before Stage 3. Heap spillover remains copy-backed; writable image
 sections and DLLs are separate later ownership slices. No E-44 iNavi, host
 RSS, speed or map-readiness result exists.
 
+### O-M2 reviewed ownership gate (2026-10-14; proposed, not implemented)
+- Contract/owner: `ProcessBirthKey` owns each heap handle, monotonic cursor, `(birth, VA)` block, prepared token and queued typed payload; raw APIs capture the current birth, while host payloads capture the recipient window's birth.
+- Window: enlarge the fixed `0x30000000` process-heap reservation to 256 MiB, ending at `0x40000000` below the `0x50000000` VirtualAlloc floor; commit only crossed 4-KiB pages and remove the global copied spillover path in the same migration.
+- Evidence: E-38 iNavi reached 31,546,846 B live heap (`evidence/e37-live-20261014T051228Z/app.stdout.raw.txt:13132`), so a 16-MiB fail-closed cap is invalid; local CE6 `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\LMEM\heap.c` and `rheap.cpp` set `ERROR_INVALID_PARAMETER` for invalid HeapFree/HeapSize.
+- Interface/lifetime: owner-qualified Heap/Local/CRT, pointer probes, Toolhelp and native fixed growth; GWE payload key is `(recipient birth, VA)` and is retired on retrieval/dispatch, discarded window messages and exact-birth exit; dynamic heap handles reject foreign births.
+- Publication/failure: validate birth and destination before map/write; charge and map the selected owner's pages before metadata/pointer publication; aborted writes keep owner-local monotonic holes; window-top OOM returns NULL/`ERROR_NOT_ENOUGH_MEMORY` without charging or publishing; stale native owners stay fenced.
+- Expected-red controls: same-VA A/B allocation and independent page charge; foreign-only free/size/validate with CE errors; aborted tokens and PID reuse; same-VA queued payload delivery/teardown; growth through 16 MiB to 32 MiB then top-boundary OOM; stale A-born serial completion under B before RX poll or stack write.
+- Gate/order: migrate fixed heap, allocation/handle/payload owners and remove spillover as one connected change, then add the stale-serial A/B regression; exact nonzero tests and paired all-target suites precede a source receipt. No live iNavi run without fresh separate approval and verified mount ZIPs.
+
 Additional bounded controls passed under that source gate. A release synthetic
 56-MiB sealed-RX setup profile passed 1/1 with 77,824 B owned blob capacity,
 fresh blob writes and fresh/reused readback, compared with 21,049,344 B for
