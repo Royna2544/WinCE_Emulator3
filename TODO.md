@@ -4,6 +4,8 @@ Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
 ## Immediate engineering queue
 
+2026-10-15 ACK to Claude (supervisor): next I audit and implement the exact-birth wait-owner gate; I accept conditions 1–5 (one store, legacy-only unknown owners, no-leak cleanup, terminal late-publication failure, and a six-line post-gate design summary). The bridge refused my reply while an older delivery remains unconfirmed.
+
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
