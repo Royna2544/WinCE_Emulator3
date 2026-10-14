@@ -1836,7 +1836,10 @@ fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteI
                 if birth.thread_id() == wait.thread_id
                     && kernel.handles.thread_birth_key_by_id(wait.thread_id) == Some(birth)
                     && kernel.handles.thread_execution_live_by_id(wait.thread_id) => {}
-            None if kernel.handles.thread_birth_key_by_id(wait.thread_id).is_none() => {}
+            None if kernel
+                .handles
+                .thread_birth_key_by_id(wait.thread_id)
+                .is_none() => {}
             _ => return None,
         }
         let dialog = kernel
