@@ -424,6 +424,41 @@ pub enum WaitPrepError {
     PinExhausted { index: usize, pin: TaskWaitPin },
 }
 
+/// An owner changed between capture and publication. This is an emulator
+/// handoff failure, not a guest wait result or CE LastError value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitPublishError {
+    MissingOwnerBirth {
+        thread_id: u32,
+    },
+    StaleOwnerBirth {
+        expected: ThreadBirthKey,
+        current: Option<ThreadBirthKey>,
+    },
+    ExitedOwnerBirth {
+        owner: ThreadBirthKey,
+    },
+}
+
+impl std::fmt::Display for WaitPublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingOwnerBirth { thread_id } => {
+                write!(f, "thread {thread_id} has no captured wait-owner birth")
+            }
+            Self::StaleOwnerBirth { expected, current } => {
+                write!(
+                    f,
+                    "wait-owner birth {expected:?} is stale (current {current:?})"
+                )
+            }
+            Self::ExitedOwnerBirth { owner } => {
+                write!(f, "wait-owner birth {owner:?} has exited")
+            }
+        }
+    }
+}
+
 impl WaitPrepError {
     pub fn last_error(self) -> u32 {
         match self {
@@ -462,6 +497,42 @@ impl PreparedTaskWait<'_> {
         self.kernel
     }
 
+    /// Require the captured owner to still be the exact live task before a
+    /// native caller mutates its prior continuation or pending return.
+    pub fn preflight_owner_birth(&self) -> std::result::Result<ThreadBirthKey, WaitPublishError> {
+        let Some(owner_birth) = self.owner_birth else {
+            return Err(WaitPublishError::MissingOwnerBirth {
+                thread_id: self.thread_id,
+            });
+        };
+        self.kernel
+            .validate_live_wait_owner_birth(owner_birth, self.thread_id)
+    }
+
+    /// Native publication repeats the exact live-owner check at the insertion
+    /// boundary. An error drops this guard and releases every acquired pin.
+    pub fn try_publish(mut self) -> std::result::Result<u64, WaitPublishError> {
+        let owner_birth = self.preflight_owner_birth()?;
+        let wait_id = self
+            .kernel
+            .scheduler
+            .register_blocked_wait_with_keys_and_pins(
+                self.thread_id,
+                Some(owner_birth),
+                self.thread_handle,
+                std::mem::take(&mut self.wait_handles),
+                std::mem::take(&mut self.wait_keys),
+                std::mem::take(&mut self.pinned_targets),
+                self.kind,
+                self.wait_started_ms,
+                self.timeout_ms,
+            );
+        self.published = true;
+        Ok(wait_id)
+    }
+
+    /// Legacy fixture publication, including deliberately unknown owners.
+    /// Production native callers must use `try_publish` instead.
     /// Transfers the prepared pins into the scheduler record exactly once.
     /// Aligned slots have already been built by preparation, so scheduler
     /// registration has no recoverable validation failure at this boundary.
@@ -6793,7 +6864,11 @@ impl CeKernel {
         self.mark_guest_thread_exited_by_birth(key, exit_code)
     }
 
-    pub(crate) fn mark_guest_thread_exited_by_birth(&mut self, key: ThreadBirthKey, exit_code: u32) -> bool {
+    pub(crate) fn mark_guest_thread_exited_by_birth(
+        &mut self,
+        key: ThreadBirthKey,
+        exit_code: u32,
+    ) -> bool {
         if !self.handles.contains_thread_birth(key) {
             return false;
         }
@@ -7599,8 +7674,8 @@ impl CeKernel {
     }
 
     /// Legacy test/compatibility entry retained for integration-test crates.
-    /// Production object waits use `prepare_task_wait`; opaque subscriptions
-    /// use `register_opaque_compatibility_waiter` instead.
+    /// Production object waits use `prepare_task_wait`/`try_publish`; opaque
+    /// native subscriptions use `try_register_opaque_waiter_for_birth`.
     pub fn register_blocked_waiter(
         &mut self,
         thread_id: u32,
@@ -7612,7 +7687,7 @@ impl CeKernel {
     ) -> u64 {
         // Legacy test/compatibility entry. Production object waits use the
         // fallible prepare/publish transaction; opaque production subscriptions
-        // use register_opaque_compatibility_waiter. A failed task pin must not
+        // use try_register_opaque_waiter_for_birth. A failed task pin must not
         // panic or publish an unpinned frame. Zero is never a scheduler wait ID.
         self.prepare_wait_with_policy(
             thread_id,
@@ -7627,9 +7702,9 @@ impl CeKernel {
         .unwrap_or(0)
     }
 
-    /// Publishes a compatibility subscription whose slots are opaque tokens,
-    /// not CE waitable objects. It neither validates nor pins task targets;
-    /// native object waits must use `prepare_task_wait` instead.
+    /// Legacy fixture/compatibility subscription whose slots are opaque
+    /// tokens, not CE waitable objects. A native producer must use the
+    /// fallible exact-birth entry below, not this unknown-owner-capable path.
     pub fn register_opaque_compatibility_waiter(
         &mut self,
         thread_id: u32,
@@ -7656,6 +7731,57 @@ impl CeKernel {
             wait_started_ms,
             timeout_ms,
         )
+    }
+
+    /// Publish an opaque production subscription only for the exact captured
+    /// live owner. Opaque slots are not CE waitable objects and acquire no
+    /// target pins; the owner check is nevertheless mandatory at insertion.
+    pub fn try_register_opaque_waiter_for_birth(
+        &mut self,
+        owner_birth: ThreadBirthKey,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> std::result::Result<u64, WaitPublishError> {
+        let thread_id = owner_birth.thread_id();
+        self.validate_live_wait_owner_birth(owner_birth, thread_id)?;
+        let wait_keys = wait_handles
+            .iter()
+            .copied()
+            .map(WaitObjectKey::Handle)
+            .collect();
+        let pinned_targets = vec![None; wait_handles.len()];
+        Ok(self.scheduler.register_blocked_wait_with_keys_and_pins(
+            thread_id,
+            Some(owner_birth),
+            thread_handle,
+            wait_handles,
+            wait_keys,
+            pinned_targets,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        ))
+    }
+
+    fn validate_live_wait_owner_birth(
+        &self,
+        owner_birth: ThreadBirthKey,
+        thread_id: u32,
+    ) -> std::result::Result<ThreadBirthKey, WaitPublishError> {
+        let current = self.handles.thread_birth_key_by_id(thread_id);
+        if owner_birth.thread_id() != thread_id || current != Some(owner_birth) {
+            return Err(WaitPublishError::StaleOwnerBirth {
+                expected: owner_birth,
+                current,
+            });
+        }
+        if !self.handles.thread_execution_live_by_id(thread_id) {
+            return Err(WaitPublishError::ExitedOwnerBirth { owner: owner_birth });
+        }
+        Ok(owner_birth)
     }
 
     /// Prepares every ordered task reference before publishing the wait.
@@ -7807,6 +7933,8 @@ impl CeKernel {
         removed
     }
 
+    /// Explicit cleanup for legacy unknown-owner compatibility waits only.
+    /// Canonical task exit uses the exact birth bucket instead.
     pub fn remove_blocked_waiters_for_thread(&mut self, thread_id: u32) -> usize {
         let wait_ids = self.scheduler.waiter_ids_for_thread(thread_id);
         for wait_id in &wait_ids {
@@ -7827,6 +7955,11 @@ impl CeKernel {
         self.modal_dialog_results
             .keys()
             .any(|(result_thread_id, _)| *result_thread_id == thread_id)
+    }
+
+    pub(crate) fn has_modal_dialog_result(&self, thread_id: u32, dialog_hwnd: u32) -> bool {
+        self.modal_dialog_results
+            .contains_key(&(thread_id, dialog_hwnd))
     }
 
     pub fn blocked_waiter(&self, wait_id: u64) -> Option<&SchedulerBlockedWait> {
@@ -10023,24 +10156,35 @@ impl CeKernel {
         command: u32,
         button_hwnd: u32,
     ) -> bool {
-        let is_dialog = self
-            .gwe
-            .window(dialog_hwnd)
-            .is_some_and(|window| window.class_name.eq_ignore_ascii_case("dialog"));
+        let is_dialog = self.gwe.window(dialog_hwnd).is_some_and(|window| {
+            window.thread_id == thread_id
+                && !window.destroyed
+                && window.class_name.eq_ignore_ascii_case("dialog")
+        });
         if !is_dialog {
             return false;
         }
+        // Numeric message queues are wake hints only. Their candidate IDs
+        // cannot authorize retiring a different task's wait after TID reuse.
+        // With no canonical live birth, only an explicitly legacy unknown
+        // fixture may match.
+        let owner_birth = self
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .filter(|_| self.handles.thread_execution_live_by_id(thread_id));
         let wait_id = self
             .scheduler
             .message_waiter_ids_for_thread(thread_id)
             .into_iter()
             .find(|wait_id| {
                 self.scheduler.blocked_wait(*wait_id).is_some_and(|wait| {
-                    matches!(
-                        wait.kind,
-                        SchedulerBlockedWaitKind::ModalMessageBox
-                            | SchedulerBlockedWaitKind::PopupMenuModal { .. }
-                    )
+                    wait.owner_birth == owner_birth
+                        && matches!(
+                            wait.kind,
+                            SchedulerBlockedWaitKind::ModalMessageBox {
+                                dialog_hwnd: wait_dialog_hwnd,
+                            } if wait_dialog_hwnd == dialog_hwnd
+                        )
                 })
             });
         let Some(wait_id) = wait_id else {
@@ -10049,7 +10193,7 @@ impl CeKernel {
         self.modal_dialog_results
             .insert((thread_id, dialog_hwnd), command);
         let removed_get_message_waits =
-            self.remove_dialog_get_message_waiters(thread_id, dialog_hwnd);
+            self.remove_dialog_get_message_waiters(thread_id, dialog_hwnd, owner_birth);
         self.record_message_trace(MessageTraceRecord {
             op: "dialog_modal_button_dismiss",
             thread_id,
@@ -10068,20 +10212,26 @@ impl CeKernel {
         true
     }
 
-    fn remove_dialog_get_message_waiters(&mut self, thread_id: u32, dialog_hwnd: u32) -> usize {
+    fn remove_dialog_get_message_waiters(
+        &mut self,
+        thread_id: u32,
+        dialog_hwnd: u32,
+        owner_birth: Option<ThreadBirthKey>,
+    ) -> usize {
         let wait_ids = self
             .scheduler
             .message_waiter_ids_for_thread(thread_id)
             .into_iter()
             .filter(|wait_id| {
-                self.scheduler
-                    .blocked_wait(*wait_id)
-                    .is_some_and(|wait| match wait.kind {
-                        SchedulerBlockedWaitKind::GetMessage {
-                            hwnd: Some(hwnd), ..
-                        } => hwnd == dialog_hwnd,
-                        _ => false,
-                    })
+                self.scheduler.blocked_wait(*wait_id).is_some_and(|wait| {
+                    wait.owner_birth == owner_birth
+                        && matches!(
+                            wait.kind,
+                            SchedulerBlockedWaitKind::GetMessage {
+                                hwnd: Some(hwnd), ..
+                            } if hwnd == dialog_hwnd
+                        )
+                })
             })
             .collect::<Vec<_>>();
         for wait_id in &wait_ids {
@@ -11559,6 +11709,111 @@ mod tests {
     }
 
     #[test]
+    fn prepared_wait_rejects_reused_owner_birth_and_releases_duplicate_pins() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (owner_handle, owner_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (target_handle, _) = kernel.create_guest_thread(0x402000, 0, false);
+        let target_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(target_handle)
+                .expect("target birth"),
+        );
+        let waiters_before = kernel.scheduler.waiter_count();
+        let mut prepared = kernel
+            .prepare_task_wait(
+                owner_tid,
+                owner_handle,
+                vec![target_handle, target_handle],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("duplicate targets prepare against live owner");
+        let old_birth = prepared
+            .preflight_owner_birth()
+            .expect("live owner before exit");
+        assert_eq!(
+            prepared
+                .kernel_mut()
+                .handles
+                .wait_target_pin_count(target_pin),
+            Some(2)
+        );
+        assert!(
+            prepared
+                .kernel_mut()
+                .mark_guest_thread_exited(owner_handle, 0x71)
+        );
+        assert_eq!(
+            prepared.preflight_owner_birth(),
+            Err(WaitPublishError::ExitedOwnerBirth { owner: old_birth })
+        );
+        assert!(prepared.kernel_mut().close_handle(owner_handle)?);
+        let new_owner = prepared
+            .kernel_mut()
+            .handles
+            .create_thread(owner_tid, 0x403000, 0, false);
+        let new_birth = prepared
+            .kernel_mut()
+            .handles
+            .thread_birth_key_for_handle(new_owner)
+            .expect("replacement birth");
+        assert_ne!(new_birth, old_birth);
+        assert_eq!(
+            prepared.preflight_owner_birth(),
+            Err(WaitPublishError::StaleOwnerBirth {
+                expected: old_birth,
+                current: Some(new_birth),
+            })
+        );
+        assert_eq!(
+            prepared.try_publish(),
+            Err(WaitPublishError::StaleOwnerBirth {
+                expected: old_birth,
+                current: Some(new_birth),
+            })
+        );
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+        Ok(())
+    }
+
+    #[test]
+    fn opaque_wait_rejects_stale_owner_without_publishing() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_handle, owner_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("old birth");
+        assert!(kernel.mark_guest_thread_exited(old_handle, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle = kernel.handles.create_thread(owner_tid, 0x402000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("new birth");
+        let waiters_before = kernel.scheduler.waiter_count();
+        assert_eq!(
+            kernel.try_register_opaque_waiter_for_birth(
+                old_birth,
+                old_handle,
+                vec![0x200],
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            ),
+            Err(WaitPublishError::StaleOwnerBirth {
+                expected: old_birth,
+                current: Some(new_birth),
+            })
+        );
+        assert_eq!(kernel.scheduler.waiter_count(), waiters_before);
+        Ok(())
+    }
+
+    #[test]
     fn prepared_task_wait_retains_closed_completed_birth_before_publication() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
@@ -11803,6 +12058,86 @@ mod tests {
         assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
         assert!(kernel.handles.thread_execution_live_by_id(target_tid));
         assert_eq!(kernel.remove_blocked_waiters_for_thread(owner_tid), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn exact_owner_exit_cleans_duplicate_pins_and_pending_wake() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (owner_handle, owner_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let (target_handle, _) = kernel.create_guest_thread(0x402000, 0, false);
+        let target_pin = TaskWaitPin::Thread(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(target_handle)
+                .expect("target birth"),
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            owner_tid,
+            owner_handle,
+            vec![target_handle, target_handle],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(2));
+        assert_eq!(kernel.scheduler.queue_pending_wake_ids([wait_id]), 1);
+        assert!(kernel.mark_guest_thread_exited(owner_handle, 0x71));
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(kernel.handles.wait_target_pin_count(target_pin), Some(0));
+        assert_eq!(
+            kernel
+                .scheduler
+                .select_ready_blocked_wait_id(0, 0, |_| true, |_| 20),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_exit_preserves_unknown_legacy_wait_until_explicit_cleanup() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let owner_tid = 77;
+        let unknown_wait_id = kernel.register_opaque_compatibility_waiter(
+            owner_tid,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(unknown_wait_id).unwrap().owner_birth,
+            None
+        );
+        let owner_handle = kernel.handles.create_thread(owner_tid, 0x401000, 0, false);
+        let owner_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(owner_handle)
+            .expect("canonical replacement birth");
+        let known_wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                owner_birth,
+                owner_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::Kernel,
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("live replacement owner");
+        assert_eq!(
+            kernel.scheduler.waiter_ids_for_birth(owner_birth),
+            [known_wait_id]
+        );
+        assert_eq!(
+            kernel.scheduler.waiter_ids_for_thread(owner_tid),
+            [unknown_wait_id]
+        );
+        assert!(kernel.mark_guest_thread_exited_by_birth(owner_birth, 0x71));
+        assert!(kernel.blocked_waiter(known_wait_id).is_none());
+        assert!(kernel.blocked_waiter(unknown_wait_id).is_some());
+        assert_eq!(kernel.remove_blocked_waiters_for_thread(owner_tid), 1);
+        assert_eq!(kernel.scheduler.waiter_count(), 0);
         Ok(())
     }
 
@@ -12812,6 +13147,157 @@ mod tests {
     }
 
     #[test]
+    fn modal_button_dismisses_only_requested_dialog_and_never_popup() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let thread_id = 77;
+        let dialog_a = kernel.gwe.create_window(thread_id, "dialog", "A");
+        let dialog_b = kernel.gwe.create_window(thread_id, "dialog", "B");
+        let popup_wait = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::PopupMenuModal {
+                mouse_message_max: crate::ce::gwe::WM_LBUTTONUP,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let modal_b = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::ModalMessageBox {
+                dialog_hwnd: dialog_b,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let get_a = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(dialog_a),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let get_b = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(dialog_b),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert!(!kernel.dismiss_modal_dialog_wait_from_button(dialog_a, thread_id, 1, 0));
+        assert!(!kernel.dismiss_modal_dialog_wait_from_button(dialog_b, thread_id + 1, 1, 0));
+        assert!(kernel.blocked_waiter(get_a).is_some());
+        assert!(kernel.blocked_waiter(get_b).is_some());
+        assert!(!kernel.has_modal_dialog_result(thread_id, dialog_a));
+
+        let modal_a = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::ModalMessageBox {
+                dialog_hwnd: dialog_a,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert!(kernel.dismiss_modal_dialog_wait_from_button(dialog_a, thread_id, 1, 0));
+        assert!(kernel.blocked_waiter(get_a).is_none());
+        assert!(kernel.blocked_waiter(get_b).is_some());
+        assert!(kernel.blocked_waiter(modal_a).is_some());
+        assert!(kernel.blocked_waiter(modal_b).is_some());
+        assert!(kernel.blocked_waiter(popup_wait).is_some());
+        assert!(kernel.has_modal_dialog_result(thread_id, dialog_a));
+        assert!(!kernel.has_modal_dialog_result(thread_id, dialog_b));
+    }
+
+    #[test]
+    fn modal_button_preserves_unknown_prior_owner_after_tid_reuse() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let thread_id = 77;
+        let old_dialog = kernel.gwe.create_window(thread_id, "dialog", "old");
+        let new_dialog = kernel.gwe.create_window(thread_id, "dialog", "new");
+        let unknown_modal = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::ModalMessageBox {
+                dialog_hwnd: old_dialog,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let unknown_get = kernel.register_blocked_waiter(
+            thread_id,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(old_dialog),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        assert_eq!(
+            kernel.blocked_waiter(unknown_modal).unwrap().owner_birth,
+            None
+        );
+        let owner_handle = kernel.handles.create_thread(thread_id, 0x401000, 0, false);
+        let owner_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(owner_handle)
+            .expect("new live owner birth");
+        let new_modal = kernel
+            .try_register_opaque_waiter_for_birth(
+                owner_birth,
+                owner_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::ModalMessageBox {
+                    dialog_hwnd: new_dialog,
+                },
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("new modal owner");
+        let new_get = kernel
+            .try_register_opaque_waiter_for_birth(
+                owner_birth,
+                owner_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::GetMessage {
+                    hwnd: Some(new_dialog),
+                    min_msg: 0,
+                    max_msg: 0,
+                },
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("new GetMessage owner");
+        assert!(!kernel.dismiss_modal_dialog_wait_from_button(old_dialog, thread_id, 1, 0));
+        assert!(kernel.blocked_waiter(unknown_modal).is_some());
+        assert!(kernel.blocked_waiter(unknown_get).is_some());
+        assert!(kernel.blocked_waiter(new_get).is_some());
+        assert!(!kernel.has_modal_dialog_result(thread_id, old_dialog));
+        assert!(kernel.dismiss_modal_dialog_wait_from_button(new_dialog, thread_id, 2, 0));
+        assert!(kernel.blocked_waiter(new_modal).is_some());
+        assert!(kernel.blocked_waiter(new_get).is_none());
+        assert!(kernel.blocked_waiter(unknown_get).is_some());
+        assert!(kernel.has_modal_dialog_result(thread_id, new_dialog));
+    }
+
+    #[test]
     fn remote_button_tap_dismisses_modal_dialog_waiter() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -12864,7 +13350,9 @@ mod tests {
             thread_id,
             0x103,
             Vec::new(),
-            SchedulerBlockedWaitKind::ModalMessageBox,
+            SchedulerBlockedWaitKind::ModalMessageBox {
+                dialog_hwnd: dialog,
+            },
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
         );
@@ -12921,7 +13409,7 @@ mod tests {
                     } => kernel
                         .gwe
                         .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
-                    SchedulerBlockedWaitKind::ModalMessageBox => {
+                    SchedulerBlockedWaitKind::ModalMessageBox { .. } => {
                         kernel.thread_has_modal_dialog_result(blocked.thread_id)
                     }
                     _ => false,
