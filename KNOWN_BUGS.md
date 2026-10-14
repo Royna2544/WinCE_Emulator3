@@ -62,75 +62,30 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   [E-44 receipt](evidence/heap-stack-20261014/validation.receipt.md),
   [E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
-- The canonical thread/process alias and bounded creation-owner slices passed
-  their source gates: eight named Task controls became active at those gates.
-  The later O-K3 execution/wait-pin source gate activated two more, leaving
-  boot-main enumeration and durable child-primary identity ignored (ledger
-  E-8, E-11, E-26;
-  [alias receipt](evidence/stage3-alias-20261014/validation.receipt.md),
-  [owner receipt](evidence/stage3-owner-20261014/validation.receipt.md),
-  [pin receipt](evidence/stage3-pins-20261015/validation.receipt.md)).
-  Thread aliases share one mutable record and canonical wake index. Production
-  thread births retain a checked ProcessBirthKey, including aliasless boot TID
-  1 and child primary, and registered Toolhelp/GetProcessIdOfThread read it.
-  The child-exit slice defers real process-handle signaling until exact-birth
-  completion and sweeps workers then. A subsequent bounded, source-tested
-  `TerminateProcess` handshake stops an owned running child at preflight or a
-  self-call import boundary, and completes requested parked or pending children
-  without another guest instruction. A process waiter is signaled only after
-  that checked completion, not on the request alone. The current-process
-  pseudo-handle retains a separate synchronous compatibility path. CE caller
-  wait/timeout behavior is not implemented; an old-MIPS direct-kernel
-  real-handle continuation fails closed because no safe return is available.
-  The root process has no owned child-launch handoff for real-handle requests.
-  Registered Thread/Process waits now pin exact task births through public
-  alias closure and release acquired references on completion, timeout,
-  cancellation or failed preparation. The native prepared-wait path now
-  returns `WAIT_FAILED` with a CE last error on invalid/stale targets or pin
-  exhaustion before mutating a pending callout or prior blocked wait; focused
-  failure controls passed, but this is not caller wait/timeout parity. Opaque
-  non-task wait slots and duplicated native wait payloads remain unpinned;
-  synchronous finite inline timeout paths do not publish a scheduler wait and
-  are outside this pin transaction. A bounded stale-TID/native-stamp
-  [source gate](evidence/stage3-stale-tid-20261015/validation.receipt.md)
-  birth-verifies pending thread returns, suspended thread contexts, native
-  slice-end staging and the GetMessage compatibility bridge. A later bounded
-  [Sleep/object parked-wait source gate](evidence/stage3-parked-wait-20261015/validation.receipt.md)
-  rejects stale wait-owner births before wake consumption and stamps verified
-  resume provenance. The later bounded
-  [parked MsgWait source gate](evidence/stage3-msgwait-birth-20261015/validation.receipt.md)
-  rejects stale native frames before timer pumping or message-edge consumption;
-  synchronous raw MsgWait paths remain outside that gate. The bounded
-  [parked queue/socket source gate](evidence/stage3-queue-socket-birth-20261015/validation.receipt.md)
-  birth-verifies native MessageQueueIo/WinsockRead publication and paired
-  resume, but does not pin opaque queue/socket targets. The bounded
-  [parked serial source gate](evidence/stage3-serial-birth-20261015/validation.receipt.md)
-  checks native SerialRead/SerialCommEvent birth before host RX polling,
-  publication and paired wake/timeout completion; opaque serial tokens remain
-  unpinned. The bounded
-  [parked SendMessage source gate](evidence/stage3-send-birth-20261015/validation.receipt.md)
-  birth-verifies native cross-process send publication and paired active/parked
-  result completion. The bounded
-  [kernel sender-exit source gate](evidence/stage3-send-exit-20261015/validation.receipt.md)
-  removes queued sends and detaches active sends for an exact verified exiting
-  birth. The bounded
-  [native exit source gate](evidence/stage3-native-exit-birth-20261015/validation.receipt.md)
-  checks captured thread birth and process lease before native `ExitThread`
-  decisions and the guest return-stub no-exit-candidate fallback. Its
-  return-stub hook has no end-to-end control, and pending-return KData PID still
-  uses mutable process selection rather than the captured lease. The bounded
-  [native SMT source gate](evidence/stage3-smt-birth-20261015/validation.receipt.md)
-  checks eligible parked producer/re-entry/resume birth and exact wait/send
-  pairing, with exact-ID GWE abandon. An occupied native slot can still use
-  the raw path; global timeout can be reported as ready/success; receiver-side
-  `DestroyWindow` completed-result writes and delivery remain ungated. Broader
-  GWE send lifecycle remains outside these gates. Boot-main
-  enumeration, aliasless Sleep-suspend, unpinned-worker lineage (currently
-  fails closed), other parked-wait continuation, raw
-  synchronous/nonblocking queue/socket and synchronous/nonblocking/overlapped
-  serial paths, clone relineage, complete GMS
-  reclamation and live-app behavior remain open. None of these
-  bounded source gates is full Stage 3 acceptance.
+- Stage 3 task authority is not accepted. The passed bounded gates are listed
+  in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"). Still open:
+  - Boot-main enumeration and durable child-primary identity controls stay
+    ignored (ledger E-8, E-11, E-26).
+  - CE caller wait/timeout behavior is not implemented. An old-MIPS
+    direct-kernel real-handle continuation fails closed, the root process has
+    no owned child-launch handoff for real-handle requests, and the
+    current-process pseudo-handle keeps a separate synchronous path.
+  - `TaskWaitStore` is keyed by numeric TID, and numeric message wake hints
+    are unsafe across TID reuse (next gate design in
+    `docs/subsystems/tasks-scheduler.md`).
+  - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
+    native wait payloads are unpinned. Synchronous finite inline timeouts
+    publish no scheduler wait. Raw synchronous/nonblocking MsgWait,
+    queue/socket and serial (including overlapped) paths have no birth guard.
+  - The guest return-stub hook has no end-to-end control, and pending-return
+    KData PID follows mutable process selection, not the captured lease.
+  - SendMessageTimeout: an occupied native slot can still take the raw path
+    until the occupied-slot gate lands; global expiry can read as
+    ready/success; receiver-side `DestroyWindow` result writes, delivery and
+    the broader GWE send lifecycle are ungated.
+  - Aliasless Sleep-suspend, unpinned-worker lineage (fails closed), other
+    parked-wait continuation, clone relineage, complete GMS reclamation and
+    live-app behavior.
 
 - Historical: build 354AA0FB failed at 260.174 s with PC 0 on pool worker 10
   (RA `0xe6de4`). Later builds ran 330 s cleanly, so it has not been
