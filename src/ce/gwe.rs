@@ -3553,11 +3553,7 @@ impl Gwe {
 
     /// The caller must first verify that this exact birth is still live.
     pub fn post_thread_message_for_birth(&mut self, birth: ThreadBirthKey, message: Message) {
-        self.post_message_with_owner(
-            birth.thread_id(),
-            QueueDeliveryOwner::Birth(birth),
-            message,
-        );
+        self.post_message_with_owner(birth.thread_id(), QueueDeliveryOwner::Birth(birth), message);
     }
 
     /// Numeric-only test/compatibility fixtures, never a production fallback.
@@ -4994,7 +4990,12 @@ impl Gwe {
         self.queue_ready_timestamp(birth.thread_id(), hwnd, Some(birth))
     }
 
-    fn queue_ready_timestamp(&self, thread_id: u32, hwnd: u32, birth: Option<ThreadBirthKey>) -> u32 {
+    fn queue_ready_timestamp(
+        &self,
+        thread_id: u32,
+        hwnd: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> u32 {
         let queue_thread = if hwnd != 0 {
             self.window(hwnd)
                 .filter(|window| !window.destroyed)
@@ -5073,7 +5074,10 @@ impl Gwe {
         self.queues
             .iter()
             .map(|(thread_id, queue)| {
-                (*thread_id, queue.iter().map(|entry| entry.message.clone()).collect())
+                (
+                    *thread_id,
+                    queue.iter().map(|entry| entry.message.clone()).collect(),
+                )
             })
             .collect()
     }
@@ -5172,14 +5176,15 @@ impl Gwe {
         birth: Option<ThreadBirthKey>,
         flags: u32,
     ) {
-        self.changed_queue_status_by_owner.retain(|(candidate_thread, owner), changed| {
-            if *candidate_thread == thread_id
-                && birth.is_none_or(|birth| owner.visible_to_birth(birth))
-            {
-                *changed &= !flags;
-            }
-            *changed != 0
-        });
+        self.changed_queue_status_by_owner
+            .retain(|(candidate_thread, owner), changed| {
+                if *candidate_thread == thread_id
+                    && birth.is_none_or(|birth| owner.visible_to_birth(birth))
+                {
+                    *changed &= !flags;
+                }
+                *changed != 0
+            });
     }
 
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
@@ -5207,13 +5212,7 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> bool {
-        self.has_message_filtered_for_reader(
-            birth.thread_id(),
-            Some(birth),
-            hwnd,
-            min_msg,
-            max_msg,
-        )
+        self.has_message_filtered_for_reader(birth.thread_id(), Some(birth), hwnd, min_msg, max_msg)
     }
 
     fn has_message_filtered_for_reader(
@@ -5248,6 +5247,33 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> bool {
+        self.has_visible_window_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn has_visible_window_message_filtered_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.has_visible_window_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn has_visible_window_message_filtered_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages.get(id).is_some_and(|sent| {
@@ -5256,9 +5282,10 @@ impl Gwe {
                 })
             })
         }) || self.queues.get(&thread_id).is_some_and(|queue| {
-            queue.iter().any(|message| {
-                message_matches(message, hwnd, min_msg, max_msg)
-                    && self.message_targets_visible_window(message)
+            queue.iter().any(|entry| {
+                birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(entry)
             })
         }) || self
             .synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
@@ -5272,6 +5299,33 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> bool {
+        self.has_visible_queued_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn has_visible_queued_message_filtered_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.has_visible_queued_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn has_visible_queued_message_filtered_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages.get(id).is_some_and(|sent| {
@@ -5280,9 +5334,10 @@ impl Gwe {
                 })
             })
         }) || self.queues.get(&thread_id).is_some_and(|queue| {
-            queue.iter().any(|message| {
-                message_matches(message, hwnd, min_msg, max_msg)
-                    && self.message_targets_visible_window(message)
+            queue.iter().any(|entry| {
+                birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(entry)
             })
         })
     }
@@ -5290,6 +5345,33 @@ impl Gwe {
     pub fn peek_visible_message_filtered(
         &self,
         thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.peek_visible_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn peek_visible_message_filtered_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.peek_visible_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn peek_visible_message_filtered_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
         hwnd: Option<u32>,
         min_msg: u32,
         max_msg: u32,
@@ -5306,10 +5388,11 @@ impl Gwe {
             return Some(message);
         }
         if let Some(message) = self.queues.get(&thread_id).and_then(|queue| {
-            queue.iter().find_map(|message| {
-                (message_matches(message, hwnd, min_msg, max_msg)
-                    && self.message_targets_visible_window(message))
-                .then(|| message.message.clone())
+            queue.iter().find_map(|entry| {
+                (birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(entry))
+                .then(|| entry.message.clone())
             })
         }) {
             return Some(message);
@@ -5399,13 +5482,7 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        self.get_message_filtered_for_reader(
-            birth.thread_id(),
-            Some(birth),
-            hwnd,
-            min_msg,
-            max_msg,
-        )
+        self.get_message_filtered_for_reader(birth.thread_id(), Some(birth), hwnd, min_msg, max_msg)
     }
 
     fn get_message_filtered_for_reader(
@@ -5419,7 +5496,8 @@ impl Gwe {
         if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
-        if let Some(message) = self.take_matching_message(thread_id, birth, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_message(thread_id, birth, hwnd, min_msg, max_msg)
+        {
             return Some(message);
         }
         if let Some(message) = self.take_quit_message_for_reader(thread_id, birth) {
@@ -5439,12 +5517,40 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
+        self.get_visible_message_filtered_for_reader(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn get_visible_message_filtered_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.get_visible_message_filtered_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn get_visible_message_filtered_for_reader(
+        &mut self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
         if let Some(message) =
             self.take_matching_visible_sent_message(thread_id, hwnd, min_msg, max_msg)
         {
             return Some(message);
         }
-        if let Some(message) = self.take_matching_visible_message(thread_id, hwnd, min_msg, max_msg)
+        if let Some(message) =
+            self.take_matching_visible_message(thread_id, birth, hwnd, min_msg, max_msg)
         {
             return Some(message);
         }
@@ -5527,13 +5633,10 @@ impl Gwe {
             return Some(message);
         }
         if let Some(queue) = self.queues.get_mut(&thread_id) {
-            if let Some(index) = queue
-                .iter()
-                .position(|entry| {
-                    birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
-                        && message_matches(entry, hwnd, min_msg, max_msg)
-                })
-            {
+            if let Some(index) = queue.iter().position(|entry| {
+                birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+            }) {
                 return if flags.contains(PeekFlags::REMOVE) {
                     let message = queue.remove(index).map(|entry| entry.message);
                     if let Some(message) = message.as_ref() {
@@ -5685,15 +5788,17 @@ impl Gwe {
     fn take_matching_visible_message(
         &mut self,
         thread_id: u32,
+        birth: Option<ThreadBirthKey>,
         hwnd: Option<u32>,
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
         let index = {
             let queue = self.queues.get(&thread_id)?;
-            queue.iter().position(|message| {
-                message_matches(message, hwnd, min_msg, max_msg)
-                    && self.message_targets_visible_window(message)
+            queue.iter().position(|entry| {
+                birth.is_none_or(|birth| entry.owner.visible_to_birth(birth))
+                    && message_matches(entry, hwnd, min_msg, max_msg)
+                    && self.message_targets_visible_window(entry)
             })?
         };
         let queue = self.queues.get_mut(&thread_id)?;

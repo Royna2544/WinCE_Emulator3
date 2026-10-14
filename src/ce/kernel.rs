@@ -8163,30 +8163,34 @@ impl CeKernel {
         now_ms: u32,
         mut is_ready: impl FnMut(&SchedulerBlockedWait, &Self) -> bool,
     ) -> Option<u64> {
-        self.scheduler.select_ready_blocked_wait_id_with_eligibility(
-            active_thread_id,
-            now_ms,
-            |wait| {
-                if matches!(
-                    wait.kind,
-                    SchedulerBlockedWaitKind::GetMessage { .. }
-                        | SchedulerBlockedWaitKind::MsgWait { .. }
-                        | SchedulerBlockedWaitKind::ModalMessageBox { .. }
-                        | SchedulerBlockedWaitKind::PopupMenuModal { .. }
-                ) {
-                    match wait.owner_birth {
-                        Some(birth) => self.is_live_thread_birth(birth),
-                        // An explicitly unknown fixture cannot borrow a
-                        // canonical replacement birth via its numeric TID.
-                        None => self.handles.thread_birth_key_by_id(wait.thread_id).is_none(),
+        self.scheduler
+            .select_ready_blocked_wait_id_with_eligibility(
+                active_thread_id,
+                now_ms,
+                |wait| {
+                    if matches!(
+                        wait.kind,
+                        SchedulerBlockedWaitKind::GetMessage { .. }
+                            | SchedulerBlockedWaitKind::MsgWait { .. }
+                            | SchedulerBlockedWaitKind::ModalMessageBox { .. }
+                            | SchedulerBlockedWaitKind::PopupMenuModal { .. }
+                    ) {
+                        match wait.owner_birth {
+                            Some(birth) => self.is_live_thread_birth(birth),
+                            // An explicitly unknown fixture cannot borrow a
+                            // canonical replacement birth via its numeric TID.
+                            None => self
+                                .handles
+                                .thread_birth_key_by_id(wait.thread_id)
+                                .is_none(),
+                        }
+                    } else {
+                        true
                     }
-                } else {
-                    true
-                }
-            },
-            |wait| is_ready(wait, self),
-            |thread_id| self.thread_priority_by_id(thread_id),
-        )
+                },
+                |wait| is_ready(wait, self),
+                |thread_id| self.thread_priority_by_id(thread_id),
+            )
     }
 
     pub fn record_multiple_wait_attempt(
@@ -8885,7 +8889,9 @@ impl CeKernel {
             Some(birth) => self
                 .gwe
                 .has_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
-            None => self.gwe.has_message_filtered(thread_id, hwnd, min_msg, max_msg),
+            None => self
+                .gwe
+                .has_message_filtered(thread_id, hwnd, min_msg, max_msg),
         }
     }
 
@@ -8917,18 +8923,12 @@ impl CeKernel {
         }
     }
 
-    pub fn get_message_queue_ready_time_stamp_for_thread(
-        &self,
-        thread_id: u32,
-        hwnd: u32,
-    ) -> u32 {
+    pub fn get_message_queue_ready_time_stamp_for_thread(&self, thread_id: u32, hwnd: u32) -> u32 {
         match self.live_thread_birth_key_by_id(thread_id) {
             Some(birth) => self
                 .gwe
                 .get_message_queue_ready_time_stamp_for_birth(birth, hwnd),
-            None => self
-                .gwe
-                .get_message_queue_ready_time_stamp(thread_id, hwnd),
+            None => self.gwe.get_message_queue_ready_time_stamp(thread_id, hwnd),
         }
     }
 
@@ -9030,6 +9030,30 @@ impl CeKernel {
         Some(message)
     }
 
+    /// Read-only in queue semantics: no timer/input pump, delivery trace or
+    /// dequeue. Native preflight must inspect the same eligible entry that a
+    /// subsequent `take_ready_message_w_filtered` will consume.
+    pub fn peek_ready_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.peek_gwe_message_for_reader(thread_id, hwnd, min_msg, max_msg, PeekFlags::empty())
+    }
+
+    pub(crate) fn modal_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
+        self.peek_gwe_message_for_reader(thread_id, hwnd, min_msg, max_msg, flags)
+    }
+
     pub fn take_ready_visible_message_w_filtered(
         &mut self,
         thread_id: u32,
@@ -9037,9 +9061,14 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        let message = self
-            .gwe
-            .get_visible_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        let message = match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self
+                .gwe
+                .get_visible_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
+            None => self
+                .gwe
+                .get_visible_message_filtered(thread_id, hwnd, min_msg, max_msg),
+        }?;
         self.clear_timer_message_pending(thread_id, &message);
         self.gwe
             .record_thread_dispatched(thread_id, self.timers.tick_count());
@@ -9060,8 +9089,14 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        self.gwe
-            .peek_visible_message_filtered(thread_id, hwnd, min_msg, max_msg)
+        match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self
+                .gwe
+                .peek_visible_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
+            None => self
+                .gwe
+                .peek_visible_message_filtered(thread_id, hwnd, min_msg, max_msg),
+        }
     }
 
     pub fn take_ready_sent_message_w_filtered(
@@ -9202,13 +9237,8 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        let message = self.peek_gwe_message_for_reader(
-            thread_id,
-            hwnd,
-            min_msg,
-            max_msg,
-            PeekFlags::REMOVE,
-        )?;
+        let message =
+            self.peek_gwe_message_for_reader(thread_id, hwnd, min_msg, max_msg, PeekFlags::REMOVE)?;
         self.clear_timer_message_pending(thread_id, &message);
         self.gwe
             .record_thread_dispatched(thread_id, self.timers.tick_count());
@@ -9533,7 +9563,8 @@ impl CeKernel {
                     return false;
                 };
                 let message = Message::new(0, msg, wparam, lparam, time_ms);
-                self.gwe.post_thread_message_for_birth(birth, message.clone());
+                self.gwe
+                    .post_thread_message_for_birth(birth, message.clone());
                 self.record_message_op(
                     "post_message",
                     thread_id,
@@ -9541,7 +9572,8 @@ impl CeKernel {
                     Some(1),
                     Some("thread".to_owned()),
                 );
-                self.scheduler.queue_message_wake_candidates_for_birth(birth);
+                self.scheduler
+                    .queue_message_wake_candidates_for_birth(birth);
                 true
             }
             hwnd => {
@@ -9706,7 +9738,8 @@ impl CeKernel {
         }
         let target_thread_id = birth.thread_id();
         let message = Message::new(0, msg, wparam, lparam, self.timers.tick_count());
-        self.gwe.post_thread_message_for_birth(birth, message.clone());
+        self.gwe
+            .post_thread_message_for_birth(birth, message.clone());
         self.record_message_op(
             "post_message",
             target_thread_id,
@@ -9714,7 +9747,8 @@ impl CeKernel {
             Some(1),
             Some("thread".to_owned()),
         );
-        self.scheduler.queue_message_wake_candidates_for_birth(birth);
+        self.scheduler
+            .queue_message_wake_candidates_for_birth(birth);
         true
     }
 
@@ -10062,17 +10096,14 @@ impl CeKernel {
         }
     }
 
-    pub fn post_quit_message_for_birth(
-        &mut self,
-        birth: ThreadBirthKey,
-        exit_code: u32,
-    ) -> bool {
+    pub fn post_quit_message_for_birth(&mut self, birth: ThreadBirthKey, exit_code: u32) -> bool {
         if !self.is_live_thread_birth(birth) {
             return false;
         }
         self.gwe
             .post_quit_message_for_birth(birth, exit_code, self.timers.tick_count());
-        self.scheduler.queue_message_wake_candidates_for_birth(birth);
+        self.scheduler
+            .queue_message_wake_candidates_for_birth(birth);
         true
     }
 
@@ -12471,7 +12502,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: Stage 3 thread-directed GWE birth ownership"]
     fn thread_post_and_quit_from_exited_birth_do_not_reach_reused_tid() -> Result<()> {
         use crate::ce::gwe::{PeekFlags, QS_POSTMESSAGE, WM_USER};
 
@@ -12483,6 +12513,7 @@ mod tests {
             .expect("A birth");
         let old_message = WM_USER + 0x71;
         assert!(kernel.post_thread_message_w(thread_id, old_message, 0xa1, 0));
+        assert!(kernel.post_message_w_for_thread(thread_id, 0, WM_USER + 0x73, 0xa3, 0));
         kernel.post_quit_message(thread_id, 0xa2);
         assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
         assert!(kernel.close_handle(old_handle)?);
@@ -12496,7 +12527,16 @@ mod tests {
         assert_ne!(old_birth, new_birth);
         assert!(kernel.handles.thread_execution_live_by_id(thread_id));
 
-        assert_eq!(kernel.gwe.peek_queue_status(thread_id, QS_POSTMESSAGE), 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(new_birth, QS_POSTMESSAGE),
+            0
+        );
+        assert_eq!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            0
+        );
         assert!(
             kernel
                 .peek_message_w_filtered(thread_id, None, 0, 0, PeekFlags::empty())
@@ -12515,6 +12555,16 @@ mod tests {
                 .is_none(),
             "B must not get A's posted message or quit state"
         );
+        let trace_count = kernel.recent_message_ops().len();
+        assert!(!kernel.post_thread_message_w_for_birth(old_birth, WM_USER + 0x74, 0xa4, 0,));
+        assert!(!kernel.post_quit_message_for_birth(old_birth, 0xa5));
+        assert_eq!(kernel.recent_message_ops().len(), trace_count);
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(new_birth, QS_POSTMESSAGE),
+            0
+        );
 
         let new_message = WM_USER + 0x72;
         assert!(kernel.post_thread_message_w(thread_id, new_message, 0xb1, 0));
@@ -12529,6 +12579,68 @@ mod tests {
                 .get_message_w_filtered(thread_id, None, 0, 0)
                 .map(|message| message.msg),
             Some(new_message)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn thread_birth_retirement_preserves_unscoped_window_fifo_and_filter() -> Result<()> {
+        use crate::ce::gwe::{PeekFlags, QS_POSTMESSAGE, WM_USER};
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("A birth");
+        let hwnd = kernel.gwe.create_window(thread_id, "BIRTH_FIFO", "fifo");
+        let window_message = WM_USER + 0x80;
+        let old_thread_message = WM_USER + 0x81;
+        let new_thread_message = WM_USER + 0x82;
+        assert!(kernel.post_message_w(hwnd, window_message, 1, 0));
+        assert!(kernel.post_thread_message_w(thread_id, old_thread_message, 2, 0));
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+
+        let new_handle = kernel.handles.create_thread(thread_id, 0x402000, 0, false);
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("B birth");
+        assert_ne!(old_birth, new_birth);
+        assert_ne!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(new_birth, QS_POSTMESSAGE),
+            0,
+            "A's exit must not clear the surviving window post"
+        );
+        assert_eq!(
+            kernel
+                .peek_message_w_filtered(thread_id, Some(0), 0, 0, PeekFlags::empty())
+                .map(|message| message.msg),
+            None,
+            "A's thread post must not pass B's thread-message filter"
+        );
+        assert!(kernel.post_thread_message_w(thread_id, new_thread_message, 3, 0));
+        assert_eq!(
+            kernel
+                .peek_message_w_filtered(thread_id, Some(0), 0, 0, PeekFlags::empty())
+                .map(|message| message.msg),
+            Some(new_thread_message)
+        );
+        assert_eq!(
+            kernel
+                .get_message_w_filtered(thread_id, None, 0, 0)
+                .map(|message| message.msg),
+            Some(window_message),
+            "unfiltered delivery keeps the first eligible FIFO entry"
+        );
+        assert_eq!(
+            kernel
+                .get_message_w_filtered(thread_id, None, 0, 0)
+                .map(|message| message.msg),
+            Some(new_thread_message)
         );
         Ok(())
     }

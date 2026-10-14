@@ -8125,12 +8125,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_IN_SEND_MESSAGE => Some(CoredllValue::Bool(kernel.gwe.in_send_message(thread_id))),
         ORD_GET_MESSAGE_SOURCE => Some(CoredllValue::U32(kernel.gwe.get_message_source(thread_id))),
         ORD_GET_QUEUE_STATUS => Some(CoredllValue::U32(
-            kernel.gwe.get_queue_status(thread_id, raw_arg(args, 0)),
+            kernel.get_queue_status_for_thread(thread_id, raw_arg(args, 0)),
         )),
         ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP => Some(CoredllValue::U32(
-            kernel
-                .gwe
-                .get_message_queue_ready_time_stamp(thread_id, raw_arg(args, 0)),
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, raw_arg(args, 0)),
         )),
         ORD_CREATE_CARET => Some(CoredllValue::Bool(create_caret_raw(
             kernel,
@@ -19035,7 +19033,7 @@ fn message_box_modal_input_result(
 fn message_box_drain_generated_paints(kernel: &mut CeKernel, thread_id: u32) {
     const MAX_DRAINED_PAINTS: usize = 64;
     for _ in 0..MAX_DRAINED_PAINTS {
-        let Some(message) = kernel.gwe.peek_message_filtered(
+        let Some(message) = kernel.modal_message_w_filtered(
             thread_id,
             None,
             crate::ce::gwe::WM_PAINT,
@@ -29325,7 +29323,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     let has_input = msg_wait_has_input(kernel, thread_id, wake_mask, input_available);
     if has_input {
         if !input_available {
-            kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+            kernel.clear_new_queue_input_for_thread(thread_id, wake_mask);
         }
         kernel.threads.set_last_error(thread_id, 0);
         kernel.record_msg_wait_input(count, timeout_ms);
@@ -29335,7 +29333,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     let has_input = msg_wait_has_input(kernel, thread_id, wake_mask, input_available);
     if has_input {
         if !input_available {
-            kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+            kernel.clear_new_queue_input_for_thread(thread_id, wake_mask);
         }
         kernel.threads.set_last_error(thread_id, 0);
         kernel.record_msg_wait_input(count, timeout_ms);
@@ -29350,7 +29348,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
                 kernel.pump_timers_to_gwe(thread_id);
                 if msg_wait_has_input(kernel, thread_id, wake_mask, input_available) {
                     if !input_available {
-                        kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+                        kernel.clear_new_queue_input_for_thread(thread_id, wake_mask);
                     }
                     kernel.threads.set_last_error(thread_id, 0);
                     kernel.record_msg_wait_input(count, timeout_ms);
@@ -29377,9 +29375,9 @@ fn msg_wait_has_input(
     input_available: bool,
 ) -> bool {
     if input_available {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
+        kernel.has_queue_input_for_thread(thread_id, wake_mask)
     } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+        kernel.has_new_queue_input_for_thread(thread_id, wake_mask)
     }
 }
 
@@ -36509,7 +36507,7 @@ fn popup_menu_modal_input_loop(
 
     let modal_message_min = crate::ce::gwe::WM_PAINT;
     loop {
-        let Some(message) = kernel.gwe.peek_message_filtered(
+        let Some(message) = kernel.modal_message_w_filtered(
             thread_id,
             None,
             modal_message_min,
@@ -36519,7 +36517,7 @@ fn popup_menu_modal_input_loop(
             return None;
         };
         if message.hwnd != hwnd {
-            let Some(message) = kernel.gwe.peek_message_filtered(
+            let Some(message) = kernel.modal_message_w_filtered(
                 thread_id,
                 None,
                 modal_message_min,
@@ -36533,7 +36531,7 @@ fn popup_menu_modal_input_loop(
         }
         match message.msg {
             crate::ce::gwe::WM_CANCELMODE => {
-                let _ = kernel.gwe.peek_message_filtered(
+                let _ = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,
@@ -36547,7 +36545,7 @@ fn popup_menu_modal_input_loop(
                     VK_LEFT | VK_UP | VK_RIGHT | VK_DOWN | VK_RETURN | VK_ESCAPE
                 ) =>
             {
-                let _ = kernel.gwe.peek_message_filtered(
+                let _ = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,
@@ -36556,7 +36554,7 @@ fn popup_menu_modal_input_loop(
                 );
             }
             crate::ce::gwe::WM_CHAR => {
-                let _ = kernel.gwe.peek_message_filtered(
+                let _ = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,
@@ -36569,7 +36567,7 @@ fn popup_menu_modal_input_loop(
             | crate::ce::gwe::WM_MOUSEMOVE
             | crate::ce::gwe::WM_RBUTTONDOWN
             | crate::ce::gwe::WM_RBUTTONUP => {
-                let _ = kernel.gwe.peek_message_filtered(
+                let _ = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,
@@ -36579,7 +36577,7 @@ fn popup_menu_modal_input_loop(
             }
             // Intercept our hover-open timer so it doesn't get dispatched to the wndproc.
             crate::ce::gwe::WM_TIMER if message.wparam == POPUP_HOVER_TIMER_ID => {
-                let _ = kernel.gwe.peek_message_filtered(
+                let _ = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,
@@ -36588,7 +36586,7 @@ fn popup_menu_modal_input_loop(
                 );
             }
             _ => {
-                let Some(message) = kernel.gwe.peek_message_filtered(
+                let Some(message) = kernel.modal_message_w_filtered(
                     thread_id,
                     None,
                     modal_message_min,

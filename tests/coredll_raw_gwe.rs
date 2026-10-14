@@ -176,6 +176,18 @@ use support::{TestGuestMemory, unique_test_root};
 const ERROR_INVALID_DATA: u32 = 13;
 const MINIMAL_TRUETYPE_FONT_BYTES: &[u8] = b"\x00\x01\x00\x00fake-ce-font";
 
+fn seed_live_message_thread(kernel: &mut CeKernel, thread_id: u32) -> Result<()> {
+    let owner = kernel
+        .current_process_birth_key()
+        .expect("boot process birth");
+    let handle = kernel
+        .handles
+        .try_create_thread_in_birth(owner, thread_id, 0, 0, false)?;
+    assert_eq!(kernel.handles.thread_id(handle), Some(thread_id));
+    assert!(kernel.handles.thread_execution_live_by_id(thread_id));
+    Ok(())
+}
+
 #[test]
 fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
     let table = CoredllExportTable::default();
@@ -26574,6 +26586,7 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
+    seed_live_message_thread(&mut kernel, thread_id)?;
 
     let parent = kernel.create_window_ex_w(9, "PARENT", "parent", None, 1, 0, 0);
     assert!(kernel.gwe.move_window(parent, 10, 20, 300, 200, true));
@@ -40316,6 +40329,7 @@ fn coredll_raw_queue_status_tracks_thread_posts_and_paint() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 6;
+    seed_live_message_thread(&mut kernel, thread_id)?;
     let msg_ptr = 0x9800;
     memory.map_words(msg_ptr, 7);
 
@@ -40419,6 +40433,7 @@ fn coredll_raw_post_quit_uses_queue_state_not_filtered_post() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 77;
+    seed_live_message_thread(&mut kernel, thread_id)?;
     let msg_ptr = 0x9a00;
     memory.map_words(msg_ptr, 7);
     let hwnd = kernel.create_window_ex_w(thread_id, "QUITFILTER", "", None, 0, 0, 0);
@@ -40506,6 +40521,7 @@ fn coredll_raw_get_message_no_wait_uses_gwe_queue_without_blocking() -> Result<(
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 78;
+    seed_live_message_thread(&mut kernel, thread_id)?;
     let msg_ptr = 0x9c00;
     memory.map_words(msg_ptr, 7);
     let hwnd = kernel.create_window_ex_w(thread_id, "NOWAIT", "", None, 0, 0, 0);
@@ -41417,6 +41433,7 @@ fn coredll_raw_msgwait_qs_allinput_covers_post_paint_and_timer() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let post_thread = 86;
+    seed_live_message_thread(&mut kernel, post_thread)?;
     let paint_thread = 87;
     let timer_thread = 88;
     let msg_ptr = 0xa240;
@@ -41622,6 +41639,7 @@ fn coredll_raw_msgwait_returns_message_index_after_all_unsignaled_handles() -> R
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 91;
+    seed_live_message_thread(&mut kernel, thread_id)?;
     let handles_ptr = 0xa300;
     let msg_ptr = 0xa340;
     memory.map_words(handles_ptr, 2);
