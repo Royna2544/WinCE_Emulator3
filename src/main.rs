@@ -2350,6 +2350,11 @@ fn try_monitor_checkpoint_save(
     framebuffer: &VirtualFramebuffer,
 ) -> Result<MonitorCheckpoint> {
     ensure_monitor_checkpointable(kernel)?;
+    if cpu.has_sealed_image_runs() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "sealed main image needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     Ok(MonitorCheckpoint {
         name,
         cpu: cpu.clone(),
@@ -2364,6 +2369,11 @@ fn try_monitor_checkpoint_restore(
 ) -> Result<(UnicornMips, CeKernel, VirtualFramebuffer)> {
     ensure_monitor_checkpointable(destination_kernel)?;
     ensure_monitor_checkpointable(&checkpoint.kernel)?;
+    if checkpoint.cpu.has_sealed_image_runs() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "sealed main image needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     Ok((
         checkpoint.cpu.clone(),
         checkpoint.kernel.clone(),

@@ -28,6 +28,12 @@ pub struct UnicornMips {
 }
 
 impl UnicornMips {
+    pub fn has_sealed_image_runs(&self) -> bool {
+        self.mapped_blobs
+            .iter()
+            .any(|blob| blob.bytes.sealed_pin().is_some())
+    }
+
     pub fn last_native_slice_outcome(&self) -> NativeSliceOutcome {
         NativeSliceOutcome::NoAttempt
     }

@@ -2,6 +2,10 @@
 // The free functions here return a `PeLoadResult` that callers apply to their backend state.
 
 use std::collections::HashMap;
+use std::ops::Deref;
+use std::ptr::NonNull;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "unicorn")]
 use crate::emulator::cpu_mips::{MipsTrampolineJump, patch_mips_unicorn_trampolines};
@@ -20,11 +24,137 @@ use crate::{
 
 // ── Structs shared between loader and runtime ────────────────────────────────
 
+/// Host-RW, page-aligned final image bytes. Rust never exposes a mutable slice
+/// after construction; Unicorn is given this pointer with guest R/RX access.
+#[derive(Debug)]
+pub(crate) struct SealedImageBytes {
+    ptr: NonNull<u8>,
+    len: usize,
+    generation: u64,
+}
+
+impl SealedImageBytes {
+    fn new(bytes: &[u8], generation: u64) -> Result<Self> {
+        if bytes.is_empty() || bytes.len() & (IMAGE_PAGE_SIZE as usize - 1) != 0 {
+            return Err(Error::InvalidArgument(
+                "sealed image run must be non-empty and page-sized".to_owned(),
+            ));
+        }
+        let layout = std::alloc::Layout::from_size_align(bytes.len(), IMAGE_PAGE_SIZE as usize)
+            .map_err(|_| Error::InvalidArgument("sealed image allocation overflow".to_owned()))?;
+        // SAFETY: `layout` has nonzero size and valid 4-KiB alignment. The
+        // allocation remains owned until all Rc pins have been released.
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        let ptr = NonNull::new(ptr)
+            .ok_or_else(|| Error::OutOfStructures("sealed image allocation failed".to_owned()))?;
+        // SAFETY: the destination is newly allocated for exactly bytes.len()
+        // bytes and does not overlap the final image source.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.as_ptr(), bytes.len()) };
+        Ok(Self {
+            ptr,
+            len: bytes.len(),
+            generation,
+        })
+    }
+
+    pub(crate) fn as_ptr(&self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+impl Deref for SealedImageBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: the allocation is initialized in `new`, stays alive while
+        // any Rc exists, and no Rust mutable reference is ever exposed.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+    }
+}
+
+impl Drop for SealedImageBytes {
+    fn drop(&mut self) {
+        let layout = std::alloc::Layout::from_size_align(self.len, IMAGE_PAGE_SIZE as usize)
+            .expect("sealed image layout was checked at construction");
+        // SAFETY: this is the same allocation and layout created in `new`.
+        // Native owners must release their Rc pins before dropping this owner.
+        unsafe { std::alloc::dealloc(self.ptr.as_ptr(), layout) };
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum BlobBytes {
+    Owned(Vec<u8>),
+    Sealed(Rc<SealedImageBytes>),
+}
+
+impl BlobBytes {
+    /// Mutable image access is explicit; a sealed run has no Rust write API.
+    pub(crate) fn as_mut_owned(&mut self) -> Option<&mut Vec<u8>> {
+        match self {
+            Self::Owned(bytes) => Some(bytes),
+            Self::Sealed(_) => None,
+        }
+    }
+
+    pub(crate) fn sealed_pin(&self) -> Option<Rc<SealedImageBytes>> {
+        match self {
+            Self::Sealed(bytes) => Some(Rc::clone(bytes)),
+            Self::Owned(_) => None,
+        }
+    }
+}
+
+impl From<Vec<u8>> for BlobBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Owned(bytes)
+    }
+}
+
+impl Deref for BlobBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Sealed(bytes) => bytes,
+        }
+    }
+}
+
+impl PartialEq for BlobBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref() == other.deref()
+    }
+}
+
+impl Eq for BlobBytes {}
+
+impl PartialEq<Vec<u8>> for BlobBytes {
+    fn eq(&self, other: &Vec<u8>) -> bool {
+        self.deref() == other.as_slice()
+    }
+}
+
+impl PartialEq<BlobBytes> for Vec<u8> {
+    fn eq(&self, other: &BlobBytes) -> bool {
+        self.as_slice() == other.deref()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct MappedBlob {
     pub(crate) name: String,
     pub(crate) base: u32,
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) bytes: BlobBytes,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +257,7 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
             patch_mips_unicorn_trampolines(image, image.image_base(), &mut image_occupancy, None)?;
     }
     let image_mapped_size = align_up_4k(image_occupancy.len() as u32)?;
+    drop(image_occupancy);
     let mut occupied_image_ranges = vec![(image.image_base(), image_mapped_size)];
 
     // Pass 1: process each DLL — compute load base, patch imports, collect traps.
@@ -241,13 +372,34 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     }
     result.import_traps.merge(traps);
 
-    // Memory regions: main image, DLLs, trampolines (order matches original).
-    result.memory_regions.push((
-        image.image_base(),
-        align_up_4k(mapped.len() as u32)?,
-        MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
-        "pe-image".to_owned(),
-    ));
+    // The final main-image bytes have now passed every loader patcher. Split
+    // only this image; DLLs and runtime import/trap pages remain copy-backed.
+    #[cfg(feature = "unicorn")]
+    let trampoline_patch_ranges: Vec<(u32, u32)> = result
+        .trampoline_jumps
+        .iter()
+        .filter_map(|jump| {
+            jump.origin
+                .checked_sub(image.image_base())
+                .filter(|&rva| rva < image.optional_header.size_of_image)
+                .map(|rva| (rva, 8))
+        })
+        .collect();
+    #[cfg(not(feature = "unicorn"))]
+    let trampoline_patch_ranges = Vec::new();
+    let main_image_runs = final_main_image_runs(image, mapped, &trampoline_patch_ranges)?;
+
+    // Memory regions: main image runs, DLLs, trampolines (same address order).
+    for (blob, perms) in &main_image_runs {
+        result.memory_regions.push((
+            blob.base,
+            u32::try_from(blob.bytes.len()).map_err(|_| {
+                Error::InvalidArgument("main image run exceeds guest address width".to_owned())
+            })?,
+            *perms,
+            "pe-image".to_owned(),
+        ));
+    }
     for (path, load_base, dll_mapped) in &loaded_dlls {
         result.memory_regions.push((
             *load_base,
@@ -317,11 +469,9 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
         &mut result.resource_strings,
         &mut result.resources,
     )?;
-    result.mapped_blobs.push(MappedBlob {
-        name: format!("image:{}", image.path),
-        base: image.image_base(),
-        bytes: mapped,
-    });
+    result
+        .mapped_blobs
+        .extend(main_image_runs.into_iter().map(|(blob, _)| blob));
     for (path, load_base, dll_mapped) in loaded_dlls {
         if let Some(dll) = dlls.iter().find(|dll| dll.path == path) {
             collect_resource_strings(
@@ -334,17 +484,21 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
         result.mapped_blobs.push(MappedBlob {
             name: format!("dll:{path}"),
             base: load_base,
-            bytes: dll_mapped,
+            bytes: dll_mapped.into(),
         });
     }
     #[cfg(feature = "unicorn")]
     for (name, base, bytes) in trampoline_blobs {
-        result.mapped_blobs.push(MappedBlob { name, base, bytes });
+        result.mapped_blobs.push(MappedBlob {
+            name,
+            base,
+            bytes: bytes.into(),
+        });
     }
     result.mapped_blobs.push(MappedBlob {
         name: "user-kdata".to_owned(),
         base: USER_KDATA_PAGE_BASE,
-        bytes: user_kdata_page(),
+        bytes: user_kdata_page().into(),
     });
     refresh_import_trap_page_blob(&mut result.mapped_blobs, &result.import_traps);
 
@@ -367,19 +521,16 @@ const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
 /// A complete image page borrowing the final, already-patched loader bytes.
 /// Selection does not allocate or copy a second image buffer.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub(crate) struct ImmutableImagePage<'a> {
     pub(crate) rva: u32,
     pub(crate) perms: MemoryPerms,
     pub(crate) bytes: &'a [u8],
 }
 
-/// Identify pages that may later be sealed and mapped as immutable image bytes.
+/// Identify pages that may be sealed and mapped as immutable image bytes.
 /// All ranges are image-relative, half-open `(rva, size)` pairs. A page must
 /// be fully inside exactly one non-writable, readable section, with no header
-/// or patch-range overlap. This only selects candidates; it does not publish
-/// native mappings or change the existing loader's RWX behavior.
-#[allow(dead_code)]
+/// or patch-range overlap. Publication and native mapping happen later.
 pub(crate) fn eligible_immutable_image_pages<'a>(
     size_of_image: u32,
     size_of_headers: u32,
@@ -482,6 +633,138 @@ pub(crate) fn eligible_immutable_image_pages<'a>(
     Ok(pages)
 }
 
+static NEXT_IMAGE_LOAD_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_image_load_generation() -> Result<u64> {
+    NEXT_IMAGE_LOAD_GENERATION
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .map_err(|_| Error::OutOfStructures("image load generation exhausted".to_owned()))
+}
+
+/// Consume the fully patched main image into contiguous, page-aligned runs.
+/// Patch sites are excluded explicitly, and any byte that changed since the
+/// original mapped image also excludes its entire page. The original image is
+/// only a temporary exact-comparison witness, never retained beside the runs.
+fn final_main_image_runs(
+    image: &PeImage,
+    mapped: Vec<u8>,
+    trampoline_patch_ranges: &[(u32, u32)],
+) -> Result<Vec<(MappedBlob, MemoryPerms)>> {
+    let mut excluded = trampoline_patch_ranges.to_vec();
+    for descriptor in &image.imports {
+        for thunk in &descriptor.imports {
+            excluded.push((thunk.iat_rva, 4));
+        }
+    }
+    let original = image.mapped_image()?;
+    let selected = eligible_immutable_image_pages(
+        image.optional_header.size_of_image,
+        image.optional_header.size_of_headers,
+        &image.sections,
+        &mapped,
+        &excluded,
+    )?;
+    let mut eligible = Vec::with_capacity(selected.len());
+    for page in selected {
+        let start = usize::try_from(page.rva).map_err(|_| {
+            Error::InvalidArgument("main image page RVA exceeds host usize".to_owned())
+        })?;
+        let end = start
+            .checked_add(IMAGE_PAGE_SIZE as usize)
+            .ok_or_else(|| Error::InvalidArgument("main image page end overflow".to_owned()))?;
+        if original.get(start..end) == Some(page.bytes) {
+            eligible.push((page.rva, page.perms));
+        }
+    }
+    drop(original);
+    partition_main_image_runs(&image.path, image.image_base(), mapped, &eligible)
+}
+
+fn partition_main_image_runs(
+    path: &str,
+    base: u32,
+    mut mapped: Vec<u8>,
+    eligible: &[(u32, MemoryPerms)],
+) -> Result<Vec<(MappedBlob, MemoryPerms)>> {
+    let mapped_len = u32::try_from(mapped.len())
+        .map_err(|_| Error::InvalidArgument("main image exceeds guest address width".to_owned()))?;
+    let aligned_len = align_up_4k(mapped_len)? as usize;
+    mapped.resize(aligned_len, 0);
+    let mut page_perms = vec![None; aligned_len / IMAGE_PAGE_SIZE as usize];
+    for &(rva, perms) in eligible {
+        let page_index = usize::try_from(rva / IMAGE_PAGE_SIZE).map_err(|_| {
+            Error::InvalidArgument("main image page index exceeds host usize".to_owned())
+        })?;
+        if rva & (IMAGE_PAGE_SIZE - 1) != 0
+            || perms.contains(MemoryPerms::WRITE)
+            || !perms.contains(MemoryPerms::READ)
+            || page_perms.get(page_index) != Some(&None)
+        {
+            return Err(Error::InvalidArgument(
+                "invalid or duplicate immutable main image page".to_owned(),
+            ));
+        }
+        page_perms[page_index] = Some(perms);
+    }
+
+    let generation = next_image_load_generation()?;
+    let mut bytes = mapped.into_iter();
+    let mut runs = Vec::new();
+    let mut page_index = 0;
+    while page_index < page_perms.len() {
+        let start_page = page_index;
+        let sealed_perms = page_perms[page_index];
+        page_index += 1;
+        while page_index < page_perms.len() && page_perms[page_index] == sealed_perms {
+            page_index += 1;
+        }
+        let start = start_page * IMAGE_PAGE_SIZE as usize;
+        let size = (page_index - start_page) * IMAGE_PAGE_SIZE as usize;
+        let run_base =
+            base.checked_add(u32::try_from(start).map_err(|_| {
+                Error::InvalidArgument("main image run offset overflow".to_owned())
+            })?)
+            .ok_or_else(|| Error::InvalidArgument("main image run address overflow".to_owned()))?;
+        let (bytes, perms) = match sealed_perms {
+            Some(perms) => {
+                let source = bytes.as_slice().get(..size).ok_or_else(|| {
+                    Error::InvalidArgument("main image run lost final bytes".to_owned())
+                })?;
+                let sealed = Rc::new(SealedImageBytes::new(source, generation)?);
+                // Vec::IntoIter::nth advances over this run without creating
+                // a second temporary Vec of the same sealed bytes.
+                bytes.nth(size - 1).ok_or_else(|| {
+                    Error::InvalidArgument("main image run lost final bytes".to_owned())
+                })?;
+                (BlobBytes::Sealed(sealed), perms)
+            }
+            None => {
+                let run_bytes: Vec<u8> = bytes.by_ref().take(size).collect();
+                if run_bytes.len() != size {
+                    return Err(Error::InvalidArgument(
+                        "main image run lost final bytes".to_owned(),
+                    ));
+                }
+                (
+                    BlobBytes::Owned(run_bytes),
+                    MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+                )
+            }
+        };
+        runs.push((
+            MappedBlob {
+                name: format!("image:{path}"),
+                base: run_base,
+                bytes,
+            },
+            perms,
+        ));
+    }
+    Ok(runs)
+}
+
 pub(crate) fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) -> bool {
     let lhs_end = lhs_base.saturating_add(lhs_size);
     let rhs_end = rhs_base.saturating_add(rhs_size);
@@ -527,12 +810,12 @@ pub(crate) fn refresh_import_trap_page_blob(
         .find(|blob| blob.name == "ce-import-traps")
     {
         blob.base = IMPORT_TRAP_BASE;
-        blob.bytes = trap_page;
+        blob.bytes = trap_page.into();
     } else {
         mapped_blobs.push(MappedBlob {
             name: "ce-import-traps".to_owned(),
             base: IMPORT_TRAP_BASE,
-            bytes: trap_page,
+            bytes: trap_page.into(),
         });
     }
 }
@@ -822,5 +1105,52 @@ mod immutable_image_page_tests {
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].rva, 0x1000);
         assert_eq!(pages[0].bytes[4], 0xa7);
+    }
+
+    #[test]
+    fn main_image_runs_share_only_sealed_bytes_and_keep_writable_clones_independent() {
+        let mut final_bytes = vec![0; 0x5000];
+        for (page, chunk) in final_bytes.chunks_exact_mut(0x1000).enumerate() {
+            chunk.fill(page as u8);
+        }
+        let runs = partition_main_image_runs(
+            "synthetic.exe",
+            0x0040_0000,
+            final_bytes,
+            &[
+                (0x1000, MemoryPerms::READ | MemoryPerms::EXEC),
+                (0x2000, MemoryPerms::READ | MemoryPerms::EXEC),
+                (0x3000, MemoryPerms::READ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(runs.len(), 4);
+        assert_eq!(runs[0].0.base, 0x0040_0000);
+        assert_eq!(runs[1].0.base, 0x0040_1000);
+        assert_eq!(runs[1].0.bytes.len(), 0x2000);
+        assert_eq!(runs[1].1, MemoryPerms::READ | MemoryPerms::EXEC);
+        assert_eq!(runs[2].0.base, 0x0040_3000);
+        assert_eq!(runs[2].1, MemoryPerms::READ);
+        assert_eq!(runs[3].0.base, 0x0040_4000);
+        assert_eq!(
+            runs[3].1,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC
+        );
+        assert_eq!(runs[1].0.bytes[0], 1);
+        assert_eq!(runs[1].0.bytes[0x1000], 2);
+        assert_eq!(runs[3].0.bytes[0], 4);
+
+        let first_pin = runs[1].0.bytes.sealed_pin().unwrap();
+        assert_eq!((first_pin.as_ptr() as usize) & 0xfff, 0);
+        assert_eq!(first_pin.len(), 0x2000);
+        assert!(runs[0].0.bytes.sealed_pin().is_none());
+        let mut cloned = runs.clone();
+        let second_pin = cloned[1].0.bytes.sealed_pin().unwrap();
+        assert!(Rc::ptr_eq(&first_pin, &second_pin));
+        assert_eq!(first_pin.generation(), second_pin.generation());
+        cloned[0].0.bytes.as_mut_owned().unwrap()[0] = 0xee;
+        assert_eq!(runs[0].0.bytes[0], 0);
+        assert_eq!(cloned[0].0.bytes[0], 0xee);
+        assert!(cloned[1].0.bytes.as_mut_owned().is_none());
     }
 }

@@ -163,8 +163,8 @@ pub struct UnicornMips {
     /// loop so priority rotations do not immediately reverse that decision.
     slice_end_rotation_pending: bool,
     /// Per-blob jr/jalr site scan results for scoped code hooks, keyed by
-    /// (base, byte length). Derivable state; reset on park.
-    fast_start_site_cache: HashMap<(u32, usize), Vec<u32>>,
+    /// (base, byte length, sealed load generation). Derivable state; reset on park.
+    fast_start_site_cache: HashMap<(u32, usize, u64), Vec<u32>>,
     /// Cached result of the all-origins-are-direct-jumps check, keyed by the
     /// trampoline jump count it was computed for. Derivable; reset on park.
     hookless_origins_direct_cache: Option<(usize, bool)>,
@@ -1110,7 +1110,22 @@ struct MappedCodeIndex {
 #[cfg(feature = "unicorn")]
 impl MappedCodeIndex {
     fn new(blobs: &[MappedBlob]) -> Self {
-        let blobs: Vec<_> = blobs.iter().map(MappedCodeBlobRef::from_blob).collect();
+        let mut logical_bases = HashMap::<&str, u32>::new();
+        for blob in blobs {
+            logical_bases
+                .entry(&blob.name)
+                .and_modify(|base| *base = (*base).min(blob.base))
+                .or_insert(blob.base);
+        }
+        let blobs: Vec<_> = blobs
+            .iter()
+            .map(|blob| {
+                MappedCodeBlobRef::from_blob(
+                    blob,
+                    *logical_bases.get(blob.name.as_str()).unwrap_or(&blob.base),
+                )
+            })
+            .collect();
         let mut page_to_blobs: HashMap<u32, Vec<usize>> = HashMap::new();
         let static_code_blobs = blobs.iter().map(|blob| blob.static_code).collect();
         for (index, blob) in blobs.iter().enumerate() {
@@ -1146,7 +1161,8 @@ impl MappedCodeIndex {
         let blob = self.blobs.get(index)?;
         let offset = address.checked_sub(blob.base)? as usize;
         if offset < blob.len {
-            Some(format!("{}+0x{offset:x}", blob.name))
+            let logical_offset = address.checked_sub(blob.logical_base)?;
+            Some(format!("{}+0x{logical_offset:x}", blob.name))
         } else {
             None
         }
@@ -1185,6 +1201,7 @@ impl MappedCodeIndex {
 struct MappedCodeBlobRef {
     name: String,
     base: u32,
+    logical_base: u32,
     ptr: *const u8,
     len: usize,
     static_code: bool,
@@ -1192,10 +1209,11 @@ struct MappedCodeBlobRef {
 
 #[cfg(feature = "unicorn")]
 impl MappedCodeBlobRef {
-    fn from_blob(blob: &MappedBlob) -> Self {
+    fn from_blob(blob: &MappedBlob, logical_base: u32) -> Self {
         Self {
             name: blob.name.clone(),
             base: blob.base,
+            logical_base,
             ptr: blob.bytes.as_ptr(),
             len: blob.bytes.len(),
             static_code: mapped_blob_is_static_code(blob),
@@ -5999,6 +6017,14 @@ impl UnicornMips {
             .collect()
     }
 
+    /// A CPU-only native snapshot cannot restore pointer-backed image memory
+    /// into a cloned machine checkpoint with a new owner lineage.
+    pub fn has_sealed_image_runs(&self) -> bool {
+        self.mapped_blobs
+            .iter()
+            .any(|blob| blob.bytes.sealed_pin().is_some())
+    }
+
     #[cfg(feature = "unicorn")]
     pub fn trampoline_debug_text(&self) -> String {
         use std::fmt::Write as _;
@@ -6027,16 +6053,36 @@ impl UnicornMips {
     }
 
     pub fn read_mapped_bytes(&self, address: u32, len: usize) -> Option<Vec<u8>> {
-        for blob in &self.mapped_blobs {
-            let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
-                continue;
-            };
-            let end = offset.checked_add(len)?;
-            if end <= blob.bytes.len() {
-                return Some(blob.bytes[offset..end].to_vec());
-            }
+        let end = u64::from(address).checked_add(len as u64)?;
+        if end > u64::from(u32::MAX) + 1 {
+            return None;
         }
-        None
+        let mut cursor = u64::from(address);
+        let mut result = Vec::new();
+        let mut first_name: Option<&str> = None;
+        while cursor < end || (len == 0 && first_name.is_none()) {
+            let blob = self.mapped_blobs.iter().find(|blob| {
+                let blob_end = u64::from(blob.base) + blob.bytes.len() as u64;
+                u64::from(blob.base) <= cursor && cursor < blob_end
+            })?;
+            if let Some(name) = first_name {
+                // Only adjacent runs of the same logical image can satisfy a
+                // cross-run read; unrelated module boundaries stay isolated.
+                if name != blob.name {
+                    return None;
+                }
+            } else {
+                first_name = Some(&blob.name);
+            }
+            if len == 0 {
+                break;
+            }
+            let offset = (cursor - u64::from(blob.base)) as usize;
+            let count = (end - cursor).min((blob.bytes.len() - offset) as u64) as usize;
+            result.extend_from_slice(&blob.bytes[offset..offset + count]);
+            cursor += count as u64;
+        }
+        Some(result)
     }
 
     fn address_region_label(&self, address: u32, kernel: &CeKernel) -> Option<String> {
@@ -6064,9 +6110,15 @@ impl UnicornMips {
             if let Some(offset) = address.checked_sub(blob.base)
                 && offset < blob.bytes.len() as u32
             {
+                let logical_base = if blob.name.starts_with("image:") {
+                    self.entry_image_base.unwrap_or(blob.base)
+                } else {
+                    blob.base
+                };
                 return Some(format!(
-                    "{}+0x{offset:x}",
-                    compact_mapped_blob_name(&blob.name)
+                    "{}+0x{:x}",
+                    compact_mapped_blob_name(&blob.name),
+                    address.saturating_sub(logical_base),
                 ));
             }
         }
@@ -6123,6 +6175,7 @@ impl UnicornMips {
         self.entry_image_base = Some(result.entry_image_base);
         self.stack_top = Some(result.stack_top);
         self.import_traps.merge(result.import_traps);
+        self.fast_start_site_cache.clear();
         self.mapped_blobs.extend(result.mapped_blobs);
         self.loaded_modules = result.loaded_modules;
         self.resource_strings.extend(result.resource_strings);
@@ -6486,6 +6539,8 @@ impl UnicornMips {
                 "private slab native attempt has no live process birth for pid {native_owner_pid}"
             )));
         }
+        let sealed_host_write_guard =
+            SealedHostWriteGuard::from_mapped_blobs(&self.mapped_blobs)?;
         // Legacy synthetic-PID attempts without a birth continue to use the
         // VA-global mapper. A real process must take the private fail-closed
         // path even before its first public VirtualAlloc import creates slabs.
@@ -6573,7 +6628,7 @@ impl UnicornMips {
             let written =
                 sync_persisted_blobs_to_native(&mut uc, &self.mapped_blobs, native_engine_reused)?;
             // Refresh shared views from canonical data before guest entry.
-            sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid)?;
+            sync_file_mapping_views_to_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)?;
             Ok(written)
         })();
         let native_blob_write_bytes = match setup_result {
@@ -8244,6 +8299,7 @@ impl UnicornMips {
         let traps = Rc::clone(&import_traps_live);
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
+        let sealed_host_write_guard_import = sealed_host_write_guard.clone();
         let memory_map_ptr = &mut self.memory as *mut MemoryMap;
         let loaded_modules_ptr = &mut self.loaded_modules as *mut Vec<LoadedPeModuleInfo>;
         let resource_strings_ptr = &mut self.resource_strings as *mut Vec<MappedResourceString>;
@@ -8464,7 +8520,12 @@ impl UnicornMips {
                         }
                     }
                     if let Some(result_ptr) = callout.send_timeout_result_ptr {
-                        let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
+                        let _ = checked_host_write(
+                            uc,
+                            &sealed_host_write_guard_import,
+                            u64::from(result_ptr),
+                            &result.to_le_bytes(),
+                        );
                     }
                     let wndproc_trace_tail =
                         if should_trace_wndproc_message(callout.msg) {
@@ -9095,6 +9156,7 @@ impl UnicornMips {
                     complete_escaped_get_message_sent_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         address,
@@ -9128,6 +9190,7 @@ impl UnicornMips {
                     try_block_empty_get_message(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         mapped_kernel_memory_hook.as_ref(),
                         mapped_blobs_ptr,
                         trap.module_kind,
@@ -9269,6 +9332,7 @@ impl UnicornMips {
                     try_enter_thread_context_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9454,7 +9518,8 @@ impl UnicornMips {
                         mapped_kernel_memory_hook.as_ref(),
                         mapped_blobs_ptr,
                     )
-                };
+                }
+                .with_sealed_host_write_guard(&sealed_host_write_guard_import);
                 if let Some(owner) = native_owner_birth {
                     memory = memory.with_private_vm_mapping(UnicornPrivateVmMapping {
                         mapped: mapped_kernel_memory_hook.as_ref(),
@@ -9517,6 +9582,7 @@ impl UnicornMips {
                     try_enter_send_message_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9638,6 +9704,7 @@ impl UnicornMips {
                     try_enter_create_thread_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -9872,6 +9939,7 @@ impl UnicornMips {
                     );
                     normalize_register_class_wndproc_arg(
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         unsafe { &*mapped_blobs_ptr },
                         trap.module_kind,
                         trap.ordinal,
@@ -9952,16 +10020,18 @@ impl UnicornMips {
                         memory.uc,
                         unsafe { &mut *kernel_ptr },
                         native_owner_pid,
+                        &sealed_host_write_guard_import,
                         unsafe { &mut *framebuffer_ptr },
                         limits,
                         &process_dll_search_dirs,
                         &parked_child_processes_hook,
                     )
                     .and_then(|()| {
-                        sync_file_mapping_views_to_unicorn(
+                        sync_file_mapping_views_to_unicorn_guarded(
                             memory.uc,
                             unsafe { &*kernel_ptr },
                             native_owner_pid,
+                            &sealed_host_write_guard_import,
                         )
                     });
                     if let Err(err) = sync_result {
@@ -10115,6 +10185,7 @@ impl UnicornMips {
                     try_enter_wave_out_function_callback(
                         unsafe { &*kernel_ptr },
                         memory.uc,
+                        &sealed_host_write_guard_import,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -10690,6 +10761,7 @@ impl UnicornMips {
                 &mut uc,
                 kernel,
                 native_owner_pid,
+                &sealed_host_write_guard,
                 framebuffer,
                 limits,
                 &deferred_process_dll_search_dirs,
@@ -10698,7 +10770,7 @@ impl UnicornMips {
             .err();
             if deferred_launch_error.is_none() {
                 deferred_view_sync_error =
-                    sync_file_mapping_views_to_unicorn(&mut uc, kernel, native_owner_pid).err();
+                    sync_file_mapping_views_to_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard).err();
             }
         }
         let mut post_run_pc_repair_error = None::<String>;
@@ -10823,6 +10895,7 @@ impl UnicornMips {
             let completed_sent_callout = complete_escaped_get_message_sent_callout(
                 kernel,
                 &mut uc,
+                &sealed_host_write_guard,
                 trap.module_kind,
                 trap.ordinal,
                 snapshot_pc,
@@ -11041,7 +11114,7 @@ impl UnicornMips {
                 );
             } else {
                 self.persist_run_state(&run_state, kernel);
-                let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+                let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             }
             return Err(match uc.abort_close() {
                 Ok(()) => err,
@@ -11057,7 +11130,7 @@ impl UnicornMips {
             {
                 if diagnostic_private {
                     if let Err(err) =
-                        sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                        sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
                     {
                         reject_private_attempt!(
                             err,
@@ -11096,7 +11169,7 @@ impl UnicornMips {
                     return Ok(());
                 }
                 if let Err(err) =
-                    sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                    sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
                 {
                     report.failure_operation = Some("sync decoded-exit file mapping views");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -11161,7 +11234,7 @@ impl UnicornMips {
                 );
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(format!(
                 "query native timeout after Unicorn run failed: {err:?}"
             )));
@@ -11178,7 +11251,7 @@ impl UnicornMips {
                 );
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(format!(
                 "query native count stop after Unicorn run failed: {err:?}"
             )));
@@ -11194,7 +11267,7 @@ impl UnicornMips {
                 );
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(format!(
                 "query native stop PC failed: {err}"
             )));
@@ -11207,7 +11280,7 @@ impl UnicornMips {
             if let Some(exit) = decoded_kernel_exit.filter(|_| post_native_state_ready) {
                 if diagnostic_private {
                     if let Err(err) =
-                        sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                        sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
                     {
                         reject_private_attempt!(
                             err,
@@ -11246,7 +11319,7 @@ impl UnicornMips {
                     return Ok(());
                 }
                 if let Err(err) =
-                    sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                    sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
                 {
                     report.failure_operation = Some("sync decoded-exit file mapping views");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -11306,7 +11379,7 @@ impl UnicornMips {
                 )));
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(format!(
                 "capture native task context after Unicorn run failed: {err:?}"
             )));
@@ -11319,7 +11392,7 @@ impl UnicornMips {
                 )));
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(format!(
                 "capture repaired scalar task context after Unicorn run failed: {err:?}"
             )));
@@ -11330,7 +11403,7 @@ impl UnicornMips {
                 reject_private_attempt!(Error::Backend(err));
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(err));
         }
         if let Some(err) = post_run_pc_repair_error {
@@ -11339,7 +11412,7 @@ impl UnicornMips {
                 reject_private_attempt!(Error::Backend(err));
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(Error::Backend(err));
         }
         if let Some(err) = deferred_launch_error {
@@ -11348,7 +11421,7 @@ impl UnicornMips {
                 reject_private_attempt!(err);
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(err);
         }
         if let Some(err) = deferred_view_sync_error {
@@ -11357,7 +11430,7 @@ impl UnicornMips {
                 reject_private_attempt!(err);
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(err);
         }
         if let Some(err) = mapped_blob_sync_error {
@@ -11366,7 +11439,7 @@ impl UnicornMips {
                 reject_private_attempt!(err);
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(err);
         }
         if let Some(err) = framebuffer_error {
@@ -11375,7 +11448,7 @@ impl UnicornMips {
                 reject_private_attempt!(err);
             }
             self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid);
+            let _ = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard);
             return Err(err);
         }
         if native_requested_pc_stop.is_some_and(|target| {
@@ -11402,7 +11475,7 @@ impl UnicornMips {
                 self.persist_run_state_handles(&run_state);
             }
             if let Err(err) =
-                sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
             {
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                 if diagnostic_private {
@@ -11444,7 +11517,7 @@ impl UnicornMips {
             // continuation nor a scheduler handoff until outgoing view sync
             // and native hook teardown have both completed successfully.
             if let Err(err) =
-                sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid)
+                sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard)
             {
                 reject_private_attempt!(err);
             }
@@ -11495,7 +11568,7 @@ impl UnicornMips {
         // `uc` still owns the outgoing process. Read its shared views back
         // before a handoff; the sync helper uses this attempt's captured
         // owner rather than the Kernel's mutable process selector.
-        if let Err(err) = sync_file_mapping_views_from_unicorn(&mut uc, kernel, native_owner_pid) {
+        if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(&mut uc, kernel, native_owner_pid, &sealed_host_write_guard) {
             report.failure_operation = Some("sync outgoing file mapping views");
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             return Err(err);
@@ -11603,16 +11676,7 @@ impl UnicornMips {
     }
 
     fn read_mapped_u32(&self, address: u32) -> Option<u32> {
-        for blob in &self.mapped_blobs {
-            let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
-                continue;
-            };
-            let end = offset.checked_add(4)?;
-            if end <= blob.bytes.len() {
-                return Some(u32::from_le_bytes(blob.bytes[offset..end].try_into().ok()?));
-            }
-        }
-        None
+        Some(u32::from_le_bytes(self.read_mapped_bytes(address, 4)?.try_into().ok()?))
     }
 }
 
@@ -11850,7 +11914,7 @@ fn ensure_mapped_ram_blob(
     mapped_blobs.push(MappedBlob {
         name: blob_name,
         base,
-        bytes: vec![0; size],
+        bytes: vec![0; size].into(),
     });
     Ok(())
 }
@@ -11938,12 +12002,22 @@ fn write_persisted_message_payload(
         };
         let offset = (cursor - blob.base) as usize;
         let len = (blob.bytes.len() - offset).min(bytes.len() - consumed);
+        if blob.bytes.sealed_pin().is_some() {
+            blobs.truncate(previous_count);
+            return Err(Error::Backend(
+                "message payload RAM backing is sealed".to_owned(),
+            ));
+        }
         writes.push((index, offset, consumed, len));
         consumed += len;
         cursor += len as u32;
     }
     for (index, offset, consumed, len) in writes {
-        blobs[index].bytes[offset..offset + len].copy_from_slice(&bytes[consumed..consumed + len]);
+        let owned = blobs[index]
+            .bytes
+            .as_mut_owned()
+            .ok_or_else(|| Error::Backend("message payload RAM backing is sealed".to_owned()))?;
+        owned[offset..offset + len].copy_from_slice(&bytes[consumed..consumed + len]);
     }
     Ok(())
 }
@@ -12014,6 +12088,7 @@ fn reconcile_persistent_native_memory<D>(
         blobs,
         virtual_pages,
         &BTreeMap::new(),
+        &BTreeMap::new(),
     )
 }
 
@@ -12024,12 +12099,30 @@ fn reconcile_persistent_native_memory_with_private<D>(
     blobs: &[MappedBlob],
     virtual_pages: &HashSet<u32>,
     private_pages: &BTreeMap<u32, NativePrivatePageRecord>,
+    sealed_image_runs: &BTreeMap<u32, NativeSealedImageRunRecord>,
 ) -> Result<Vec<(u32, u32)>> {
+    let mut sealed_pages = BTreeMap::<u32, u32>::new();
+    for record in sealed_image_runs.values() {
+        for page in (record.base..record.base + record.len).step_by(0x1000) {
+            if sealed_pages.insert(page, record.perms).is_some() {
+                return Err(Error::Backend(format!(
+                    "sealed image page 0x{page:08x} has overlapping run records"
+                )));
+            }
+        }
+    }
     let mut desired = BTreeMap::<u32, u32>::new();
     for region in memory.regions() {
         let perms = unicorn_perms(region.perms).0 as u32;
         let end = u64::from(region.base) + u64::from(region.size);
         for page in (u64::from(region.base)..end).step_by(0x1000) {
+            if let Some(sealed_perms) = sealed_pages.get(&(page as u32)) {
+                if *sealed_perms != perms {
+                    return Err(Error::Backend(format!(
+                        "sealed image page 0x{page:08x} disagrees with memory permissions"
+                    )));
+                }
+            }
             desired.insert(page as u32, perms);
         }
     }
@@ -12107,7 +12200,7 @@ fn reconcile_persistent_native_memory_with_private<D>(
     }
     let missing = desired
         .iter()
-        .filter(|(page, _)| !actual.contains_key(page))
+        .filter(|(page, _)| !actual.contains_key(page) && !sealed_pages.contains_key(page))
         .map(|(page, perms)| (*page, *perms));
     for (base, size, perms) in native_page_spans(missing) {
         uc.mem_map(
@@ -12123,7 +12216,10 @@ fn reconcile_persistent_native_memory_with_private<D>(
     }
     let changed = desired
         .iter()
-        .filter(|(page, perms)| actual.get(page).is_some_and(|old| old != *perms))
+        .filter(|(page, perms)| {
+            actual.get(page).is_some_and(|old| old != *perms)
+                && !sealed_pages.contains_key(page)
+        })
         .map(|(page, perms)| (*page, *perms));
     for (base, size, perms) in native_page_spans(changed) {
         uc.mem_protect(
@@ -12164,6 +12260,11 @@ fn sync_persisted_blobs_to_native<D>(
     let mut written = 0u64;
     let mut comparison = vec![0u8; 64 * 1024];
     for blob in blobs {
+        // Pointer-mapped sealed bytes already are the native backing. A host
+        // uc_mem_write would bypass the guest R/RX protection.
+        if blob.bytes.sealed_pin().is_some() {
+            continue;
+        }
         if blob.bytes.is_empty() {
             continue;
         }
@@ -12311,12 +12412,12 @@ fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
 
 /// Scanning ~40 MB of code blobs for jr/jalr sites costs tens of
 /// milliseconds; live-pump rebuilds the engine every slice, so the per-blob
-/// scan results are cached by (base, length) — code blob bytes are immutable
+/// scan results are cached by (base, length, sealed generation) — code blob bytes are immutable
 /// once mapped apart from the import-trap page, which contains no guest
 /// indirect transfers.
 #[cfg(feature = "unicorn")]
 fn cached_fast_start_indirect_transfer_sites(
-    cache: &mut HashMap<(u32, usize), Vec<u32>>,
+    cache: &mut HashMap<(u32, usize, u64), Vec<u32>>,
     blobs: &[MappedBlob],
 ) -> Vec<u32> {
     let mut sites = Vec::new();
@@ -12324,7 +12425,12 @@ fn cached_fast_start_indirect_transfer_sites(
         if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
             continue;
         }
-        let key = (blob.base, blob.bytes.len());
+        let generation = blob
+            .bytes
+            .sealed_pin()
+            .map(|backing| backing.generation())
+            .unwrap_or(0);
+        let key = (blob.base, blob.bytes.len(), generation);
         let blob_sites = cache
             .entry(key)
             .or_insert_with(|| fast_start_blob_indirect_transfer_sites(blob));
@@ -13090,7 +13196,7 @@ fn runtime_load_guest_dll_from_path<D>(
     mapped_blobs.push(MappedBlob {
         name: label,
         base: load_base,
-        bytes: mapped,
+        bytes: mapped.into(),
     });
     newly_loaded_modules.push(load_base);
     Ok(load_base)
@@ -13749,6 +13855,7 @@ struct NativePrivatePageRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeSealedImageRunRecord {
     owner: crate::ce::object::ProcessBirthKey,
+    generation: u64,
     base: u32,
     len: u32,
     host_address: usize,
@@ -13847,6 +13954,7 @@ fn expected_sealed_image_runs(
         }
         let record = NativeSealedImageRunRecord {
             owner,
+            generation: backing.generation(),
             base: blob.base,
             len,
             host_address: backing.as_ptr() as usize,
@@ -13914,7 +14022,7 @@ fn map_sealed_image_runs<D>(
                 u64::from(record.base),
                 u64::from(record.len),
                 unicorn_perms(MemoryPerms::from_bits_truncate(record.perms as u8)),
-                backing.as_ptr(),
+                backing.as_ptr().cast(),
             )
         }
         .map_err(|err| {
@@ -14632,11 +14740,52 @@ fn ensure_private_slab_file_views_disjoint(kernel: &CeKernel, owner_pid: u32) ->
 }
 
 #[cfg(feature = "unicorn")]
+fn ensure_sealed_image_file_views_disjoint(
+    kernel: &CeKernel,
+    owner_pid: u32,
+    guard: &SealedHostWriteGuard,
+) -> Result<()> {
+    // Outgoing readback and incoming lazy seeds both use guest VA. Preflight
+    // every legacy view before changing canonical data or a native page;
+    // foreign-PID views matter because lazy seeds are refreshed globally.
+    for mapping in kernel.handles.file_mappings() {
+        for view in &mapping.views {
+            if view.process_birth.is_some() {
+                continue;
+            }
+            guard.check_write(u64::from(view.base), view.size as usize).map_err(|err| {
+                Error::Backend(format!(
+                    "process {owner_pid} file view at 0x{:08x} overlaps sealed image: {err}",
+                    view.base
+                ))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "unicorn"))]
 fn sync_file_mapping_views_from_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
     owner_pid: u32,
 ) -> Result<()> {
+    sync_file_mapping_views_from_unicorn_guarded(
+        uc,
+        kernel,
+        owner_pid,
+        &SealedHostWriteGuard::default(),
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn sync_file_mapping_views_from_unicorn_guarded<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    owner_pid: u32,
+    guard: &SealedHostWriteGuard,
+) -> Result<()> {
+    ensure_sealed_image_file_views_disjoint(kernel, owner_pid, guard)?;
     ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     // Only the owning process's view pages carry authoritative bytes: other
     // processes hold stale snapshot copies of the same guest addresses, and
@@ -14764,11 +14913,28 @@ fn sync_file_mapping_views_from_unicorn<D>(
 }
 
 #[cfg(feature = "unicorn")]
+#[cfg(test)]
 fn sync_file_mapping_views_to_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
     owner_pid: u32,
 ) -> Result<()> {
+    sync_file_mapping_views_to_unicorn_guarded(
+        uc,
+        kernel,
+        owner_pid,
+        &SealedHostWriteGuard::default(),
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn sync_file_mapping_views_to_unicorn_guarded<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    owner_pid: u32,
+    guard: &SealedHostWriteGuard,
+) -> Result<()> {
+    ensure_sealed_image_file_views_disjoint(kernel, owner_pid, guard)?;
     ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     ensure_unambiguous_file_view_lazy_seeds(kernel)?;
     ensure_unique_file_views_for_owner(kernel, owner_pid)?;
@@ -14835,7 +15001,7 @@ fn sync_file_mapping_views_to_unicorn<D>(
             for (mapped_begin, mapped_end) in mapped_spans {
                 let offset = (mapped_begin - view_start) as usize;
                 let size = (mapped_end - mapped_begin) as usize;
-                uc.mem_write(mapped_begin, &bytes[offset..offset + size])
+                checked_host_write(uc, guard, mapped_begin, &bytes[offset..offset + size])
                     .map_err(|err| {
                         Error::Backend(format!(
                             "seed process {owner_pid} file view 0x{:08x}: {err:?}",
@@ -14854,10 +15020,18 @@ fn sync_mapped_blobs_from_unicorn<D>(
     blobs: &mut [MappedBlob],
 ) -> Result<()> {
     for blob in blobs {
+        // Reading a sealed pointer run back into its own immutable host
+        // storage would be both redundant and a hidden mutation path.
+        if blob.bytes.sealed_pin().is_some() {
+            continue;
+        }
         if blob.bytes.is_empty() {
             continue;
         }
-        uc.mem_read(u64::from(blob.base), &mut blob.bytes)
+        let mutable = blob.bytes.as_mut_owned().ok_or_else(|| {
+            Error::Backend(format!("mapped blob {} has no mutable readback buffer", blob.name))
+        })?;
+        uc.mem_read(u64::from(blob.base), mutable)
             .map_err(|err| {
                 Error::Backend(format!(
                     "sync mapped blob {} at 0x{:08x}+0x{:x}: {err:?}",
@@ -14875,6 +15049,7 @@ fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
     parent_owner_pid: u32,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     framebuffer: &mut dyn Framebuffer,
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
@@ -14884,7 +15059,12 @@ fn run_pending_process_launches<D>(
     if launches.is_empty() {
         return Ok(());
     }
-    sync_file_mapping_views_from_unicorn(parent_uc, kernel, parent_owner_pid)?;
+    sync_file_mapping_views_from_unicorn_guarded(
+        parent_uc,
+        kernel,
+        parent_owner_pid,
+        sealed_host_write_guard,
+    )?;
     for launch in launches {
         let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
             kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
@@ -16445,6 +16625,7 @@ fn normalize_set_class_long_wndproc_arg(
 #[cfg(feature = "unicorn")]
 fn normalize_register_class_wndproc_arg<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     mapped_blobs: &[MappedBlob],
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -16469,9 +16650,13 @@ fn normalize_register_class_wndproc_arg<D>(
     else {
         return;
     };
-    if uc
-        .mem_write(u64::from(class_ptr + 4), &mapped.to_le_bytes())
-        .is_ok()
+    if checked_host_write(
+        uc,
+        sealed_host_write_guard,
+        u64::from(class_ptr + 4),
+        &mapped.to_le_bytes(),
+    )
+    .is_ok()
     {
         tracing::debug!(
             target: "ce.gwe",
@@ -16907,6 +17092,7 @@ fn try_enter_get_message_sent_callout<D>(
 fn complete_escaped_get_message_sent_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     import_pc: u32,
@@ -16961,7 +17147,12 @@ fn complete_escaped_get_message_sent_callout<D>(
         }
     }
     if let Some(result_ptr) = callout.send_timeout_result_ptr {
-        let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
+        let _ = checked_host_write(
+            uc,
+            sealed_host_write_guard,
+            u64::from(result_ptr),
+            &result.to_le_bytes(),
+        );
     }
     tracing::debug!(
         target: "ce.gwe",
@@ -17104,6 +17295,7 @@ fn enter_get_message_sent_callout<D>(
 fn try_dispatch_com_notification_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     mapped_kernel_memory: &RefCell<KernelMemoryMappings>,
     mapped_blobs: *mut Vec<MappedBlob>,
     import_pc: u32,
@@ -17160,8 +17352,12 @@ fn try_dispatch_com_notification_callout<D>(
     let (a1, a2, a3, heap_ptr_to_free): (u32, u32, u32, Option<u32>) = match &cb.arguments {
         ShellNotificationCallbackArguments::OnShow { id, x, y, lparam } => {
             // 5th arg (lparam) goes on the stack at call_sp+0x10.
-            if uc
-                .mem_write(u64::from(call_sp + 0x10), &lparam.to_le_bytes())
+            if checked_host_write(
+                uc,
+                sealed_host_write_guard,
+                u64::from(call_sp.wrapping_add(0x10)),
+                &lparam.to_le_bytes(),
+            )
                 .is_err()
             {
                 restore_callback(kernel, cb);
@@ -17182,7 +17378,8 @@ fn try_dispatch_com_notification_callout<D>(
             // reference to its contents is retained across allocation mapping.
             let mut memory = unsafe {
                 UnicornGuestMemory::with_heap_mapping(uc, mapped_kernel_memory, mapped_blobs)
-            };
+            }
+            .with_sealed_host_write_guard(sealed_host_write_guard);
             let Some(link_ptr) = crate::ce::coredll::allocate_guest_heap_initialized(
                 kernel,
                 &mut memory,
@@ -17257,6 +17454,7 @@ fn try_dispatch_com_notification_callout<D>(
 fn try_enter_wave_out_function_callback<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -17291,8 +17489,17 @@ fn try_enter_wave_out_function_callback<D>(
     let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
     let callback_target = normalize_ce_process_slot_callback(uc, callback);
 
+    if checked_host_write(
+        uc,
+        sealed_host_write_guard,
+        u64::from(call_sp.wrapping_add(0x10)),
+        &0u32.to_le_bytes(),
+    )
+    .is_err()
+    {
+        return false;
+    }
     let ok = [
-        uc.mem_write(u64::from(call_sp + 0x10), &0u32.to_le_bytes()),
         uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
         uc.reg_write(RegisterMIPS::A0, u64::from(wave_handle)),
         uc.reg_write(RegisterMIPS::A1, u64::from(WOM_DONE)),
@@ -17347,6 +17554,7 @@ fn handle_wave_out_callback_return_stub<D>(
 fn try_block_empty_get_message<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     mapped_kernel_memory: &RefCell<KernelMemoryMappings>,
     mapped_blobs: *mut Vec<MappedBlob>,
     module_kind: crate::emulator::imports::ImportModuleKind,
@@ -17418,6 +17626,7 @@ fn try_block_empty_get_message<D>(
     if try_dispatch_com_notification_callout(
         kernel,
         uc,
+        sealed_host_write_guard,
         mapped_kernel_memory,
         mapped_blobs,
         import_pc,
@@ -19983,6 +20192,7 @@ enum ThreadContextSource {
 fn try_enter_thread_context_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -20133,7 +20343,7 @@ fn try_enter_thread_context_callout<D>(
             buf[MIPS_CONTEXT_FIR_OFFSET..MIPS_CONTEXT_FIR_OFFSET + 4]
                 .copy_from_slice(&pc.to_le_bytes());
         }
-        if uc.mem_write(u64::from(ctx_ptr), &buf).is_err() {
+        if checked_host_write(uc, sealed_host_write_guard, u64::from(ctx_ptr), &buf).is_err() {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -23279,7 +23489,7 @@ mod wait_scheduler_tests {
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: "dll:test-wndproc.dll".to_owned(),
             base: wndproc & 0xfff0_0000,
-            bytes: vec![0; 0x100000],
+            bytes: vec![0; 0x100000].into(),
         });
     }
 
@@ -27877,6 +28087,7 @@ mod wait_scheduler_tests {
         assert!(super::complete_escaped_get_message_sent_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             import_pc,
@@ -27977,6 +28188,7 @@ mod wait_scheduler_tests {
         assert!(!super::complete_escaped_get_message_sent_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             import_pc,
@@ -29090,12 +29302,12 @@ mod wait_scheduler_tests {
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: vec![0; 0x80_000],
+            bytes: vec![0; 0x80_000].into(),
         });
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\INAVI\INavi\TpSysAuth.dll".to_owned(),
             base: 0x6029_c000,
-            bytes: vec![0; 0xa000],
+            bytes: vec![0; 0xa000].into(),
         });
         scheduler
             .pending_wndproc_returns
@@ -29494,7 +29706,7 @@ mod wait_scheduler_tests {
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: vec![0; 0x80_000],
+            bytes: vec![0; 0x80_000].into(),
         });
 
         assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
@@ -29775,7 +29987,7 @@ mod wait_scheduler_tests {
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: vec![0; 0x80_000],
+            bytes: vec![0; 0x80_000].into(),
         });
 
         assert!(scheduler.prepare_cross_thread_visible_message_callout(&mut kernel));
@@ -31200,6 +31412,7 @@ fn try_exit_guest_thread_callout<D>(
 fn try_enter_create_thread_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -31233,8 +31446,12 @@ fn try_enter_create_thread_callout<D>(
     let (thread_handle, worker_thread_id) =
         kernel.create_guest_thread(start_address, parameter, suspended);
     if thread_id_ptr != 0
-        && uc
-            .mem_write(u64::from(thread_id_ptr), &worker_thread_id.to_le_bytes())
+        && checked_host_write(
+            uc,
+            sealed_host_write_guard,
+            u64::from(thread_id_ptr),
+            &worker_thread_id.to_le_bytes(),
+        )
             .is_err()
     {
         let _ = kernel.close_handle(thread_handle);
@@ -32205,6 +32422,7 @@ fn saved_message_remote_input_target_for_unicorn(kernel: &CeKernel) -> Option<(u
 #[cfg(feature = "unicorn")]
 fn write_unicorn_message<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     addr: u32,
     message: &crate::ce::gwe::Message,
 ) -> Result<()> {
@@ -32240,7 +32458,7 @@ fn write_unicorn_message<D>(
     bytes[8..12].copy_from_slice(&message.wparam.to_le_bytes());
     bytes[12..16].copy_from_slice(&message.lparam.to_le_bytes());
     bytes[16..20].copy_from_slice(&message.time_ms.to_le_bytes());
-    uc.mem_write(u64::from(addr), &bytes)
+    checked_host_write(uc, sealed_host_write_guard, u64::from(addr), &bytes)
         .map_err(|err| Error::Backend(format!("write resumed MSG 0x{addr:08x}: {err:?}")))
 }
 
@@ -32250,6 +32468,7 @@ fn write_unicorn_message<D>(
 fn prepare_native_message_pointer_payload<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     message: &crate::ce::gwe::Message,
     heap_mapping: Option<UnicornHeapMapping<'_>>,
@@ -32269,13 +32488,14 @@ fn prepare_native_message_pointer_payload<D>(
     let end = message.lparam.checked_add(len).ok_or_else(|| {
         Error::InvalidArgument("native message payload range overflow".to_owned())
     })?;
+    sealed_host_write_guard.check_write(u64::from(message.lparam), bytes.len())?;
     {
         let mut memory = UnicornGuestMemory {
             uc,
             heap_mapping: Some(mapping),
             private_vm_mapping: None,
             private_vm_applied_generation: None,
-            sealed_host_write_guard: SealedHostWriteGuard::default(),
+            sealed_host_write_guard: sealed_host_write_guard.clone(),
             #[cfg(test)]
             fail_next_private_unmap_for_test: false,
         };
@@ -32319,13 +32539,18 @@ fn prepare_native_message_pointer_payload<D>(
             Error::InvalidArgument("native message payload mapping overflow".to_owned())
         })?;
     }
-    uc.mem_write(u64::from(message.lparam), &bytes)
-        .map_err(|err| {
-            Error::Backend(format!(
-                "write native message payload 0x{:08x}: {err:?}",
-                message.lparam
-            ))
-        })
+    checked_host_write(
+        uc,
+        sealed_host_write_guard,
+        u64::from(message.lparam),
+        &bytes,
+    )
+    .map_err(|err| {
+        Error::Backend(format!(
+            "write native message payload 0x{:08x}: {err:?}",
+            message.lparam
+        ))
+    })
 }
 
 #[cfg(feature = "unicorn")]
@@ -32421,7 +32646,7 @@ mod guest_thread_stack_tests {
         scheduler.mapped_blobs.push(MappedBlob {
             name: "dll:test-wndproc.dll".to_owned(),
             base: wndproc & 0xfff0_0000,
-            bytes: vec![0; 0x100000],
+            bytes: vec![0; 0x100000].into(),
         });
     }
 
@@ -32809,7 +33034,7 @@ mod guest_thread_stack_tests {
                 cpu.mapped_blobs.push(MappedBlob {
                     name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
                     base: page,
-                    bytes: vec![0xa5; 0x1000],
+                    bytes: vec![0xa5; 0x1000].into(),
                 });
                 match failure {
                     0 => {
@@ -32874,7 +33099,7 @@ mod guest_thread_stack_tests {
         cpu.mapped_blobs.push(MappedBlob {
             name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
             base: page,
-            bytes: vec![0xa5; 0x1000],
+            bytes: vec![0xa5; 0x1000].into(),
         });
         assert!(prepare_direct_payload(&mut cpu, &mut kernel, false));
         assert_eq!(
@@ -33348,7 +33573,7 @@ mod guest_thread_stack_tests {
                 }
                 .to_owned(),
                 base: candidate,
-                bytes: vec![0xa5; size],
+                bytes: vec![0xa5; size].into(),
             }];
             let original = blobs[0].bytes.clone();
             let mapped = RefCell::new(KernelMemoryMappings::new(&blobs));
@@ -33540,7 +33765,7 @@ mod guest_thread_stack_tests {
                 blobs.push(MappedBlob {
                     name: "ram:ce-heap-arena".to_owned(),
                     base: source,
-                    bytes: vec![0; 0x1000],
+                    bytes: vec![0; 0x1000].into(),
                 });
             }
             let mapped = RefCell::new(KernelMemoryMappings::new(&blobs));
@@ -33789,7 +34014,7 @@ mod guest_thread_stack_tests {
         let blob = MappedBlob {
             name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
             base: 0x3100_0000,
-            bytes: vec![0; 0x5000],
+            bytes: vec![0; 0x5000].into(),
         };
 
         map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
@@ -33816,7 +34041,7 @@ mod guest_thread_stack_tests {
         let blob = MappedBlob {
             name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
             base: 0x3100_0000,
-            bytes: vec![0; 0x1000],
+            bytes: vec![0; 0x1000].into(),
         };
 
         map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
@@ -38318,7 +38543,7 @@ mod guest_thread_stack_tests {
         scheduler.mapped_blobs.push(super::MappedBlob {
             name: r"dll:D:\INAVI_Emulator\DUMPPLZ\Windows\mfcce400.dll".to_owned(),
             base: 0x0004_0000,
-            bytes: vec![0; 0x20_000],
+            bytes: vec![0; 0x20_000].into(),
         });
         scheduler.set_initial_thread_id(1);
         scheduler.current_thread_id = 5;
@@ -42610,6 +42835,7 @@ fn should_receiver_context_send_message_wndproc(
 fn try_enter_set_window_pos_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     heap_mapping: Option<UnicornHeapMapping<'_>>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -42675,8 +42901,15 @@ fn try_enter_set_window_pos_callout<D>(
         ];
         return writes.into_iter().all(|write| write.is_ok());
     };
-    if prepare_native_message_pointer_payload(kernel, uc, active_thread_id, &message, heap_mapping)
-        .is_err()
+    if prepare_native_message_pointer_payload(
+        kernel,
+        uc,
+        sealed_host_write_guard,
+        active_thread_id,
+        &message,
+        heap_mapping,
+    )
+    .is_err()
     {
         // Geometry was already applied by the existing kernel operation. Do
         // not repeat raw SetWindowPos, consume its message, or expose a bogus
@@ -42903,6 +43136,7 @@ fn try_enter_dispatch_message_callout<D>(
 fn try_enter_send_message_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -43057,7 +43291,12 @@ fn try_enter_send_message_callout<D>(
             if active_process_id != target_process_id {
                 let result = 0u32;
                 if let Some(ptr) = result_ptr {
-                    let _ = uc.mem_write(u64::from(ptr), &result.to_le_bytes());
+                    let _ = checked_host_write(
+                        uc,
+                        sealed_host_write_guard,
+                        u64::from(ptr),
+                        &result.to_le_bytes(),
+                    );
                 }
                 kernel.threads.set_last_error(active_thread_id, 0);
                 let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
@@ -43096,7 +43335,12 @@ fn try_enter_send_message_callout<D>(
             .send_message_w(hwnd, msg, wparam, lparam)
             .unwrap_or(0);
         if let Some(ptr) = result_ptr {
-            let _ = uc.mem_write(u64::from(ptr), &result.to_le_bytes());
+            let _ = checked_host_write(
+                uc,
+                sealed_host_write_guard,
+                u64::from(ptr),
+                &result.to_le_bytes(),
+            );
         }
         kernel.threads.set_last_error(active_thread_id, 0);
         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
@@ -43996,6 +44240,7 @@ fn is_fsdmgr_remove_file_lock_import(
 #[cfg(feature = "unicorn")]
 fn try_enter_fsdmgr_file_lock_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     name: Option<&str>,
@@ -44053,9 +44298,13 @@ fn try_enter_fsdmgr_file_lock_callout<D>(
     let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
     let caller_regs = capture_mips_gprs(uc);
     let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
-    if uc
-        .mem_write(u64::from(call_sp), &0u32.to_le_bytes())
-        .is_err()
+    if checked_host_write(
+        uc,
+        sealed_host_write_guard,
+        u64::from(call_sp),
+        &0u32.to_le_bytes(),
+    )
+    .is_err()
     {
         return false;
     }
@@ -44104,11 +44353,17 @@ fn read_unicorn_u32_result<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32)
 #[cfg(feature = "unicorn")]
 fn write_unicorn_u32_result<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     address: u32,
     value: u32,
 ) -> bool {
-    uc.mem_write(u64::from(address), &value.to_le_bytes())
-        .is_ok()
+    checked_host_write(
+        uc,
+        sealed_host_write_guard,
+        u64::from(address),
+        &value.to_le_bytes(),
+    )
+    .is_ok()
 }
 
 #[cfg(feature = "unicorn")]
@@ -44217,6 +44472,7 @@ fn fsdmgr_guest_file_lock_test_result<D>(
 fn fsdmgr_guest_install_file_lock_result<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     state: &PendingFsdmgrFileLockReturn,
 ) -> u32 {
@@ -44296,7 +44552,12 @@ fn fsdmgr_guest_install_file_lock_result<D>(
         return 0;
     };
     if lock_container == 0
-        && !write_unicorn_u32_result(uc, lock_container_ptr, SYNTHETIC_LOCK_CONTAINER)
+        && !write_unicorn_u32_result(
+            uc,
+            sealed_host_write_guard,
+            lock_container_ptr,
+            SYNTHETIC_LOCK_CONTAINER,
+        )
     {
         kernel
             .threads
@@ -44353,6 +44614,7 @@ fn fsdmgr_guest_install_file_lock_result<D>(
 fn fsdmgr_guest_remove_file_lock_ex_result<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     state: &PendingFsdmgrFileLockReturn,
 ) -> u32 {
@@ -44422,7 +44684,7 @@ fn fsdmgr_guest_remove_file_lock_ex_result<D>(
     if queue_count == 0 {
         match kernel.file_handle_has_locks(state.file_handle) {
             Ok(false) => {
-                if !write_unicorn_u32_result(uc, lock_container_ptr, 0) {
+                if !write_unicorn_u32_result(uc, sealed_host_write_guard, lock_container_ptr, 0) {
                     kernel
                         .threads
                         .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -44446,6 +44708,7 @@ fn fsdmgr_guest_remove_file_lock_ex_result<D>(
 fn fsdmgr_guest_remove_file_lock_result<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     state: &PendingFsdmgrFileLockReturn,
 ) -> u32 {
@@ -44548,7 +44811,7 @@ fn fsdmgr_guest_remove_file_lock_result<D>(
     if queue_count == 0 {
         match kernel.file_handle_has_locks(state.file_handle) {
             Ok(false) => {
-                if !write_unicorn_u32_result(uc, lock_container_ptr, 0) {
+                if !write_unicorn_u32_result(uc, sealed_host_write_guard, lock_container_ptr, 0) {
                     kernel
                         .threads
                         .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -44616,6 +44879,7 @@ fn finish_fsdmgr_file_lock_callout<D>(
 fn handle_fsdmgr_file_lock_return_stub<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     thread_id: u32,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingFsdmgrFileLockReturn>>>,
 ) -> bool {
@@ -44634,16 +44898,34 @@ fn handle_fsdmgr_file_lock_return_stub<D>(
             }
             state.api_result = match state.operation {
                 FsdmgrFileLockOperation::Install { .. } => {
-                    fsdmgr_guest_install_file_lock_result(kernel, uc, thread_id, state)
+                    fsdmgr_guest_install_file_lock_result(
+                        kernel,
+                        uc,
+                        sealed_host_write_guard,
+                        thread_id,
+                        state,
+                    )
                 }
                 FsdmgrFileLockOperation::Test { .. } => {
                     fsdmgr_guest_file_lock_test_result(kernel, uc, thread_id, state)
                 }
                 FsdmgrFileLockOperation::RemoveExact { .. } => {
-                    fsdmgr_guest_remove_file_lock_result(kernel, uc, thread_id, state)
+                    fsdmgr_guest_remove_file_lock_result(
+                        kernel,
+                        uc,
+                        sealed_host_write_guard,
+                        thread_id,
+                        state,
+                    )
                 }
                 FsdmgrFileLockOperation::RemoveAll => {
-                    fsdmgr_guest_remove_file_lock_ex_result(kernel, uc, thread_id, state)
+                    fsdmgr_guest_remove_file_lock_ex_result(
+                        kernel,
+                        uc,
+                        sealed_host_write_guard,
+                        thread_id,
+                        state,
+                    )
                 }
             };
             enter_fsdmgr_release_file_lock_state(uc, state)
@@ -45137,6 +45419,7 @@ const ENUM_FONT_FAMILIES_FRAME_SIZE: u32 = 512;
 #[cfg(feature = "unicorn")]
 fn write_enum_font_data<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     sp: u32,
     family: &crate::ce::kernel::CeFontFamily,
 ) -> bool {
@@ -45227,13 +45510,14 @@ fn write_enum_font_data<D>(
     };
     buf[ntm + 92..ntm + 96].copy_from_slice(&cscb0.to_le_bytes());
 
-    uc.mem_write(u64::from(sp), &buf).is_ok()
+    checked_host_write(uc, sealed_host_write_guard, u64::from(sp), &buf).is_ok()
 }
 
 #[cfg(feature = "unicorn")]
 fn try_enter_enum_font_families_callout<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -45337,7 +45621,7 @@ fn try_enter_enum_font_families_callout<D>(
     let mut remaining = fonts;
     let first = remaining.remove(0);
 
-    if !write_enum_font_data(uc, struct_frame_sp, &first) {
+    if !write_enum_font_data(uc, sealed_host_write_guard, struct_frame_sp, &first) {
         return false;
     }
 
@@ -45389,6 +45673,7 @@ fn try_enter_enum_font_families_callout<D>(
 #[cfg(feature = "unicorn")]
 fn handle_enum_font_families_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
 ) {
     use unicorn_engine::RegisterMIPS;
@@ -45427,7 +45712,7 @@ fn handle_enum_font_families_return_stub<D>(
     let lparam = state.lparam;
     drop(pending);
 
-    if !write_enum_font_data(uc, struct_frame_sp, &next) {
+    if !write_enum_font_data(uc, sealed_host_write_guard, struct_frame_sp, &next) {
         // Memory write failed; return 1.
         let mut pending = pending_returns.borrow_mut();
         let state = pending.pop().unwrap();
@@ -45468,6 +45753,7 @@ const LOCALE_ENUM_FRAME_SIZE: u32 = 256;
 #[cfg(feature = "unicorn")]
 fn call_locale_enum_callback<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     struct_frame_sp: u32,
     callback: u32,
     string: &[u16],
@@ -45478,7 +45764,7 @@ fn call_locale_enum_callback<D>(
     for c in string {
         bytes.extend_from_slice(&c.to_le_bytes());
     }
-    if uc.mem_write(u64::from(struct_frame_sp), &bytes).is_err() {
+    if checked_host_write(uc, sealed_host_write_guard, u64::from(struct_frame_sp), &bytes).is_err() {
         return false;
     }
     let call_callback = normalize_ce_process_slot_callback(uc, callback);
@@ -45496,6 +45782,7 @@ fn call_locale_enum_callback<D>(
 #[cfg(feature = "unicorn")]
 fn try_enter_locale_enum_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
@@ -45599,7 +45886,7 @@ fn try_enter_locale_enum_callout<D>(
         "NLS string enumeration guest callback callout"
     );
 
-    if !call_locale_enum_callback(uc, struct_frame_sp, callback, &first) {
+    if !call_locale_enum_callback(uc, sealed_host_write_guard, struct_frame_sp, callback, &first) {
         return false;
     }
 
@@ -45617,6 +45904,7 @@ fn try_enter_locale_enum_callout<D>(
 #[cfg(feature = "unicorn")]
 fn handle_locale_enum_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sealed_host_write_guard: &SealedHostWriteGuard,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingLocaleEnumReturn>>>,
 ) {
     use unicorn_engine::RegisterMIPS;
@@ -45644,7 +45932,7 @@ fn handle_locale_enum_return_stub<D>(
     let callback = state.callback;
     drop(pending);
 
-    if !call_locale_enum_callback(uc, struct_frame_sp, callback, &next) {
+    if !call_locale_enum_callback(uc, sealed_host_write_guard, struct_frame_sp, callback, &next) {
         let mut pending = pending_returns.borrow_mut();
         let state = pending.pop().unwrap();
         restore_mips_gprs(uc, &state.caller_regs);
@@ -50582,6 +50870,12 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             }
         }
         for pin in prepared.new_page_pins() {
+            self.sealed_host_write_guard.check_write(
+                u64::from(pin.identity().page_base()),
+                STABLE_PRIVATE_PAGE_SIZE,
+            )?;
+        }
+        for pin in prepared.new_page_pins() {
             map_prepared_private_slab_page(
                 self.uc,
                 &mut mapped,
@@ -50623,6 +50917,14 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             ));
         }
         let applied_generation = mapped.virtual_generation;
+        // Validate the whole change before unmapping or protecting any page:
+        // a later overlap must not leave an earlier page half-committed.
+        for action in change.native_page_changes() {
+            self.sealed_host_write_guard.check_write(
+                u64::from(action.pin().identity().page_base()),
+                STABLE_PRIVATE_PAGE_SIZE,
+            )?;
+        }
         for action in change.native_page_changes() {
             let pin = action.pin();
             let identity = pin.identity();
@@ -50723,6 +51025,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     }
 
     fn validate_writable_u32(&self, addr: u32) -> Result<()> {
+        self.sealed_host_write_guard.check_write(u64::from(addr), 4)?;
         self.validate_private_host_access(addr, 4, unicorn_engine::Prot::WRITE.0 as u32)?;
         let end = addr.checked_add(4).ok_or_else(|| {
             Error::InvalidArgument("VirtualProtect output pointer wraps guest VA".to_owned())
@@ -50772,8 +51075,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
     fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
         self.validate_private_host_access(addr, 1, unicorn_engine::Prot::WRITE.0 as u32)?;
-        self.uc
-            .mem_write(u64::from(addr), &[value])
+        checked_host_write(self.uc, &self.sealed_host_write_guard, u64::from(addr), &[value])
             .map_err(|err| Error::Backend(format!("write_u8 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
@@ -50789,8 +51091,12 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
     fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
         self.validate_private_host_access(addr, 4, unicorn_engine::Prot::WRITE.0 as u32)?;
-        self.uc
-            .mem_write(u64::from(addr), &value.to_le_bytes())
+        checked_host_write(
+            self.uc,
+            &self.sealed_host_write_guard,
+            u64::from(addr),
+            &value.to_le_bytes(),
+        )
             .map_err(|err| Error::Backend(format!("write_u32 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
@@ -50799,8 +51105,12 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         // COREDLL checked the old-protect slot while it was still writable.
         // The slot may itself have become read-only in this same transaction;
         // Unicorn's host write is the narrow post-commit publication step.
-        self.uc
-            .mem_write(u64::from(addr), &value.to_le_bytes())
+        checked_host_write(
+            self.uc,
+            &self.sealed_host_write_guard,
+            u64::from(addr),
+            &value.to_le_bytes(),
+        )
             .map_err(|err| {
                 Error::Backend(format!(
                     "write prevalidated VirtualProtect result 0x{addr:08x}: {err:?}"
@@ -50820,8 +51130,12 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
         self.validate_private_host_access(addr, 2, unicorn_engine::Prot::WRITE.0 as u32)?;
-        self.uc
-            .mem_write(u64::from(addr), &value.to_le_bytes())
+        checked_host_write(
+            self.uc,
+            &self.sealed_host_write_guard,
+            u64::from(addr),
+            &value.to_le_bytes(),
+        )
             .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
@@ -50836,8 +51150,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
     fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
         self.validate_private_host_access(addr, bytes.len(), unicorn_engine::Prot::WRITE.0 as u32)?;
-        self.uc
-            .mem_write(u64::from(addr), bytes)
+        checked_host_write(self.uc, &self.sealed_host_write_guard, u64::from(addr), bytes)
             .map_err(|err| Error::Backend(format!("write_bytes 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
@@ -50852,6 +51165,8 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             .and_then(|value| value.checked_add(0xfff))
             .map(|value| value & !0xfff)
             .ok_or_else(|| Error::InvalidArgument("guest mapping range overflow".to_owned()))?;
+        self.sealed_host_write_guard
+            .check_write(u64::from(start), (end - start) as usize)?;
         let mut page = start;
         while page < end {
             let mut probe = [0u8; 1];
@@ -50900,13 +51215,22 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn fill_bytes(&mut self, addr: u32, value: u8, len: u32) -> Result<()> {
         const FILL_CHUNK: usize = 4096;
 
+        // Reject the entire request before writing the first chunk. A sealed
+        // page late in a fill must not leave an earlier writable page changed.
+        self.sealed_host_write_guard
+            .check_write(u64::from(addr), len as usize)?;
+
         let chunk = [value; FILL_CHUNK];
         let mut remaining = len as usize;
         let mut cursor = addr;
         while remaining != 0 {
             let count = remaining.min(FILL_CHUNK);
-            self.uc
-                .mem_write(u64::from(cursor), &chunk[..count])
+            checked_host_write(
+                self.uc,
+                &self.sealed_host_write_guard,
+                u64::from(cursor),
+                &chunk[..count],
+            )
                 .map_err(|err| Error::Backend(format!("fill_bytes 0x{cursor:08x}: {err:?}")))?;
             cursor = cursor.wrapping_add(count as u32);
             remaining -= count;
@@ -50939,6 +51263,42 @@ mod unicorn_tests {
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
     };
+
+    #[test]
+    fn sealed_host_write_guard_rejects_cross_page_writes_before_native_mutation() {
+        use crate::ce::coredll::CoredllGuestMemory;
+
+        let guard = super::SealedHostWriteGuard {
+            ranges: Rc::new(vec![(0x2000, 0x3000)]),
+            violation: Rc::new(RefCell::new(None)),
+        };
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x1000, 0x3000, Prot::ALL).unwrap();
+        uc.mem_write(0x1ff0, &[0x5a; 0x20]).unwrap();
+        uc.mem_protect(0x2000, 0x1000, Prot::READ).unwrap();
+
+        assert!(super::checked_host_write(&mut uc, &guard, 0x1ff0, &[0xcc; 0x20]).is_err());
+        assert_eq!(uc.mem_read_as_vec(0x1ff0, 0x20).unwrap(), vec![0x5a; 0x20]);
+        assert!(guard.poison_error().is_some());
+
+        // A chunked fill also preflights the entire range. The first writable
+        // page must stay unchanged when a later chunk reaches the sealed page.
+        let mut memory = super::UnicornGuestMemory::new(&mut uc)
+            .with_sealed_host_write_guard(&guard);
+        assert!(memory.fill_bytes(0x1000, 0xcc, 0x2000).is_err());
+        drop(memory);
+        assert_eq!(uc.mem_read_as_vec(0x1ff0, 0x20).unwrap(), vec![0x5a; 0x20]);
+
+        let clean = super::SealedHostWriteGuard {
+            ranges: Rc::new(vec![(0x2000, 0x3000)]),
+            violation: Rc::new(RefCell::new(None)),
+        };
+        assert!(super::checked_host_write(&mut uc, &clean, 0x1ff0, &[0xcc; 0x10]).is_ok());
+        assert_eq!(uc.mem_read_as_vec(0x1ff0, 0x10).unwrap(), vec![0xcc; 0x10]);
+        assert!(clean.check_write(0x3000, 1).is_ok());
+        assert!(clean.check_write(0x2000, 0).is_ok());
+        assert!(clean.check_write(u64::from(u32::MAX), 2).is_err());
+    }
 
     struct PausingFramebuffer {
         inner: VirtualFramebuffer,
@@ -51911,7 +52271,10 @@ mod unicorn_tests {
             })
             .expect("fixture guest address is mapped");
         let offset = (address - blob.base) as usize;
-        blob.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
+        blob.bytes
+            .as_mut_owned()
+            .expect("fixture guest image must remain mutable")[offset..offset + bytes.len()]
+            .copy_from_slice(bytes);
     }
 
     #[test]
@@ -52978,12 +53341,12 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "ce-import-traps".to_owned(),
                 base: 0x1234_0000,
-                bytes: vec![0xaa; 16],
+                bytes: vec![0xaa; 16].into(),
             },
             super::MappedBlob {
                 name: "other".to_owned(),
                 base: 0x2000_0000,
-                bytes: vec![1, 2, 3],
+                bytes: vec![1, 2, 3].into(),
             },
         ];
 
@@ -53019,7 +53382,7 @@ mod unicorn_tests {
         let blobs = vec![super::MappedBlob {
             name: "image:main.exe".to_owned(),
             base: 0x0004_0000,
-            bytes: static_code.to_le_bytes().to_vec(),
+            bytes: static_code.to_le_bytes().to_vec().into(),
         }];
         let mapped_code = super::MappedCodeIndex::new(&blobs);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
@@ -53042,12 +53405,12 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "ce-import-traps".to_owned(),
                 base: crate::emulator::imports::IMPORT_TRAP_BASE,
-                bytes: stale_trap.to_le_bytes().to_vec(),
+                bytes: stale_trap.to_le_bytes().to_vec().into(),
             },
             super::MappedBlob {
                 name: super::HEAP_SPILLOVER_BLOB_NAME.to_owned(),
                 base: 0x3100_0000,
-                bytes: stale_heap.to_le_bytes().to_vec(),
+                bytes: stale_heap.to_le_bytes().to_vec().into(),
             },
         ];
         let mapped_code = super::MappedCodeIndex::new(&blobs);
@@ -53094,7 +53457,7 @@ mod unicorn_tests {
         let blobs = vec![super::MappedBlob {
             name: "dll:later.dll".to_owned(),
             base: 0x2000_1000,
-            bytes: vec![0; 0x1800],
+            bytes: vec![0; 0x1800].into(),
         }];
 
         let ranges = super::runtime_occupied_ranges(&memory, &blobs);
@@ -53135,7 +53498,7 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "image:slot-zero.exe".to_owned(),
             base: 0x0004_f000,
-            bytes: vec![0; 0x1000],
+            bytes: vec![0; 0x1000].into(),
         });
 
         assert_eq!(
@@ -53150,12 +53513,12 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "image:main.exe".to_owned(),
             base: 0x0004_f000,
-            bytes: vec![0; 0x3000],
+            bytes: vec![0; 0x3000].into(),
         });
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:mfcce400.dll".to_owned(),
             base: 0x0010_0000,
-            bytes: vec![0; 0x60000],
+            bytes: vec![0; 0x60000].into(),
         });
 
         assert_eq!(
@@ -53170,12 +53533,12 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:mfcce400.dll".to_owned(),
             base: 0x0010_0000,
-            bytes: vec![0; 0x8b000],
+            bytes: vec![0; 0x8b000].into(),
         });
 
         assert_eq!(
@@ -53190,12 +53553,12 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:mfcce400.dll".to_owned(),
             base: 0x0010_0000,
-            bytes: vec![0; 0x8b000],
+            bytes: vec![0; 0x8b000].into(),
         });
 
         assert_eq!(
@@ -53220,12 +53583,12 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: fake_pe_blob(0x7f000, 0x4015_0000),
+            bytes: fake_pe_blob(0x7f000, 0x4015_0000).into(),
         });
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:mfcce400.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000).into(),
         });
 
         assert_eq!(
@@ -53240,12 +53603,12 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:relocated-low-preferred.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: vec![0; 0x8b000],
+            bytes: vec![0; 0x8b000].into(),
         });
 
         assert_eq!(
@@ -53268,7 +53631,7 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:relocated-low-preferred.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000).into(),
         });
 
         assert_eq!(
@@ -53291,12 +53654,12 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "dll:commctrl.dll".to_owned(),
                 base: 0x4015_0000,
-                bytes: vec![0; 0x7f000],
+                bytes: vec![0; 0x7f000].into(),
             },
             super::MappedBlob {
                 name: "dll:mfcce400.dll".to_owned(),
                 base: 0x0010_0000,
-                bytes: vec![0; 0x8b000],
+                bytes: vec![0; 0x8b000].into(),
             },
         ];
 
@@ -53325,12 +53688,12 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "dll:mfcce400.dll".to_owned(),
                 base: 0x0010_0000,
-                bytes: vec![0; 0x8b000],
+                bytes: vec![0; 0x8b000].into(),
             },
             super::MappedBlob {
                 name: "dll:commctrl.dll".to_owned(),
                 base: 0x4015_0000,
-                bytes: vec![0; 0x7f000],
+                bytes: vec![0; 0x7f000].into(),
             },
         ];
 
@@ -53352,12 +53715,12 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "dll:commctrl.dll".to_owned(),
                 base: 0x4015_0000,
-                bytes: vec![0; 0x7f000],
+                bytes: vec![0; 0x7f000].into(),
             },
             super::MappedBlob {
                 name: "dll:mfcce400.dll".to_owned(),
                 base: 0x0010_0000,
-                bytes: vec![0; 0x8b000],
+                bytes: vec![0; 0x8b000].into(),
             },
         ];
 
@@ -53384,17 +53747,18 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "dll:commctrl.dll".to_owned(),
                 base: 0x4015_0000,
-                bytes: vec![0; 0x7f000],
+                bytes: vec![0; 0x7f000].into(),
             },
             super::MappedBlob {
                 name: "dll:mfcce400.dll".to_owned(),
                 base: 0x0010_0000,
-                bytes: vec![0; 0x8b000],
+                bytes: vec![0; 0x8b000].into(),
             },
         ];
 
         super::normalize_register_class_wndproc_arg(
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             &blobs,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W),
@@ -53413,7 +53777,7 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
 
         assert_eq!(
@@ -53436,12 +53800,12 @@ mod unicorn_tests {
         parent.mapped_blobs.push(super::MappedBlob {
             name: "dll:relocated-low-preferred.dll".to_owned(),
             base: 0x6000_0000,
-            bytes: fake_pe_blob(0x8b000, 0x0010_0000),
+            bytes: fake_pe_blob(0x8b000, 0x0010_0000).into(),
         });
         parent.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
 
         let parked_parent = super::ParkedProcess {
@@ -53490,7 +53854,7 @@ mod unicorn_tests {
         child.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: fake_pe_blob(0x7f000, 0x0015_0000),
+            bytes: fake_pe_blob(0x7f000, 0x0015_0000).into(),
         });
 
         assert_eq!(
@@ -53527,7 +53891,7 @@ mod unicorn_tests {
         aligned_shared_child.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4000_0000,
-            bytes: vec![0; 0x200000],
+            bytes: vec![0; 0x200000].into(),
         });
         assert_eq!(
             aligned_shared_child.receiver_process_wndproc_for_process(0x4019_f0f4, 67, 67),
@@ -53538,7 +53902,7 @@ mod unicorn_tests {
         parked_parent_cpu.mapped_blobs.push(super::MappedBlob {
             name: "dll:commctrl.dll".to_owned(),
             base: 0x4015_0000,
-            bytes: vec![0; 0x7f000],
+            bytes: vec![0; 0x7f000].into(),
         });
         let parked_parent = super::ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
@@ -56042,7 +56406,7 @@ mod unicorn_tests {
         let blob = MappedBlob {
             name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
             base: 0x5000,
-            bytes: vec![0; 0x1000],
+            bytes: vec![0; 0x1000].into(),
         };
         reconcile_persistent_native_memory(
             &mut uc,
@@ -56073,7 +56437,7 @@ mod unicorn_tests {
         let mut blobs = vec![MappedBlob {
             name: "ram:test".to_owned(),
             base: 0x1000,
-            bytes: vec![7; 0x20004],
+            bytes: vec![7; 0x20004].into(),
         }];
         assert_eq!(
             sync_persisted_blobs_to_native(&mut uc, &blobs, false).unwrap(),
@@ -56083,7 +56447,10 @@ mod unicorn_tests {
             sync_persisted_blobs_to_native(&mut uc, &blobs, true).unwrap(),
             0
         );
-        blobs[0].bytes[0x10001] = 9;
+        blobs[0]
+            .bytes
+            .as_mut_owned()
+            .expect("RAM fixture must remain mutable")[0x10001] = 9;
         assert_eq!(
             sync_persisted_blobs_to_native(&mut uc, &blobs, true).unwrap(),
             0x10000
@@ -56102,7 +56469,7 @@ mod unicorn_tests {
         let blobs = vec![MappedBlob {
             name: "ram:test".to_owned(),
             base: 0x1ffc,
-            bytes: vec![3; 8],
+            bytes: vec![3; 8].into(),
         }];
         assert!(sync_persisted_blobs_to_native(&mut uc, &blobs, true).is_err());
         assert!(sync_persisted_blobs_to_native(&mut uc, &blobs, false).is_err());
@@ -61299,7 +61666,7 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "test-image".to_owned(),
             base,
-            bytes,
+            bytes: bytes.into(),
         });
 
         let snapshot = super::UnicornDebugSnapshot {
@@ -61333,7 +61700,7 @@ mod unicorn_tests {
         emulator.mapped_blobs.push(super::MappedBlob {
             name: "test-image".to_owned(),
             base,
-            bytes,
+            bytes: bytes.into(),
         });
 
         let snapshot = super::UnicornDebugSnapshot {
@@ -61701,17 +62068,17 @@ mod unicorn_tests {
             super::MappedBlob {
                 name: "ram:heap".to_owned(),
                 base: 0x0010_0000,
-                bytes: vec![0; 0x1000],
+                bytes: vec![0; 0x1000].into(),
             },
             super::MappedBlob {
                 name: r"image:D:\app\iNavi.exe".to_owned(),
                 base: 0x0040_0000,
-                bytes: vec![0; 0x2000],
+                bytes: vec![0; 0x2000].into(),
             },
             super::MappedBlob {
                 name: r"dll:D:\dump\mfcce400.dll".to_owned(),
                 base: 0x1000_0000,
-                bytes: vec![0; 0x3000],
+                bytes: vec![0; 0x3000].into(),
             },
         ];
 
@@ -62097,6 +62464,7 @@ mod unicorn_tests {
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
             &[hwnd, crate::ce::gwe::WM_USER + 88, 0x2716, 0],
@@ -62164,6 +62532,7 @@ mod unicorn_tests {
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
             &[hwnd, crate::ce::gwe::WM_USER + 88, 0x55, 0x66],
@@ -62283,6 +62652,7 @@ mod unicorn_tests {
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
             &[hwnd, crate::ce::gwe::WM_USER + 89, 0x55, 0x66],
@@ -62388,7 +62758,7 @@ mod unicorn_tests {
         let blobs = vec![super::MappedBlob {
             name: "ram:msg".to_owned(),
             base: 0x20000,
-            bytes: vec![0; 0x1000],
+            bytes: vec![0; 0x1000].into(),
         }];
         (kernel, uc, mapped, blobs, hwnd)
     }
@@ -62457,7 +62827,7 @@ mod unicorn_tests {
             blobs.push(super::MappedBlob {
                 name: "ram:msg-tail".to_owned(),
                 base: 0x21000,
-                bytes: vec![0; 0x1000],
+                bytes: vec![0; 0x1000].into(),
             });
             uc.mem_write(0x20ff0, &[0xa5; 28]).unwrap();
             0x20ff0
@@ -62889,7 +63259,7 @@ mod unicorn_tests {
                     blobs.push(super::MappedBlob {
                         name: "ram:valid-msg".to_owned(),
                         base: msg_ptr,
-                        bytes: vec![0; 0x1000],
+                        bytes: vec![0; 0x1000].into(),
                     });
                 } else {
                     native_payload_clear_msg_fault(&mut uc, fault);
@@ -63056,7 +63426,7 @@ mod unicorn_tests {
         let mut blobs_test = vec![super::MappedBlob {
             name: "ram:heap".to_owned(),
             base: super::GUEST_HEAP_ARENA_BASE,
-            bytes: vec![0; 0x1000],
+            bytes: vec![0; 0x1000].into(),
         }];
         let thread_id = 1;
         let wndproc = 0x0001_3570;
@@ -63356,6 +63726,7 @@ mod unicorn_tests {
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
+            &super::SealedHostWriteGuard::default(),
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
             &[
