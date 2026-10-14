@@ -11,8 +11,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    suites and focused clone, native ownership, host-write, readback and
    accounting controls. Check whole-span preflight for the guarded startup
    output families and keep unconverted direct-import cold-stack outputs
-   fail-closed. Preserve writable semantics and process/thread isolation; no
-   speed or RSS inference follows from E-43's load-only blob census.
+   fail-closed. Test a stale different-birth case independently of the passing
+   exact-path blocked serial/NMEA fresh-owner case. Preserve writable semantics
+   and process/thread isolation; no speed or RSS inference follows from the
+   synthetic profile or E-43's load-only blob census.
 1. O-M2: move the global heap cursor and ownerless allocation metadata to
    birth-qualified authority before Stage 3. Prove foreign `HeapFree`/
    `HeapSize` rejection and prevent one birth's allocation high-water from

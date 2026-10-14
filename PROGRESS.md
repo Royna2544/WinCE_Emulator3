@@ -22,6 +22,17 @@ references for historical reconstruction.
   allocation metadata still need O-M2 ownership work; heap spillover remains
   copy-backed. There has been no E-44 iNavi run, RSS, speed, or map-readiness
   measurement.
+- A bounded synthetic 56-MiB sealed-RX profile passed **1/1** in release after
+  fixed-slab setup. Its owned blob capacity, fresh blob writes, and fresh/reused
+  readback were each **77,824 B**, versus **21,049,344 B** owned capacity,
+  fresh writes and readback in the E-43 pre-slab debug control: a **20,971,520 B
+  (20 MiB)** logical reduction for those fields. Fixed-slab reservation is
+  outside the timed setup section; the profiles differ in build mode and each
+  has one sample, so their timing is not a speed result. A separate exact-path
+  blocked serial/NMEA test passed **1/1**, writing two previously untouched
+  stack pages and surviving a fresh owner. Stale different-birth behavior was
+  not independently tested. These focused results do not close the pending
+  E-44 full gate ([provisional receipt](evidence/heap-stack-20261014/validation.receipt.md)).
 
 ## 2026-10-14 E-43 Final-Byte Main-Image Source Gate
 

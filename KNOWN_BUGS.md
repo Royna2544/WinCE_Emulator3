@@ -74,7 +74,14 @@ Refreshed on 2026-10-14. This file lists unresolved behavior only; resolved entr
   import outputs can still fail closed on a cold, untouched stack page. The
   shared sparse `ThreadStack` has no per-thread/slot committed low-water;
   a 128-KiB per-slot contiguous `[page(SP), slot_top)` commit is a conditional
-  follow-up only if an approved live run encounters that bypass.
+  follow-up only if an approved live run encounters that bypass. The exact-path
+  blocked serial/NMEA focused control passes across two untouched stack pages
+  and a fresh owner, but stale different-birth rejection has not been
+  independently tested and the E-44 full source gate is pending. The synthetic
+  56-MiB RX profile reduced owned blob capacity/fresh writes/readback by
+  20,971,520 B against its pre-slab control; this is a logical blob-byte result,
+  not host RSS or app speed (debug versus release, one sample each, and slab
+  reservation outside the timed setup section).
   The earlier 155-page original-byte filter result is historical; no new app
   memory, speed, or map-readiness gain has been measured
   ([E-43 receipt](evidence/sealed-main-image-20261014/validation.receipt.md),
