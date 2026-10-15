@@ -404,6 +404,17 @@ fn verified_native_register_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_sent_has_sender_birth(
+    sent: &crate::ce::gwe::SentMessage,
+    thread: crate::ce::object::ThreadBirthKey,
+    process: crate::ce::object::ProcessBirthKey,
+) -> bool {
+    sent.sender_owner == (crate::ce::gwe::SentMessageSenderOwner::Birth { thread, process })
+        && sent.sender_thread_id == Some(thread.thread_id())
+        && sent.sender_process_id == Some(process.process_id())
+}
+
+#[cfg(feature = "unicorn")]
 fn native_gwe_queue_import_requires_verified_birth(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -438,6 +449,20 @@ fn native_window_creation_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_send_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && matches!(
+            ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT)
+                | Some(crate::ce::coredll_ordinals::ORD_SEND_DLG_ITEM_MESSAGE_W)
+        )
+}
+
+#[cfg(feature = "unicorn")]
 fn native_import_requires_verified_thread_birth(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -445,6 +470,7 @@ fn native_import_requires_verified_thread_birth(
 ) -> bool {
     native_gwe_queue_import_requires_verified_birth(module_kind, ordinal)
         || native_window_creation_import_requires_verified_birth(module_kind, ordinal)
+        || native_send_import_requires_verified_birth(module_kind, ordinal)
         || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
             && first_arg == 0
             && matches!(
@@ -1040,7 +1066,10 @@ fn preflight_reciprocal_sent_return(
         .gwe
         .sent_message(token.send_id)
         .ok_or_else(|| "reciprocal return lost inner GWE send".to_owned())?;
-    if sent.sender_thread_id != Some(token.sender_thread_id)
+    if !kernel
+        .handles
+        .thread_creation_owner_by_id(token.sender_thread_id)
+        .is_some_and(|owner| native_sent_has_sender_birth(sent, token.sender_birth, owner))
         || sent.receiver_thread_id != token.receiver_thread_id
         || sent.receiver_birth != Some(token.receiver_birth)
         || sent.message.hwnd != callout.hwnd
@@ -3762,6 +3791,7 @@ impl UnicornMips {
                 ..
             } = blocked.kind
                 && kernel.gwe.sent_message(send_id).is_some()
+                && verified_native_send_wait_birth(kernel, blocked).is_some()
                 && !kernel.sent_message_result_ready(send_id)
             {
                 push_receiver(receiver_thread_id);
@@ -3776,6 +3806,7 @@ impl UnicornMips {
             if let crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } =
                 wait.kind
                 && let Some(sent) = kernel.gwe.sent_message(send_id)
+                && verified_scheduler_send_wait_owner(kernel, wait)
                 && !kernel.sent_message_result_ready(send_id)
             {
                 push_receiver(sent.receiver_thread_id);
@@ -3783,6 +3814,7 @@ impl UnicornMips {
         }
 
         let active_process_id = kernel.current_process_id();
+        let active_process_birth = kernel.current_process_birth_key();
         for snapshot in [
             self.last_debug.as_ref(),
             self.last_wall_clock_debug.as_ref(),
@@ -3795,7 +3827,18 @@ impl UnicornMips {
             };
             if yielded.sender_process_id == active_process_id
                 && active_thread_ids.contains(&yielded.sender_thread_id)
-                && kernel.gwe.sent_message(yielded.send_id).is_some()
+                && active_process_birth.is_some_and(|process| {
+                    kernel
+                        .live_thread_birth_key_by_id(yielded.sender_thread_id)
+                        .is_some_and(|thread| {
+                            kernel.gwe.sent_message(yielded.send_id).is_some_and(|sent| {
+                                native_sent_has_sender_birth(sent, thread, process)
+                                    && sent.receiver_thread_id == yielded.target_thread_id
+                                    && sent.message.hwnd == yielded.hwnd
+                                    && sent.message.msg == yielded.msg
+                            })
+                        })
+                })
                 && !kernel.sent_message_result_ready(yielded.send_id)
             {
                 push_receiver(yielded.target_thread_id);
@@ -21952,8 +21995,7 @@ fn verified_native_send_message_timeout_birth(
     }
     let sent = kernel.gwe.sent_message(blocked.block_state.send_id)?;
     (sent.id == blocked.block_state.send_id
-        && sent.sender_thread_id == Some(blocked.thread_id)
-        && sent.sender_process_id == Some(blocked.owner_process_birth.process_id())
+        && native_sent_has_sender_birth(sent, birth, blocked.owner_process_birth)
         && sent.receiver_thread_id == blocked.receiver_thread_id
         && sent.result_ptr
             == (blocked.block_state.result_ptr != 0).then_some(blocked.block_state.result_ptr)
@@ -22007,10 +22049,10 @@ fn retire_stale_send_message_timeout_wait(
     }) {
         let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     }
-    let _ = kernel.gwe.abandon_sent_message_from_sender(
+    let _ = kernel.gwe.abandon_sent_message_from_sender_birth(
         blocked.block_state.send_id,
-        blocked.thread_id,
-        blocked.owner_process_birth.process_id(),
+        blocked.owner_birth,
+        blocked.owner_process_birth,
         blocked.receiver_thread_id,
         (blocked.block_state.result_ptr != 0).then_some(blocked.block_state.result_ptr),
         Some(blocked.block_state.timeout_ms),
@@ -22193,7 +22235,7 @@ fn try_block_for_send_message_timeout_wait<D>(
 
     // First entry: only a verified sender may publish a cross-thread send.
     let Some(block_state) =
-        crate::ce::coredll::send_message_timeout_block_prepare(kernel, thread_id, args)
+        crate::ce::coredll::send_message_timeout_block_prepare(kernel, sender_birth, args)
     else {
         return false;
     };
@@ -28042,8 +28084,7 @@ fn verified_native_send_wait_birth(
             .handles
             .thread_creation_owner_by_id(candidate.thread_id)?;
         if sent.id != send_id
-            || sent.sender_thread_id != Some(candidate.thread_id)
-            || sent.sender_process_id != Some(sender_owner.process_id())
+            || !native_sent_has_sender_birth(sent, birth, sender_owner)
             || sent.receiver_thread_id != receiver_thread_id
         {
             return None;
@@ -28074,8 +28115,7 @@ fn verified_scheduler_send_wait_owner(
             .handles
             .thread_creation_owner_by_id(wait.thread_id)
             .is_some_and(|owner| {
-                sent.sender_thread_id == Some(wait.thread_id)
-                    && sent.sender_process_id == Some(owner.process_id())
+                native_sent_has_sender_birth(sent, birth, owner)
             })
     })
 }
@@ -28737,8 +28777,7 @@ fn try_resume_blocked_wait_with_active_pc_mode<D>(
         let Some(result) = sent.result.filter(|_| {
             sent.flags & crate::ce::gwe::SMF_RESULT_READY != 0
                 && sent.id == send_id
-                && sent.sender_thread_id == Some(candidate.thread_id)
-                && sent.sender_process_id == Some(sender_owner.process_id())
+                && native_sent_has_sender_birth(sent, sender_birth, sender_owner)
                 && sent.receiver_thread_id == receiver_thread_id
         }) else {
             return abort_native_send_resume(
@@ -44593,8 +44632,7 @@ fn preflight_reciprocal_send_handoff(
     let inner_sent = kernel.gwe.sent_message(inner_send_id)?;
     let receiver_birth = inner_sent.receiver_birth?;
     let owner = kernel.current_process_birth_key()?;
-    if inner_sent.sender_thread_id != Some(active_thread_id)
-        || inner_sent.sender_process_id != Some(owner.process_id())
+    if !native_sent_has_sender_birth(inner_sent, sender_birth, owner)
         || inner_sent.receiver_thread_id != receiver_thread_id
         || receiver_birth.thread_id() != receiver_thread_id
         || !kernel.is_live_thread_birth(receiver_birth)
@@ -44641,8 +44679,7 @@ fn preflight_reciprocal_send_handoff(
         return None;
     }
     let outer_sent = kernel.gwe.sent_message(outer_send_id)?;
-    if outer_sent.sender_thread_id != Some(receiver_thread_id)
-        || outer_sent.sender_process_id != Some(owner.process_id())
+    if !native_sent_has_sender_birth(outer_sent, receiver_birth, owner)
         || outer_sent.receiver_birth != Some(sender_birth)
         || outer_sent.receiver_thread_id != active_thread_id
         || outer_sent.timeout_ms.is_some()
@@ -58294,6 +58331,38 @@ fn try_enter_send_message_callout<D>(
         return false;
     }
 
+    // All direct, deferred and raw-fallback forms below originate from this
+    // native register frame. Never let a later PID/TID incarnation authorize
+    // the old frame, including the same-thread direct WNDPROC path.
+    let Some(import_sender_birth) =
+        verified_native_register_birth(kernel, current_thread_id, active_thread_id)
+    else {
+        stop_native_opaque_wait_error(
+            uc,
+            current_thread_id,
+            terminal_error,
+            active_thread_id,
+            "SendMessage has stale sender birth or unverified native frame",
+        );
+        return true;
+    };
+    let import_sender_process = kernel.current_process_birth_key();
+    if import_sender_process.is_none()
+        || kernel
+            .handles
+            .thread_creation_owner_by_id(active_thread_id)
+            != import_sender_process
+    {
+        stop_native_opaque_wait_error(
+            uc,
+            current_thread_id,
+            terminal_error,
+            active_thread_id,
+            "SendMessage native sender birth has mismatched process lease",
+        );
+        return true;
+    }
+
     let hwnd = args.first().copied().unwrap_or(0);
     if !kernel.gwe.is_window(hwnd) {
         return false;
@@ -58363,22 +58432,17 @@ fn try_enter_send_message_callout<D>(
                 .iter()
                 .any(|process| process.process_state.process_id == target_process_id)
         {
-            let sender_birth =
-                verified_native_register_birth(kernel, current_thread_id, active_thread_id).filter(
-                    |birth| {
-                        kernel.handles.thread_creation_owner_by_id(active_thread_id)
-                            == kernel.current_process_birth_key()
-                            && running_thread.borrow().is_none_or(|(thread_id, handle)| {
-                                thread_id == active_thread_id
-                                    && (handle
-                                        == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
-                                        || kernel
-                                            .handles
-                                            .thread_birth_key_for_handle(handle)
-                                            .is_none_or(|handle_birth| handle_birth == *birth))
-                            })
-                    },
-                );
+            let sender_birth = running_thread
+                .borrow()
+                .is_none_or(|(thread_id, handle)| {
+                    thread_id == active_thread_id
+                        && (handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+                            || kernel
+                                .handles
+                                .thread_birth_key_for_handle(handle)
+                                .is_none_or(|handle_birth| handle_birth == import_sender_birth))
+                })
+                .then_some(import_sender_birth);
             let Some(sender_birth) = sender_birth else {
                 stop_native_opaque_wait_error(
                     uc,
@@ -58390,8 +58454,8 @@ fn try_enter_send_message_callout<D>(
                 return true;
             };
             let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
-            let Some(send_id) = kernel.begin_cross_thread_send_message_w(
-                active_thread_id,
+            let Some(send_id) = kernel.begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 msg,
                 wparam,
@@ -58604,23 +58668,7 @@ fn try_enter_send_message_callout<D>(
             );
             return true;
         }
-        let sender_birth =
-            verified_native_register_birth(kernel, current_thread_id, active_thread_id).filter(
-                |_| {
-                    kernel.handles.thread_creation_owner_by_id(active_thread_id)
-                        == kernel.current_process_birth_key()
-                },
-            );
-        let Some(sender_birth) = sender_birth else {
-            stop_native_opaque_wait_error(
-                uc,
-                current_thread_id,
-                terminal_error,
-                active_thread_id,
-                "receiver-context SendMessage has stale sender birth",
-            );
-            return true;
-        };
+        let sender_birth = import_sender_birth;
         let sender_regs = match capture_mips_context_checked(uc) {
             Ok(regs) => regs,
             Err(error) => {
@@ -58636,8 +58684,8 @@ fn try_enter_send_message_callout<D>(
         };
         let sender_return_pc = import_callout_return_pc(sender_regs.regs[31], trampoline_jumps);
         let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
-        let Some(send_id) = kernel.begin_cross_thread_send_message_w(
-            active_thread_id,
+        let Some(send_id) = kernel.begin_cross_thread_send_message_w_for_birth(
+            sender_birth,
             hwnd,
             msg,
             wparam,
@@ -82709,7 +82757,13 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::FP, 0x1234_5678).unwrap();
         uc.reg_write(RegisterMIPS::S0, 0x7777_0010).unwrap();
 
-        let current_thread_id = Rc::new(super::NativeCurrentThread::new(thread_id, None));
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(thread_id)
+            .expect("boot sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            thread_id,
+            Some(sender_birth),
+        ));
         let running_thread = Rc::new(RefCell::new(Some((thread_id, 0x0000_0120))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
@@ -84495,7 +84549,13 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         kernel.set_current_process_id(sender_process);
 
-        let current_thread_id = Rc::new(super::NativeCurrentThread::new(sender_thread, None));
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
+        let current_thread_id = Rc::new(super::NativeCurrentThread::new(
+            sender_thread,
+            Some(sender_birth),
+        ));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
