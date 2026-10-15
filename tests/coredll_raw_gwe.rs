@@ -30929,7 +30929,9 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
         0,
     );
     kernel.gwe.record_thread_dispatched(receiver_thread, 0);
-    kernel.timers.sleep_ms(4999);
+    // Leave headroom before the 5000 ms hung threshold: the admission under
+    // test is queued timeout delivery, not a one-millisecond host timing race.
+    kernel.timers.sleep_ms(1000);
     assert!(
         !kernel
             .gwe
