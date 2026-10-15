@@ -107,10 +107,10 @@ propagates recovery through tested scheduler paths. It also fails closed when
 the stopped boot CPU's saved owner differs from the selected process. The
 monitor refuses a new checkpoint after recovery is required; only restoring
 an earlier checkpoint clears the hold.
-The current bounded native COREDLL pseudo self-exit candidate then stops the
-guest CPU, closes its native owner, validates the caller and launch/boot
-witness, and uses that preflight before exact child or boot Task/VM retirement.
-Its final source/test seal is pending. Raw/decoded pseudo paths remain
+The bounded [native COREDLL pseudo self-exit gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
+source-tested guest CPU stop, native owner closure, exact caller and
+launch/boot witnesses, and D-011 preflight before child or boot Task/VM
+retirement. Raw/decoded pseudo paths remain
 synchronous compatibility behavior; modal backing refuses completion until
 it has a checked preflight.
 
@@ -313,11 +313,11 @@ close only their named gates, not Stage 2 or live acceptance.
   checks saved-backing restore feasibility before stopped-exit effects and
   propagates a typed recovery refusal. A selected-owner mismatch on the
   stopped boot CPU likewise requires typed authority recovery. Post-preflight
-  whole-exit atomicity remains open. The bounded native pseudo self-exit
-  candidate adds stop-before-next-instruction and exact child/boot Task/VM
-  retirement after owner closure and preflight; its final source/test seal is
-  pending, and raw/decoded pseudo compatibility and modal restoration remain
-  separate gates. Full exit-effect authority, live-app behavior and CE6 parity
+  whole-exit atomicity remains open. The bounded native pseudo self-exit gate
+  above source-tests stop-before-next-instruction and exact child/boot Task/VM
+  retirement after owner closure and preflight; raw/decoded pseudo
+  compatibility and modal restoration remain separate gates. Full exit-effect
+  authority, live-app behavior and CE6 parity
   remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation

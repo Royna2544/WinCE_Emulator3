@@ -105,12 +105,12 @@ retirement. The later bounded [D-011 source/test gate](../evidence/stage3-host-e
 checks every exact-birth saved window backing before stopped-exit mutation and
 returns a typed recovery error on refusal. A stopped boot CPU with a changed
 selected process also returns typed authority recovery instead of resuming.
-The current bounded native COREDLL pseudo self-exit candidate stops its guest
-CPU before another instruction, closes its native owner, checks the exact
-caller and child-launch or boot witness, then applies D-011 preflight before
-canonical Task/VM retirement. A refusal retains the stopped owner and poisons
-native re-entry; final source/test acceptance is pending. Raw/decoded pseudo
-signaling remains a synchronous compatibility path and does not prove that
+The bounded [native COREDLL pseudo self-exit source/test gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
+stops its guest CPU before another instruction, closes its native owner,
+checks the exact caller and child-launch or boot witness, then applies D-011
+preflight before canonical Task/VM retirement. A refusal retains the stopped
+owner and poisons native re-entry. Raw/decoded pseudo routes remain
+synchronous compatibility paths and do not prove that
 stop/retirement sequence. An unpreflighted modal backing is refused, and the
 complete target exit-effect contract, including failures after successful
 preflight, remains open. No live iNavi result follows.

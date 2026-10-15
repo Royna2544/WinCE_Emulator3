@@ -318,10 +318,11 @@ release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored. This is
 not general modal continuation, Task/Frame migration or live-app acceptance;
 no mount or iNavi run was made.
 
-### Bounded native pseudo self-exit cut (final source gate pending)
+### Bounded native pseudo self-exit cut (source-tested)
 
-The current native COREDLL pseudo-handle import candidate captures the exact
-caller birth and process lease, stages a nonzero return PC, and stops before
+The bounded [native COREDLL pseudo-handle import gate](../../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
+captures the exact caller birth and process lease, stages a nonzero return PC,
+and stops before
 the next guest instruction. After the native owner closes, the stopped CPU's
 caller and child-launch or boot witness are rechecked; D-011 saved-window
 preflight precedes canonical child or boot Task/VM retirement. Completion
