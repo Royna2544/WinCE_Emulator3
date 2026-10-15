@@ -331,9 +331,15 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
 - Fresh-owner view sync reads and seeds only natively mapped pages, and the
   generation mapper seeds only newly mapped pages (E-37).
 - E-38, the only 330-second run on the fresh default (preserved E-37 EXE):
-  exit 0 at 330 s, splash only, no map; RSS peak 430.7 MiB (BED2 555.6 MiB,
-  persistent runs ~1.5 GiB); iNavi busy-slice 26.4 MIPS, inside E-9's 22–34; live heap
-  reached 31.5 MB. That approval is spent.
+  exit 0 at 330 s, splash only, no map; sampled RSS maximum 430.7 MiB from
+  160 host memory samples (BED2 555.6 MiB, persistent runs ~1.5 GiB);
+  iNavi busy-slice 26.4 MIPS, inside E-9's 22–34; live heap reached 31.5 MB.
+  The hash-pinned, read-only [historical validator](scripts/analysis/e38_validator.py)
+  ([receipt](evidence/stage7-historical-validator-20261016/A01.receipt.md))
+  rechecks 166 successful frame polls across four hash segments and 1,714
+  completed busy slices. Frame hashes do not prove image or map content; the
+  true continuous RSS peak and current-build live readiness remain unknown.
+  That approval is spent.
 - Real native two-process same-VA A→B→A isolation holds for public private
   pages and injected views (E-39). GlobalMemoryStatus uses one budget with
   the device boot reservation (E-40).

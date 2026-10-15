@@ -178,11 +178,17 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   acts under the selected birth; `GetClipboardDataAlloc` sizes a global
   source handle under the current birth, so those cross-birth paths remain
   unresolved ([O-M2 receipt](evidence/om2-heap-20261014/validation.receipt.md)).
-- Host footprint: E-38 (fresh default) peaked at 430.7 MiB RSS, against BED2
-  at 555.6 MiB and persistent runs at about 1.5 GiB (ledger E-1, E-22/E-27/E-29,
-  E-38). No app run has measured E-41 to O-M2. A cold TCG cache per fresh owner
-  is a possible Stage 8 cost. Translation arenas and engine copies are
-  unmeasured; virtual reservation is not resident RAM.
+- Host footprint: E-38 (fresh default) had a sampled RSS maximum of 430.7 MiB
+  across 160 host samples, against BED2 at 555.6 MiB and persistent runs at
+  about 1.5 GiB (ledger E-1, E-22/E-27/E-29, E-38). The read-only
+  [historical E-38 validator](scripts/analysis/e38_validator.py)
+  ([receipt](evidence/stage7-historical-validator-20261016/A01.receipt.md))
+  also checks 166 successful frame polls/four hash segments and 1,714
+  completed busy slices; frame hashes do not prove image or map content. The
+  true continuous memory peak and current-build live readiness remain unknown.
+  No app run has measured E-41 to O-M2. A cold TCG cache per fresh owner is a
+  possible Stage 8 cost. Translation arenas and engine copies are unmeasured;
+  virtual reservation is not resident RAM.
 - Gesture FIFO is fixed, but a real tap still took about 1.29 s from successful
   HTTP response to first guest wndproc delivery in the prior 330 s input test,
   and 1.62 s in the bounded-cache repeat.

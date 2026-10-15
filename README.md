@@ -123,14 +123,16 @@ remote-control HTTP/WebSocket surface.
   [nested risk audit](evidence/e28-count-witness-audit-20261014/nested-count-risk.receipt.md)).
 - The latest bounded iNavi run used the preserved E-37 fresh-default EXE after
   a separate single-run approval and fresh adjacent, SHA-verified ZIP backups.
-  It exited normally at 330.392 s with no watchdog trip. Sampled RSS/private
-  peaks were **430.7/445.0 MiB**; the real splash persisted, with no map.
+  It exited normally at 330.392 s with no watchdog trip. Across 160 host
+  samples, RSS/private maxima were **430.7/445.0 MiB**; the true continuous
+  peaks remain unknown. The real splash persisted, with no map.
   Guest `COM7:` reads transferred 2,262 B of injected raw NMEA and tap down/up
   reached the iNavi WNDPROC. Neither GPS parsing nor navigation was proven.
   Busy iNavi slices measured 26.359 run-only MIPS, within the older E-9
   22–34 MIPS range; overall busy slices across helpers measured 17.120 MIPS.
   The approval was consumed by this one run
-  ([E-38 analysis](evidence/e37-live-20261014T051228Z/analysis.receipt.md)).
+  ([E-38 analysis](evidence/e37-live-20261014T051228Z/analysis.receipt.md),
+  [historical offline validator](scripts/analysis/e38_validator.py)).
 - The E-20 native controls passed real-MIPS A→B→A same-VA bytes with fresh
   owners: public `VirtualAlloc` private memory and a separate injected
   `FileMappingView` fixture. That E-20 view fixture did not validate public
