@@ -16014,9 +16014,7 @@ mod tests {
     #[test]
     #[ignore = "expected red: W-B1c mixed touch/key admission order"]
     fn remote_key_before_focus_changing_down_preserves_cross_type_enqueue_order() -> Result<()> {
-        use crate::ce::gwe::{
-            MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, WM_KEYDOWN,
-        };
+        use crate::ce::gwe::{MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, WM_KEYDOWN};
 
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (handle_a, thread_a) = kernel.create_guest_thread(0x401000, 0, false);
@@ -16074,7 +16072,10 @@ mod tests {
         let trace_before = kernel.recent_message_ops().len();
 
         kernel.remote.enqueue_key("down", 0x41).unwrap();
-        kernel.remote.enqueue_touch("down", point.x, point.y).unwrap();
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
         assert_eq!(kernel.remote.key_event_count(), 1);
         assert_eq!(kernel.remote.touch_event_count(), 1);
 
