@@ -77,6 +77,17 @@ struct NativeStopEvidence {
     hook_stop_reason: Option<NativeHookStopReason>,
 }
 
+/// One guest self-exit observed at an import stop. This remains CPU-local
+/// until the native owner is closed and the framebuffer exit preflight passes.
+#[cfg(feature = "unicorn")]
+#[derive(Clone, Copy, Debug)]
+struct NativePseudoSelfExit {
+    caller: crate::ce::object::ThreadBirthKey,
+    owner: crate::ce::object::ProcessBirthKey,
+    exit_code: u32,
+    return_pc: u32,
+}
+
 #[cfg(feature = "unicorn")]
 impl NativeStopEvidence {
     fn outcome(self) -> NativeSliceOutcome {
@@ -6119,6 +6130,76 @@ impl UnicornMips {
         Ok(true)
     }
 
+    /// Commit a native pseudo-handle self-exit only after the guest CPU has
+    /// stopped and its native owner has closed. The import hook did not touch
+    /// Kernel process state, so a rejected framebuffer preflight leaves the
+    /// exact process birth available for checkpoint recovery.
+    #[cfg(feature = "unicorn")]
+    fn complete_native_pseudo_self_exit(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        intent: NativePseudoSelfExit,
+    ) -> Result<()> {
+        if kernel.checked_guest_process_caller_for_birth(intent.caller) != Some(intent.owner) {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "stopped pseudo-exit caller no longer owns the selected process",
+            });
+        }
+        // Modal backings have a separate best-effort restore path. Until they
+        // have the same checked preflight, do not retire their owner here.
+        if self.blocked_modal_message_box.is_some() || self.blocked_popup_menu_modal.is_some() {
+            return Err(Error::HostExitRecoveryRequired {
+                process_id: intent.owner.process_id(),
+                incarnation: intent.owner.incarnation(),
+                hwnd: None,
+                reason: "stopped pseudo exit has an unpreflighted modal backing",
+            });
+        }
+        let completed = if let Some(launch) = self.owned_process_launch.as_ref() {
+            if launch.process_birth != Some(intent.owner)
+                || launch.process_id != kernel.current_process_id()
+                || launch.thread_id != self.initial_thread_id
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "stopped pseudo-exit child lacks its exact launch witness",
+                });
+            }
+            kernel.try_mark_process_launch_exited_with_framebuffer(
+                launch,
+                intent.exit_code,
+                Some(framebuffer),
+            )?
+        } else if self.initial_thread_id == MAIN_GUEST_THREAD_ID
+            && intent.owner.process_id() == 1
+            && kernel
+                .handles
+                .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
+                .is_some_and(|primary| {
+                    kernel.handles.thread_creation_owner_by_id(primary.thread_id())
+                        == Some(intent.owner)
+                })
+        {
+            kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                intent.owner,
+                intent.exit_code,
+                Some(framebuffer),
+            )?
+        } else {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "stopped pseudo-exit CPU has no launch or boot witness",
+            });
+        };
+        if !completed {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "stopped pseudo-exit completion rejected its exact process birth",
+            });
+        }
+        self.seal_completed_active_process_cpu();
+        self.remove_parked_process_tree_by_birth(intent.owner);
+        Ok(())
+    }
+
     #[cfg(feature = "unicorn")]
     #[cfg(test)]
     pub fn complete_active_process_thread_exit_with_framebuffer(
@@ -8132,6 +8213,15 @@ impl UnicornMips {
                 result: Ok(()),
             };
         }
+        if self.private_slab_attempt_poisoned {
+            report.failure_operation = Some("poisoned native-attempt preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "native attempt is poisoned; a fresh machine is required".to_owned(),
+                )),
+            };
+        }
         if self.run_slice_generation != 0
             && self.saved_context.is_none()
             && (self.owned_process_launch.is_some() || self.has_active_blocked_state(kernel))
@@ -8141,15 +8231,6 @@ impl UnicornMips {
                 report,
                 result: Err(Error::Backend(
                     "previously executed process CPU has no saved continuation".to_owned(),
-                )),
-            };
-        }
-        if self.private_slab_attempt_poisoned {
-            report.failure_operation = Some("poisoned native-attempt preflight");
-            return AttemptExecution {
-                report,
-                result: Err(Error::Backend(
-                    "native attempt is poisoned; a fresh machine is required".to_owned(),
                 )),
             };
         }
@@ -10397,6 +10478,8 @@ impl UnicornMips {
         // launch on the next slice.
         let deferred_process_launch = Rc::new(Cell::new(false));
         let deferred_process_launch_hook = Rc::clone(&deferred_process_launch);
+        let pseudo_self_exit_intent = Rc::new(Cell::new(None::<NativePseudoSelfExit>));
+        let pseudo_self_exit_intent_hook = Rc::clone(&pseudo_self_exit_intent);
         let deferred_process_dll_search_dirs = process_dll_search_dirs.clone();
         let import_traps_live = Rc::new(RefCell::new(self.import_traps.clone()));
         let traps = Rc::clone(&import_traps_live);
@@ -12358,6 +12441,65 @@ impl UnicornMips {
                     return;
                 }
                 let raw_caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                if trap.as_ref().is_some_and(|trap| {
+                    native_process_exit_import_requires_verified_birth(
+                        trap.module_kind,
+                        trap.ordinal,
+                    )
+                }) && args.first().copied()
+                    == Some(crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE)
+                {
+                    // A guest self-exit must not signal its process inside
+                    // the import hook. Hold only an attempt-local witness,
+                    // stop the CPU, and let the checked post-native boundary
+                    // preflight saved framebuffer images before any teardown.
+                    let stop = (|| {
+                        let (Some(caller), Some(owner)) = (caller_birth, native_owner_birth)
+                        else {
+                            return Err(Error::HostExitAuthorityRecoveryRequired {
+                                reason: "native pseudo exit lacks caller or process birth",
+                            });
+                        };
+                        if unsafe { &*kernel_ptr }.checked_guest_process_caller_for_birth(caller)
+                            != Some(owner)
+                        {
+                            return Err(Error::HostExitAuthorityRecoveryRequired {
+                                reason: "native pseudo-exit caller does not own its CPU lease",
+                            });
+                        }
+                        if raw_caller_pc == 0 {
+                            return Err(Error::Backend(
+                                "native pseudo exit has no nonzero import return PC".to_owned(),
+                            ));
+                        }
+                        memory.uc.reg_write(RegisterMIPS::V0, 1).map_err(|err| {
+                            Error::Backend(format!("stage native pseudo-exit result: {err:?}"))
+                        })?;
+                        memory
+                            .uc
+                            .reg_write(RegisterMIPS::PC, u64::from(raw_caller_pc))
+                            .map_err(|err| Error::Backend(format!(
+                                "stage native pseudo-exit return PC: {err:?}"
+                            )))?;
+                        memory.uc.emu_stop().map_err(|err| Error::Backend(format!(
+                            "stop native pseudo-exit CPU: {err:?}"
+                        )))?;
+                        Ok(NativePseudoSelfExit {
+                            caller,
+                            owner,
+                            exit_code: args.get(1).copied().unwrap_or(0),
+                            return_pc: raw_caller_pc,
+                        })
+                    })();
+                    match stop {
+                        Ok(intent) => pseudo_self_exit_intent_hook.set(Some(intent)),
+                        Err(error) => {
+                            *immediate_process_sync_error_hook.borrow_mut() = Some(error);
+                            let _ = memory.uc.emu_stop();
+                        }
+                    }
+                    return;
+                }
                 let sp = read_mips_reg(memory.uc, RegisterMIPS::SP);
                 let caller_pc = live_trampoline_state_import_hook
                     .borrow()
@@ -14599,6 +14741,37 @@ impl UnicornMips {
                 return Err(Error::Backend(format!(
                     "finish owner-bound native slice: {err:?}"
                 )));
+            }
+            if let Some(intent) = pseudo_self_exit_intent.get() {
+                // Keep only CPU-local continuation state until the full
+                // stopped-exit framebuffer preflight has succeeded. Ordinary
+                // orphan/send/wait maintenance below can mutate Kernel state
+                // and must not run on a recoverable refusal.
+                self.saved_context = staged_saved_context;
+                self.saved_context_thread_birth = staged_context_thread_birth;
+                self.saved_worker_exit_birth = staged_worker_exit_birth;
+                self.persist_run_state_handles(&run_state);
+                let witness_valid = native_owner_birth == Some(intent.owner)
+                    && self.saved_context_thread_birth == Some(intent.caller)
+                    && self.saved_context_pc() == Some(intent.return_pc)
+                    && self.last_debug.as_ref().map(|snapshot| snapshot.pc)
+                        == Some(intent.return_pc);
+                let completion = if witness_valid {
+                    self.complete_native_pseudo_self_exit(kernel, framebuffer, intent)
+                } else {
+                    Err(Error::HostExitAuthorityRecoveryRequired {
+                        reason: "native pseudo-exit stop lost its exact CPU/caller witness",
+                    })
+                };
+                if let Err(error) = completion {
+                    self.private_slab_attempt_poisoned = true;
+                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                    report.failure_operation = Some("complete native pseudo self-exit");
+                    return Err(error);
+                }
+                self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
+                *outcome_before_handoff = Some(NativeSliceOutcome::GuestProcessExit);
+                return Ok(());
             }
             self.saved_context = staged_saved_context;
             self.saved_context_thread_birth = staged_context_thread_birth;
@@ -73495,6 +73668,18 @@ mod unicorn_tests {
         let birth = launch.process_birth.expect("child birth");
         let _ = kernel.take_pending_process_launches();
         kernel.set_current_process_id(launch.process_id);
+        let heap_ptr = kernel
+            .memory
+            .heap_alloc(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("birth-owned heap allocation");
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, heap_ptr),
+            Some(16)
+        );
         let (mut cpu, entry) = phase1_terminate_import_cpu(
             &kernel,
             &launch,
@@ -73510,17 +73695,116 @@ mod unicorn_tests {
             super::UnicornRunLimits {
                 instruction_limit: 100,
                 wall_clock_limit_ms: 500,
-                stop_pc: Some(entry + 16),
+                stop_pc: None,
                 live_pump: false,
             },
         );
         attempt.result?;
+        assert_eq!(attempt.report.final_outcome(), super::NativeSliceOutcome::GuestProcessExit);
+        assert_eq!(cpu.last_debug_snapshot().expect("stop snapshot").pc, entry + 16);
+        assert!(cpu.active_process_execution_completed());
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(!kernel.handles.process_execution_live_by_birth(birth));
+        assert!(!kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, heap_ptr),
+            None
+        );
         assert_eq!(
             kernel.handles.process_signaled_by_id(birth.process_id()),
             Some(true)
         );
         assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x4a));
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        let rejected = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits::default(),
+        );
+        assert!(rejected.result.is_err());
+        assert_eq!(rejected.report.attempt_id(), None);
+        assert_eq!(rejected.report.failure_operation(), Some("completed process CPU preflight"));
+        Ok(())
+    }
+
+    #[test]
+    fn native_pseudo_terminate_refuses_unrestorable_backing_before_exit_effects()
+    -> crate::Result<()> {
+        let mut kernel = phase1_kernel("native-pseudo-backing.exe")?;
+        let launch = kernel
+            .queue_process_launch(Some("\\Test\\native-pseudo-backing.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("child birth");
+        let caller = launch.primary_thread_birth.expect("primary birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                caller,
+                "NATIVE_PSEUDO_BACKING",
+                "saved image",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("birth-owned window");
+        let source = VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Rgb565)?;
+        assert!(kernel.capture_window_backing_store(hwnd, &source));
+        let mut incompatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Bgra8888)?;
+        incompatible.pixels_mut().fill(0x5a);
+        let pixels_before = incompatible.pixels().to_vec();
+        let (mut cpu, entry) = phase1_terminate_import_cpu(
+            &kernel,
+            &launch,
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            true,
+            "native-pseudo-backing.exe",
+        )?;
+
+        let attempted = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut incompatible,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        assert!(matches!(
+            attempted.result,
+            Err(crate::Error::HostExitRecoveryRequired {
+                process_id,
+                hwnd: Some(rejected),
+                ..
+            }) if process_id == launch.process_id && rejected == hwnd
+        ));
+        assert_eq!(cpu.last_debug_snapshot().expect("stop snapshot").pc, entry + 16);
+        assert!(!cpu.active_process_execution_completed());
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert_eq!(kernel.handles.process_signaled_by_id(launch.process_id), Some(false));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(incompatible.pixels(), pixels_before.as_slice());
+
+        let retry = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut incompatible,
+            super::UnicornRunLimits::default(),
+        );
+        assert!(retry.result.is_err());
+        assert_eq!(retry.report.attempt_id(), None);
+        assert_eq!(retry.report.failure_operation(), Some("poisoned native-attempt preflight"));
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.gwe.is_window(hwnd));
         Ok(())
     }
 

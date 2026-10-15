@@ -3456,19 +3456,17 @@ impl CeKernel {
             0,
             framebuffer,
         )?;
-        let signaled = self
-            .handles
-            .signal_pseudo_process_exit_by_birth(expected_birth, exit_code)
-            .is_some();
-        debug_assert!(signaled, "preflighted stopped process birth must signal");
-        if !signaled {
+        let primary = self.handles.thread_birth_key_by_id(1).filter(|primary| {
+            self.handles.thread_creation_owner_by_id(primary.thread_id()) == Some(expected_birth)
+        });
+        let completed = self.complete_process_execution_by_birth(expected_birth, primary, exit_code);
+        if !completed {
             return Err(Error::Backend(
-                "preflighted stopped process birth failed to signal".to_owned(),
+                "preflighted stopped process birth failed canonical Task/VM completion".to_owned(),
             ));
         }
         self.current_process_exit_code = exit_code;
         self.current_process_signaled = true;
-        self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(expected_birth));
         Ok(true)
     }
 
