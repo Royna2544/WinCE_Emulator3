@@ -328,19 +328,22 @@ caller and child-launch or boot witness are rechecked; D-011 saved-window
 preflight precedes canonical child or boot Task/VM retirement. Completion
 seals that CPU against another native attempt. A refused framebuffer or modal
 backing retains the stopped owner and poisons re-entry rather than running a
-compatibility continuation. This bounded shape is not general Task/Frame
-authority, whole-exit atomicity after preflight, a conversion of the raw or
-decoded pseudo-exit paths, or live iNavi acceptance.
+compatibility continuation. At that earlier native seal, this bounded shape
+was not general Task/Frame authority, whole-exit atomicity after preflight,
+a conversion of the raw or decoded pseudo-exit paths, or live iNavi acceptance.
 
-### Next pseudo self-exit cut (proposed, not source-tested)
+### Bounded decoded pseudo self-exit gate (source-tested)
 
-Route decoded pseudo self-exit through the same post-owner finalizer targeted
-for native exit, with a frozen caller/lease and CPU stop before Task/VM effects.
-Delete the decoded compatibility tail only after that path is covered by
-positive and stale/refusal controls. Check live modal backing in the CPU owner
-before committing exit; Kernel selection cannot substitute for that witness.
-Keep the raw COREDLL pseudo-exit shim fixture-only and fail closed for guest
-callers; do not introduce a raw executor in this cut.
+The witnessed direct-kernel pseudo shape now uses the same stopped post-owner
+finalizer as native self-exit. An attempt-local live JALR/delay-slot witness,
+frozen caller/owner birth and exact PC-zero stop precede D-011 preflight and
+Task/VM effects; a static decoded snapshot alone cannot complete a deferred
+child. Positive child exit and stale/refusal controls passed the
+[focused gate](../../evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+and [broad offline seal](../../evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md).
+In Hookless/Sparse, new same-slice callsites without an installed exact hook
+fail closed. Live modal restoration, raw direct COREDLL pseudo compatibility, whole-exit
+atomicity and live iNavi remain separate gates.
 
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval

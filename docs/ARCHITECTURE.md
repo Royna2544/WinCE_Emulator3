@@ -109,10 +109,13 @@ The bounded [native COREDLL pseudo self-exit source/test gate](../evidence/stage
 stops its guest CPU before another instruction, closes its native owner,
 checks the exact caller and child-launch or boot witness, then applies D-011
 preflight before canonical Task/VM retirement. A refusal retains the stopped
-owner and poisons native re-entry. Raw/decoded pseudo routes remain
-synchronous compatibility paths and do not prove that
-stop/retirement sequence. An unpreflighted modal backing is refused, and the
-complete target exit-effect contract, including failures after successful
+owner and poisons native re-entry. At that earlier native seal, raw/decoded
+pseudo routes remained synchronous compatibility paths. The later bounded
+[decoded self-exit gate](../evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+uses an executed call/delay-slot witness and that stopped finalizer for the
+direct-kernel pseudo shape. Raw direct compatibility remains separate. An
+unpreflighted modal backing is refused, and the complete target exit-effect
+contract, including failures after successful
 preflight, remains open. No live iNavi result follows.
 
 ## A1. Machine authority

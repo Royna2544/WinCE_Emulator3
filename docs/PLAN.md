@@ -110,8 +110,14 @@ an earlier checkpoint clears the hold.
 The bounded [native COREDLL pseudo self-exit gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
 source-tested guest CPU stop, native owner closure, exact caller and
 launch/boot witnesses, and D-011 preflight before child or boot Task/VM
-retirement. Raw/decoded pseudo paths remain
-synchronous compatibility behavior; modal backing refuses completion until
+retirement. At that earlier seal, raw/decoded pseudo paths remained
+synchronous compatibility behavior. The later bounded
+[decoded self-exit gate](../evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+requires an attempt-local executed JALR/delay-slot witness and exact stopped
+caller/owner before the same finalizer; its
+[broad offline suites](../evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)
+passed release 2,107/0/9 ignored and no-default 1,511/0/3 ignored. Raw direct
+pseudo compatibility remains separate; modal backing refuses completion until
 it has a checked preflight.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,
@@ -321,7 +327,8 @@ close only their named gates, not Stage 2 or live acceptance.
   stopped boot CPU likewise requires typed authority recovery. Post-preflight
   whole-exit atomicity remains open. The bounded native pseudo self-exit gate
   above source-tests stop-before-next-instruction and exact child/boot Task/VM
-  retirement after owner closure and preflight; raw/decoded pseudo
+  retirement after owner closure and preflight. The later decoded gate above
+  covers the witnessed direct-kernel pseudo shape; raw direct pseudo
   compatibility and modal restoration remain separate gates. Full exit-effect
   authority, live-app behavior and CE6 parity
   remain open.
