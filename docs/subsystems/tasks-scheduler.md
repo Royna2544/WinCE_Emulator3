@@ -198,6 +198,23 @@ decide this implementation's acceptance. A blocked-outgoing-Send receiver is
 not served by GetMessage's bridge and retains a separate source/continuation
 gate.
 
+The pre-entry native owner can restore A's *hidden* CPU branch/delay state
+even with fresh-per-slice lifetime: the old native snapshot survives owner
+close and may match A's next exact key. The bridge must not write B's scalar
+registers on top of that A state. Select and birth-verify the receiver source
+before execution; reset the native owner to blank (or restore B's exact native
+snapshot), then checked-restore B's full scalar context and KData before
+consuming the send or B's wait. A failed prepare leaves A parked and both
+records intact with a typed backend error; a failure after irreversible
+guest output must report partial effects rather than a fabricated result.
+This is a default-lifetime requirement, not merely a persistent-engine risk.
+The current in-hook cross-birth GetMessage bridge also lacks a blank-state
+witness and cannot borrow this pre-entry proof. For runnable B, queueing A's
+send is only a first step: a real-MIPS gate must show B is scheduled from its
+own context, reaches Get/Peek, and A's blocked import is not replayed by a
+process-rotation heuristic. B blocked in an outgoing Send or MsgWait has a
+different receiver source and remains a separate gate.
+
 The sender-side legacy SendMessage return path also currently consumes its
 result/removes its wait before unchecked context restore and ignores a KData
 write error. Restore and validate A's exact native context first, then retire
@@ -212,6 +229,11 @@ plus receiver-exit/TID-reuse, two-senders/one-receiver, checked-restore
 failure, and one-return/parent-continuation negatives, before the
 reciprocal blocked-Send case. This design does not claim those transitions
 are already implemented.
+All five currently preserved reds (three native, one Kernel exit/reuse and
+one GWE nested double-completion) must become ordinary, unignored tests in
+one connected production cut and one source seal. Focused hidden-state,
+restore-failure and runnable-B real-MIPS controls precede that seal; a green
+birth label alone is not a hidden-state or one-return proof.
 
 Only after that simpler gate, add the reciprocal finite-Sleep scenario:
 
