@@ -725,7 +725,7 @@ function Assert-RemoteEndpointAvailable {
                     ([System.IO.Path]::GetFullPath((Join-Path $repository 'evidence')) + '\'),
                     [StringComparison]::OrdinalIgnoreCase)) -or
             ($null -ne $_.CommandLine -and
-                [string]$_.CommandLine -like "*$mountConfig*")
+                ([string]$_.CommandLine).Contains($mountConfig))
         })
     if ($other.Count -ne 0) {
         throw "Another emulator or process using this mount config is running (PID(s): $($other.ProcessId -join ', '))."
@@ -1238,6 +1238,41 @@ function Stop-InaviUniqueLaunchFallback(
     return $true
 }
 
+function Test-InaviNeverSpawned([string]$Directory, [string]$ManifestHash) {
+    # Call only after the exact monitor is stopped. The atomic launch marker
+    # is written before Start-Process, and a spent ledger row requires a spawn.
+    foreach ($name in @('launch-began.json', 'spawned-process.json', 'process.json')) {
+        if (Test-Path -LiteralPath (Join-Path $Directory $name) -PathType Leaf) {
+            return $false
+        }
+    }
+    $claim = Read-InaviJson (Join-Path $Directory 'run-claim.json')
+    if ([string]$claim.manifestSha256 -cne $ManifestHash -or
+        [string]::IsNullOrWhiteSpace([string]$claim.runTag)) {
+        throw 'No-spawn proof lacks this run claim.'
+    }
+    $ledgers = Read-InaviUseLedgers 'D:\GitHub\Wince_emulation_v3'
+    foreach ($entry in @($ledgers.local)) {
+        if ([string]$entry.attemptId -cne [string]$claim.runTag) { continue }
+        if ([string]$entry.manifestSha256 -cne $ManifestHash) {
+            throw 'No-spawn proof saw a conflicting ledger attempt.'
+        }
+        if ([string]$entry.state -ceq 'spent') { return $false }
+    }
+    return $true
+}
+
+function Test-InaviWatchdogRetirementAllowed(
+    [bool]$MonitorGone,
+    [bool]$HasAppDescriptor,
+    [bool]$ExactAppGone,
+    [bool]$PreDescriptorCleanupComplete
+) {
+    if (-not $MonitorGone) { return $false }
+    if ($HasAppDescriptor) { return $ExactAppGone }
+    return $PreDescriptorCleanupComplete
+}
+
 function Stop-InaviPreDescriptorLaunch(
     [string]$Directory,
     [object]$MonitorProcess,
@@ -1288,16 +1323,43 @@ function Stop-InaviPreDescriptorLaunch(
             }
         } catch { $abortError = $_.Exception.Message }
     }
+    $descriptorExitConfirmed = $false
+    if (-not $stoppedApp -and
+        ((Test-Path -LiteralPath (Join-Path $Directory 'process.json') -PathType Leaf) -or
+         (Test-Path -LiteralPath (Join-Path $Directory 'spawned-process.json') -PathType Leaf))) {
+        $descriptorExitConfirmed = Test-InaviWatchdogAppCompleted $Directory `
+            $ManifestHash $ExecutableHash $ExecutablePath
+    }
+    $noSpawnProven = $false
+    if (-not $stoppedApp -and -not $descriptorExitConfirmed -and
+        $null -eq $monitorError) {
+        $noSpawnProven = Test-InaviNeverSpawned $Directory $ManifestHash
+    }
+    $cleanupResolved = $stoppedApp -or $descriptorExitConfirmed -or $noSpawnProven
     Write-JsonFile (Join-Path $Directory 'pre-descriptor-cleanup.json') @{
         utc = [DateTime]::UtcNow.ToString('O'); reason = $Reason
         appFoundAndStopped = $stoppedApp; abortWriteError = $abortError
         monitorStopError = $monitorError; spawnedDescriptorError = $spawnedError
+        descriptorExitConfirmed = $descriptorExitConfirmed
+        noSpawnProven = $noSpawnProven; cleanupResolved = $cleanupResolved
     }
     if ($null -ne $monitorError -or $null -ne $abortError -or
         ($null -ne $spawnedError -and -not $stoppedApp)) {
         throw "Pre-descriptor cleanup was not fully confirmed: monitor=$monitorError; abort=$abortError; spawned=$spawnedError; uniqueStop=$stoppedApp"
     }
-    return $stoppedApp
+    if (-not $cleanupResolved -and
+        -not (Test-Path -LiteralPath (Join-Path $Directory 'pre-descriptor-unresolved.json') -PathType Leaf)) {
+        Write-JsonFile (Join-Path $Directory 'pre-descriptor-unresolved.json') @{
+            utc = [DateTime]::UtcNow.ToString('O'); reason = $Reason
+            detail = 'A launch marker exists without a confirmed exact app exit; an empty process search is not proof of absence.'
+        }
+    }
+    return @{
+        appFoundAndStopped = $stoppedApp
+        descriptorExitConfirmed = $descriptorExitConfirmed
+        noSpawnProven = $noSpawnProven
+        cleanupResolved = $cleanupResolved
+    }
 }
 
 function Test-InaviWatchdogAppCompleted(
@@ -1603,14 +1665,20 @@ function Invoke-Watchdog([string]$Directory) {
         }
         if ($action -eq 'deadline') {
             $monitorIdentity = Get-InaviWatchdogMonitorIdentity $Directory
-            $stoppedApp = Stop-InaviPreDescriptorLaunch $Directory $monitorIdentity `
+            $cleanup = Stop-InaviPreDescriptorLaunch $Directory $monitorIdentity `
                 ([string]$manifest.executable.path) $ManifestSha256 `
                 ([string]$manifest.executable.sha256) `
                 'independent-watchdog-post-scan-deadline'
+            if (-not $cleanup.cleanupResolved) {
+                # Missing WMI data is unknown, never a successful stop. Keep
+                # sweeping under this same approval until identity is resolved.
+                Start-Sleep -Seconds 2
+                continue
+            }
             Write-JsonFile (Join-Path $Directory 'watchdog-result.json') @{
                 endedUtc = [DateTime]::UtcNow.ToString('O')
                 reason = '355-second-post-scan-deadline'
-                appFoundAndStopped = $stoppedApp
+                appFoundAndStopped = $cleanup.appFoundAndStopped
             }
             return
         }
@@ -1743,6 +1811,16 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
             Add-InaviDualLedgerEntry $checked.ledgers $reservation
             Assert-InaviObserverLive $Directory
             Assert-InaviWatchdogLive $Directory
+            # This flushed, atomic marker precedes the only guest spawn call.
+            # If the monitor is later stopped and the marker is absent, it
+            # cannot have crossed Start-Process in this run.
+            Write-AtomicJsonFile (Join-Path $Directory 'launch-began.json') @{
+                utc = [DateTime]::UtcNow.ToString('O')
+                manifestSha256 = $ManifestSha256
+                approvalReference = $ApprovalReference
+                monitorPid = $PID
+                monitorStartUtcTicks = $self.StartTime.ToUniversalTime().Ticks
+            }
             $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
             $app = Start-Process -FilePath ([string]$manifest.executable.path) `
                 -ArgumentList $arguments -WorkingDirectory $repository `
@@ -2223,12 +2301,13 @@ try {
     if ($null -ne $client) { $client.Dispose() }
     if ($null -eq $appDescriptor -and $null -ne $monitorProcess) {
         try {
-            $fallbackNeeded = Stop-InaviPreDescriptorLaunch $runDirectory `
+            $cleanup = Stop-InaviPreDescriptorLaunch $runDirectory `
                 $monitorProcess ([string]$manifest.executable.path) $ManifestSha256 `
                 ([string]$manifest.executable.sha256) `
                 'driver-finally-no-active-descriptor'
-            $preDescriptorCleanupComplete = $true
-            if ($fallbackNeeded) {
+            $preDescriptorCleanupComplete = [bool]$cleanup.cleanupResolved
+            if (-not $preDescriptorCleanupComplete) { $exitStatus = 1 }
+            if ($cleanup.appFoundAndStopped) {
                 $fallbackAfterPath = Join-Path $runDirectory 'fallback-mounted-after.jsonl'
                 $fallbackAfterCount = Write-MountedInventory $backups $fallbackAfterPath
                 $fallbackChanges = Compare-MountedInventories `
@@ -2288,8 +2367,9 @@ try {
         $appGone = if ($null -ne $appDescriptor) {
             $null -eq (Get-MatchingProcess ([int]$appDescriptor.processId) `
                 ([long]$appDescriptor.startUtcTicks))
-        } else { $preDescriptorCleanupComplete -or $null -eq $monitorProcess }
-        if ($monitorGone -and $appGone) {
+        } else { $preDescriptorCleanupComplete }
+        if (Test-InaviWatchdogRetirementAllowed $monitorGone `
+                ($null -ne $appDescriptor) $appGone $preDescriptorCleanupComplete) {
             Stop-ExactApp ([int]$watchdogProcess.Id) `
                 ([long]$watchdogProcess.StartTime.ToUniversalTime().Ticks)
         } else {
