@@ -82,21 +82,26 @@ frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
-Next bounded Stage 3 design gate: the [host-exit receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
-closes only direct window/backing selection. Before changing sent cleanup,
-inventory synchronous queued-send admission and cancellation through raw
-COREDLL, native and Kernel paths, identify the captured canonical caller/lease
-that can authorize an immutable sender birth, and review the legacy-unknown
-policy against [anchor A2](ARCHITECTURE.md). Stage two attempt-numbered
-expected-red controls: (1) a fixture-only stranded A queued send, a later B
+Current bounded Stage 3 source gate: the [host-exit receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+source-tests direct window/backing selection and the no-birth pseudo-exit fence,
+not complete host teardown. The sender-birth cut inventories synchronous
+queued-send admission and cancellation through raw COREDLL, native and Kernel
+paths, identifies the captured canonical caller/lease that can authorize an
+immutable sender birth, and reviews the legacy-unknown policy against
+[anchor A2](ARCHITECTURE.md). Preserved attempt-numbered expected-red controls
+include: (1) a fixture-only stranded A queued send, a later B
 reusing A's PID but not its TID, and B exit, where A's send must remain while
 B's is retired; (2) stale A caller provenance at raw Send/Timeout admission
 after PID/TID reuse, which must publish no B-owned send or wake. Preserve a
-normal same-birth B cleanup control and queued-versus-active behavior. A pass
-would close only process-birth selection for this send family; numeric
-thread-exit cleanup, active-send pointer writes, foreign window traversal and
-full Stage 3 remain separate gates. Independent design
-and source review precede code, and a focused green alone is not acceptance.
+normal same-birth B cleanup control and queued-versus-active behavior,
+including an already-replied active timeout result pointer. The user expanded
+this gate to one coherent sender-owned transaction: captured-birth admission,
+atomic queue ownership, birth-select exit cleanup, and exact native
+result/re-entry authorization must pass together. Legacy numeric fixtures
+remain explicit and cannot authorize a birth-owned send. Receiver-side
+cross-process result writes, foreign window traversal, CE6 cancellation parity,
+and full Stage 3 remain separate gates. Independent design and source review
+precede code; a focused green alone is not acceptance. No live run is approved.
 
 Stage 7 budgets are a design gate, not values inferred from the current
 splash-only E-38 observation. Before calling memory or responsiveness "small"

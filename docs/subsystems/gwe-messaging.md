@@ -127,25 +127,30 @@ in this gate. Raw Send/Timeout and the Kernel helper must share the same
 prepared identity rule; a test-only numeric adapter cannot become production
 authority.
 
-The first source gate should isolate the process selector: queue A's real
-primary-thread send to a separate live receiver, retire A's canonical
-thread/process through test-only HandleTable operations that deliberately
-bypass normal GWES cleanup, then reuse only A's PID for B with a distinct TID.
+The first fixture in this bounded gate isolates the process selector: queue a
+fixture-created send from A's canonically registered primary thread to a
+separate live receiver. Retire A's canonical thread/process through test-only
+HandleTable operations that deliberately bypass normal GWES cleanup, then
+reuse only A's PID for B with a distinct TID.
 Queue B's send to the same receiver and complete B through normal host exit.
 The expected red is that numeric process cleanup removes both sends; the
 required green preserves A's stranded send and retires B's, without touching
 the receiver HWND. This is a defensive stale-artifact fixture, not a claim
 that ordinary A exit strands sends. Name the raw log before its first run and
 never overwrite or rename it. Add normal same-birth queued cleanup and
-plain-send active-receiver detachment controls, keeping exact send IDs and
-one-time
-reply/wake effects. Current GWE active-send cleanup marks the sender
-terminated while allowing the callback to finish; queued sends are removed.
+active-receiver detachment controls, including a replied timeout send whose
+result pointer must be detached on owner exit. For the process-selector
+fixture, assert any cancellation, reply or wake by exact send ID: none affects
+stranded A, and each selected B send has at most one such effect. Current GWE
+active-send cleanup marks the sender terminated while allowing the callback
+to finish; queued sends are removed.
 Separately, inject stale A caller birth into raw Send/Timeout after PID/TID
 reuse and require rejection before any B-owned send ID, queue/status/wake,
 trace or result effect. A normal same-birth caller remains a positive control.
-Do not silently broaden this gate to active-send result-pointer safety or
-numeric thread-exit cleanup, which remain open.
+The user expanded this gate to exact sender-birth admission, publication,
+process/thread exit cleanup and native result/re-entry authorization together.
+The active result pointer must be cleared when its sender is detached;
+receiver-side cross-process address-space writes still need a separate gate.
 The local CE6 process-exit send-cancellation rule has not yet been established
 from `C:\WINCE600` or the dumped device binaries; these controls establish
 emulator birth-identity safety, not CE6 cancellation parity.
