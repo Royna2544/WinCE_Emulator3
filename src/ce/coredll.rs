@@ -2601,6 +2601,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_TERMINATE_PROCESS => Some(CoredllValue::Bool(terminate_process_raw(
             kernel,
+            context,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -31747,11 +31748,25 @@ fn get_thread_times_raw<M: CoredllGuestMemory>(
 
 fn terminate_process_raw(
     kernel: &mut CeKernel,
+    context: &CoredllRawContext,
     thread_id: u32,
     handle: u32,
     exit_code: u32,
 ) -> bool {
-    if kernel.terminate_process(handle, exit_code) {
+    let Some(caller_birth) = context
+        .caller_birth
+        .filter(|birth| birth.thread_id() == thread_id)
+    else {
+        return false;
+    };
+    if kernel
+        .checked_guest_process_caller_for_birth(caller_birth)
+        .is_none()
+    {
+        return false;
+    }
+
+    if kernel.terminate_process_for_caller_birth(caller_birth, handle, exit_code) {
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {

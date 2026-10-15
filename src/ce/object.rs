@@ -1987,6 +1987,23 @@ impl HandleTable {
         Some(process.aliases.iter().copied().collect())
     }
 
+    /// Signal only the exact live process incarnation selected for a guest
+    /// current-process exit. A recycled PID or an already-signaled process
+    /// cannot receive a second exit code or wake publication.
+    pub fn signal_pseudo_process_exit_by_birth(
+        &mut self,
+        key: ProcessBirthKey,
+        exit_code: u32,
+    ) -> Option<Vec<u32>> {
+        let process = self.processes.get_mut(&key.process_id)?;
+        if process.incarnation != key.incarnation || !process.execution_live || process.signaled {
+            return None;
+        }
+        process.exit_code = exit_code;
+        process.signaled = true;
+        Some(process.aliases.iter().copied().collect())
+    }
+
     pub fn process_exit_code(&self, handle: u32) -> Option<u32> {
         self.process_for_handle(handle)
             .map(|process| process.exit_code)

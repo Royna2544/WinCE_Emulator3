@@ -7171,27 +7171,90 @@ impl CeKernel {
         }
     }
 
+    /// Authenticate the register-supplying guest thread against its frozen
+    /// creation process and the currently selected process. A reused public
+    /// TID/PID cannot supply authority for a different process incarnation.
+    pub fn checked_guest_process_caller_for_birth(
+        &self,
+        caller: ThreadBirthKey,
+    ) -> Option<ProcessBirthKey> {
+        if !self.is_live_thread_birth(caller) {
+            return None;
+        }
+        let process = self
+            .handles
+            .live_thread_creation_owner_by_id(caller.thread_id())?;
+        (self.handles.process_execution_live_by_birth(process)
+            && self.handles.process_signaled_by_id(process.process_id()) == Some(false)
+            && self.current_process_birth_key() == Some(process))
+        .then_some(process)
+    }
+
+    /// Guest-facing TerminateProcess entry. Real handles retain their request
+    /// semantics; the current-process pseudo handle uses the verified caller's
+    /// exact process birth for all exit effects.
+    pub fn terminate_process_for_caller_birth(
+        &mut self,
+        caller: ThreadBirthKey,
+        handle: u32,
+        exit_code: u32,
+    ) -> bool {
+        let Some(process) = self.checked_guest_process_caller_for_birth(caller) else {
+            return false;
+        };
+        if Self::is_current_process_pseudo_handle(handle) {
+            self.terminate_current_process_for_birth(process, exit_code)
+        } else {
+            self.terminate_process(handle, exit_code)
+        }
+    }
+
+    pub fn terminate_current_process_for_caller_birth(
+        &mut self,
+        caller: ThreadBirthKey,
+        exit_code: u32,
+    ) -> bool {
+        self.terminate_process_for_caller_birth(caller, CE_CURRENT_PROCESS_PSEUDO_HANDLE, exit_code)
+    }
+
+    fn terminate_current_process_for_birth(
+        &mut self,
+        process: ProcessBirthKey,
+        exit_code: u32,
+    ) -> bool {
+        // Preflight every fallible identity/state check before GWE teardown.
+        // The &mut Kernel lease prevents a selector change before the exact
+        // birth is signaled below.
+        if self.current_process_birth_key() != Some(process)
+            || !self.handles.process_execution_live_by_birth(process)
+            || self.handles.process_signaled_by_id(process.process_id()) != Some(false)
+        {
+            return false;
+        }
+        self.destroy_process_windows_for_birth(process, 0);
+        if self
+            .handles
+            .signal_pseudo_process_exit_by_birth(process, exit_code)
+            .is_none()
+        {
+            // The exact-birth signal should be infallible after preflight;
+            // never report a completed exit if that invariant is broken.
+            return false;
+        }
+        self.current_process_exit_code = exit_code;
+        self.current_process_signaled = true;
+        self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(process));
+        true
+    }
+
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         if Self::is_current_process_pseudo_handle(handle) {
-            // A stale mutable PID selector is not authority to mutate host
-            // windows or mark another process exited.
-            let Some(process_key) = self.current_process_birth_key() else {
+            // Compatibility for direct Kernel/host fixtures. Guest import and
+            // decoded paths must use the caller-birth entry points above.
+            let Some(process) = self.current_process_birth_key() else {
                 return false;
             };
-            self.destroy_process_windows_for_birth(process_key, 0);
-            self.current_process_exit_code = exit_code;
-            self.current_process_signaled = true;
-            let was_signaled = self.handles.process_signaled_by_id(self.current_process_id);
-            if self
-                .handles
-                .signal_pseudo_process_exit_by_id(self.current_process_id, exit_code)
-                .is_some()
-            {
-                if was_signaled == Some(false) {
-                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(process_key));
-                }
-            }
-            return true;
+            return self.terminate_current_process_for_birth(process, exit_code);
         }
         let Some(process_id) = self.handles.process_id(handle) else {
             return false;

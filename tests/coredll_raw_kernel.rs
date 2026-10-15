@@ -8627,7 +8627,9 @@ fn raw_pseudo_terminate_stale_caller_preserves_selected_process() -> Result<()> 
     let table = CoredllExportTable::default();
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
     let mut memory = TestGuestMemory::default();
-    let process_a = kernel.current_process_birth_key().expect("boot process birth");
+    let process_a = kernel
+        .current_process_birth_key()
+        .expect("boot process birth");
     let (thread_a_handle, thread_a_id) = kernel.create_guest_thread(0x401000, 0, false);
     let thread_a = kernel
         .handles
@@ -8690,7 +8692,10 @@ fn raw_pseudo_terminate_stale_caller_preserves_selected_process() -> Result<()> 
         kernel.process_exit_code_for_handle(launch_b.process_handle),
         Some(STILL_ACTIVE)
     );
-    assert_eq!(kernel.is_wait_ready(launch_b.process_handle, 1), Some(false));
+    assert_eq!(
+        kernel.is_wait_ready(launch_b.process_handle, 1),
+        Some(false)
+    );
     assert!(kernel.handles.process_execution_live_by_birth(process_b));
     assert_eq!(kernel.recent_process_ops(), process_trace_before.as_slice());
     assert_eq!(kernel.recent_message_ops(), message_trace_before.as_slice());
@@ -8766,14 +8771,20 @@ fn raw_pseudo_terminate_missing_caller_birth_preserves_selected_process() -> Res
             ..
         }
     ));
-    assert_eq!(kernel.threads.get_last_error(launch_b.thread_id), SENTINEL_ERROR);
+    assert_eq!(
+        kernel.threads.get_last_error(launch_b.thread_id),
+        SENTINEL_ERROR
+    );
     assert!(kernel.gwe.is_window(hwnd_b));
     assert_eq!(kernel.current_process_state(), state_before);
     assert_eq!(
         kernel.process_exit_code_for_handle(launch_b.process_handle),
         Some(STILL_ACTIVE)
     );
-    assert_eq!(kernel.is_wait_ready(launch_b.process_handle, 1), Some(false));
+    assert_eq!(
+        kernel.is_wait_ready(launch_b.process_handle, 1),
+        Some(false)
+    );
     assert_eq!(kernel.recent_process_ops(), process_trace_before.as_slice());
     assert_eq!(kernel.recent_message_ops(), message_trace_before.as_slice());
     Ok(())
@@ -26252,7 +26263,15 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
 
     let process_id = 0x2200;
     // A real guest process has a canonical birth before it owns host windows.
-    let _process_handle = kernel.handles.create_process(process_id);
+    let process_handle = kernel.handles.create_process(process_id);
+    let process_birth = kernel
+        .handles
+        .process_birth_key_for_handle(process_handle)
+        .expect("process birth");
+    let _caller_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(process_birth, thread_id, 0x401000, 0, false)?;
     kernel.set_current_process_id(process_id);
     let process_hwnd =
         kernel.create_window_ex_w(thread_id, "SHN_PROCESS_CLEANUP", "", None, 0, 0, 0);
