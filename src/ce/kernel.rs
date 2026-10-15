@@ -3408,12 +3408,7 @@ impl CeKernel {
             cleanup_thread_id,
             framebuffer,
         )?;
-        self.release_message_pointer_payloads_for_owner(exiting_birth);
-        self.delivered_typed_payload_messages
-            .retain(|(birth, _, _), _| *birth != exiting_birth);
-        self.module_heap_info_guest_ptrs.remove(&exiting_birth);
-        self.process_name_guest_ptrs.remove(&exiting_birth);
-        self.command_line_guest_ptrs.remove(&exiting_birth);
+        self.retire_process_host_metadata_for_birth(exiting_birth);
         let completed = self.complete_process_execution_by_birth(exiting_birth, primary, exit_code);
         debug_assert!(completed, "preflighted process birth must complete");
         self.record_process_trace(ProcessTraceRecord {
@@ -3451,23 +3446,40 @@ impl CeKernel {
         {
             return Ok(false);
         }
+        let effective_exit_code = self
+            .handles
+            .process_termination_requested_exit_code_by_birth(expected_birth)
+            .unwrap_or(exit_code);
         self.try_destroy_process_windows_with_backing_restore_for_birth(
             expected_birth,
             0,
             framebuffer,
         )?;
+        self.retire_process_host_metadata_for_birth(expected_birth);
         let primary = self.handles.thread_birth_key_by_id(1).filter(|primary| {
-            self.handles.thread_creation_owner_by_id(primary.thread_id()) == Some(expected_birth)
+            self.handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                == Some(expected_birth)
         });
-        let completed = self.complete_process_execution_by_birth(expected_birth, primary, exit_code);
+        let completed =
+            self.complete_process_execution_by_birth(expected_birth, primary, effective_exit_code);
         if !completed {
             return Err(Error::Backend(
                 "preflighted stopped process birth failed canonical Task/VM completion".to_owned(),
             ));
         }
-        self.current_process_exit_code = exit_code;
+        self.current_process_exit_code = effective_exit_code;
         self.current_process_signaled = true;
         Ok(true)
+    }
+
+    fn retire_process_host_metadata_for_birth(&mut self, owner: ProcessBirthKey) {
+        self.release_message_pointer_payloads_for_owner(owner);
+        self.delivered_typed_payload_messages
+            .retain(|(birth, _, _), _| *birth != owner);
+        self.module_heap_info_guest_ptrs.remove(&owner);
+        self.process_name_guest_ptrs.remove(&owner);
+        self.command_line_guest_ptrs.remove(&owner);
     }
 
     fn try_destroy_process_windows_with_backing_restore_for_birth(
@@ -15294,11 +15306,13 @@ mod tests {
         }
         assert!(!kernel.gwe.is_window(hwnd));
         assert!(!kernel.window_backing_stores.contains_key(&hwnd));
+        assert!(!kernel.handles.process_execution_live_by_birth(root));
         assert_eq!(
             kernel.handles.process_signaled_by_id(root.process_id()),
-            Some(true)
+            None
         );
         assert_eq!(kernel.current_process_state().exit_code, 0x51);
+        assert!(kernel.current_process_state().signaled);
         Ok(())
     }
 

@@ -6176,7 +6176,9 @@ impl UnicornMips {
                 .handles
                 .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
                 .is_some_and(|primary| {
-                    kernel.handles.thread_creation_owner_by_id(primary.thread_id())
+                    kernel
+                        .handles
+                        .thread_creation_owner_by_id(primary.thread_id())
                         == Some(intent.owner)
                 })
         {
@@ -8193,6 +8195,15 @@ impl UnicornMips {
                 };
             }
         }
+        if self.private_slab_attempt_poisoned {
+            report.failure_operation = Some("poisoned native-attempt preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "native attempt is poisoned; a fresh machine is required".to_owned(),
+                )),
+            };
+        }
         let completed_request = if self.requested_active_child_termination(kernel).is_some() {
             match self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
                 Ok(completed) => completed,
@@ -8211,15 +8222,6 @@ impl UnicornMips {
             return AttemptExecution {
                 report,
                 result: Ok(()),
-            };
-        }
-        if self.private_slab_attempt_poisoned {
-            report.failure_operation = Some("poisoned native-attempt preflight");
-            return AttemptExecution {
-                report,
-                result: Err(Error::Backend(
-                    "native attempt is poisoned; a fresh machine is required".to_owned(),
-                )),
             };
         }
         if self.run_slice_generation != 0
@@ -73700,8 +73702,14 @@ mod unicorn_tests {
             },
         );
         attempt.result?;
-        assert_eq!(attempt.report.final_outcome(), super::NativeSliceOutcome::GuestProcessExit);
-        assert_eq!(cpu.last_debug_snapshot().expect("stop snapshot").pc, entry + 16);
+        assert_eq!(
+            attempt.report.final_outcome(),
+            super::NativeSliceOutcome::GuestProcessExit
+        );
+        assert_eq!(
+            cpu.last_debug_snapshot().expect("stop snapshot").pc,
+            entry + 16
+        );
         assert!(cpu.active_process_execution_completed());
         assert!(cpu.native_engine_identity_for_test().is_none());
         assert!(!kernel.handles.process_execution_live_by_birth(birth));
@@ -73725,7 +73733,10 @@ mod unicorn_tests {
         );
         assert!(rejected.result.is_err());
         assert_eq!(rejected.report.attempt_id(), None);
-        assert_eq!(rejected.report.failure_operation(), Some("completed process CPU preflight"));
+        assert_eq!(
+            rejected.report.failure_operation(),
+            Some("completed process CPU preflight")
+        );
         Ok(())
     }
 
@@ -73733,8 +73744,8 @@ mod unicorn_tests {
     fn native_pseudo_terminate_refuses_unrestorable_backing_before_exit_effects()
     -> crate::Result<()> {
         let mut kernel = phase1_kernel("native-pseudo-backing.exe")?;
-        let launch = kernel
-            .queue_process_launch(Some("\\Test\\native-pseudo-backing.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\native-pseudo-backing.exe".to_owned()), None);
         let birth = launch.process_birth.expect("child birth");
         let caller = launch.primary_thread_birth.expect("primary birth");
         let _ = kernel.take_pending_process_launches();
@@ -73784,17 +73795,29 @@ mod unicorn_tests {
                 ..
             }) if process_id == launch.process_id && rejected == hwnd
         ));
-        assert_eq!(cpu.last_debug_snapshot().expect("stop snapshot").pc, entry + 16);
+        assert_eq!(
+            cpu.last_debug_snapshot().expect("stop snapshot").pc,
+            entry + 16
+        );
         assert!(!cpu.active_process_execution_completed());
         assert!(cpu.native_engine_identity_for_test().is_none());
         assert!(kernel.handles.process_execution_live_by_birth(birth));
         assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
-        assert_eq!(kernel.handles.process_signaled_by_id(launch.process_id), Some(false));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(incompatible.pixels(), pixels_before.as_slice());
 
+        // An independently requested real-handle termination cannot bypass
+        // this CPU's earlier recovery hold on the next entry attempt.
+        assert!(kernel.terminate_process(launch.process_handle, 0x7b));
         let retry = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut incompatible,
@@ -73802,9 +73825,118 @@ mod unicorn_tests {
         );
         assert!(retry.result.is_err());
         assert_eq!(retry.report.attempt_id(), None);
-        assert_eq!(retry.report.failure_operation(), Some("poisoned native-attempt preflight"));
+        assert_eq!(
+            retry.report.failure_operation(),
+            Some("poisoned native-attempt preflight")
+        );
         assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
         assert!(kernel.gwe.is_window(hwnd));
+        Ok(())
+    }
+
+    #[test]
+    fn native_boot_pseudo_terminate_retires_primary_worker_and_heap() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("native-boot-pseudo-terminate.exe")?;
+        let root = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let primary_alias = kernel.handles.open_thread(1).expect("boot primary alias");
+        let worker_handle = kernel.create_guest_thread(0x401000, 0, false).0;
+        let worker_tid = kernel.handles.thread_id(worker_handle).expect("worker TID");
+        assert!(
+            kernel
+                .handles
+                .request_process_termination_by_id(1, 0x55)
+                .is_some()
+        );
+        let heap_ptr = kernel
+            .memory
+            .heap_alloc(root, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("boot-owned heap allocation");
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let mut bytes = tiny_mips_spinner_pe();
+        let words = [
+            0x3c19_0000 | (trap >> 16),
+            0x3739_0000 | (trap & 0xffff),
+            0x0320_f809,
+            0,
+            0x2610_0001,
+            0x1000_ffff,
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("native-boot-pseudo-terminate.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(super::MAIN_GUEST_THREAD_ID);
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_TERMINATE_PROCESS),
+                name: Some("TerminateProcess".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let entry = cpu.entry.expect("fixture entry");
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE;
+        regs.regs[5] = 0x6a;
+        regs.regs[29] = cpu.stack_top.expect("fixture stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let attempted = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        attempted.result?;
+        assert_eq!(
+            attempted.report.final_outcome(),
+            super::NativeSliceOutcome::GuestProcessExit
+        );
+        assert_eq!(
+            cpu.last_debug_snapshot().expect("stop snapshot").pc,
+            entry + 16
+        );
+        assert!(cpu.active_process_execution_completed());
+        assert!(!kernel.handles.process_execution_live_by_birth(root));
+        assert!(
+            !kernel
+                .handles
+                .thread_execution_live_by_id(super::MAIN_GUEST_THREAD_ID)
+        );
+        assert!(!kernel.handles.thread_execution_live_by_id(worker_tid));
+        assert_eq!(kernel.current_process_state().exit_code, 0x55);
+        assert!(kernel.current_process_state().signaled);
+        assert_eq!(kernel.guest_thread_exit_code(primary_alias), Some(0x55));
+        assert_eq!(kernel.guest_thread_exit_code(worker_handle), Some(0));
+        // Boot has no public process alias, so canonical retirement may also
+        // release its unreferenced process tombstone.
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(root.process_id()),
+            None
+        );
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(root, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, heap_ptr),
+            None
+        );
         Ok(())
     }
 
