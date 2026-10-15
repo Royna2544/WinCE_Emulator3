@@ -34,10 +34,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    - Complete host teardown beyond the source-tested independent-window/backing
      PID-reuse selection and the no-birth pseudo-exit fence
      ([bounded gate receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
-     recursive foreign parent/owner links and numeric sent-message sender
-     cleanup still lack birth proof. Full exit capture retirement and implicit
-     gesture ownership need separate gates; so do broadcast, HWND-owned
-     timers, hotkeys, sent/paint/modal and other numeric GWE producers.
+     recursive foreign parent/owner links still lack birth proof. The later
+     [sender-ownership gate](evidence/stage3-sender-birth-20261015/validation.receipt.md)
+     covers tested queued sends, not direct WndProc paths, receiver-side
+     cross-process result writes or conditional system-origin device-change
+     broadcasts. Full exit capture retirement and implicit gesture ownership
+     need separate gates; so do HWND-owned timers, hotkeys, sent/paint/modal
+     and other numeric GWE producers.
    - Cross-process parked-sender restore, reciprocal shapes beyond A12's exact
      two-send case, legacy numeric-only HWNDs, post-wake MsgWait/sent
      processing and `SMF_TIMEOUT` last-error semantics remain separate gates,

@@ -48,6 +48,16 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded sender-ownership source/test gate
+  ([receipt](evidence/stage3-sender-birth-20261015/validation.receipt.md)):
+  authenticated sender birth now owns the tested queued Send/Timeout through
+  publication, exact process/thread exit cleanup, and native wait/result
+  re-entry. Identified guest no-wait producers reject stale callers before
+  side effects. The original three red controls are enabled. Final 18-group
+  suites passed release **2,067/0/9 ignored** and no-default **1,495/0/3
+  ignored**. Direct WndProc paths, receiver-side cross-process writes,
+  conditional system-origin device notifications, foreign GWE recursion,
+  CE6 parity, full Stage 3 and live iNavi remain open.
 - Bounded host-exit independent-window PID-reuse source/test gate
   ([receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
   verified process-exit birth selects live windows and captured backing stores
@@ -61,7 +71,8 @@ result. The per-slice text before this condense is at
   **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**. The expected
   red and superseded broad failures remain in the receipt. Recursive GWE
   traversal of foreign parent/owner links and numeric sent-message sender
-  cleanup are not birth-filtered; this is not full host teardown, Stage 3,
+  cleanup were not birth-filtered at this earlier host-exit seal; the later
+  sender gate narrows the latter. This is not full host teardown, Stage 3,
   CE6 parity or a live iNavi run.
 - A13 same-birth orphaned `GetMessageW` source/test gate
   ([receipt](evidence/scheduler-source-cut-a13/validation.final.receipt.md)):

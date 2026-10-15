@@ -91,8 +91,10 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     across 18 groups each;
     [receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)).
     Full host teardown remains open: GWE recursive foreign parent/owner links
-    and numeric sent-message sender cleanup lack birth proof. The broad passes
-    do not establish live-app behavior or CE6 parity for this bounded gate.
+    lack birth proof. The later bounded [sender-ownership gate](evidence/stage3-sender-birth-20261015/validation.receipt.md)
+    covers tested queued sends and guest no-wait producers, not direct WndProc,
+    receiver-side cross-process result writes or conditional system-origin
+    device broadcasts. Neither gate establishes live-app behavior or CE6 parity.
   - W-B1c does not establish physical arrival order across HTTP and desktop
     producers, ordering with NMEA/serial batch dispatch, CE6 focus/activation
     parity, cross-thread guest WNDPROC execution order or O-C5 guest-time
