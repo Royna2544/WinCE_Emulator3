@@ -21386,7 +21386,6 @@ fn read_unicorn_code_u32<D>(
     mapped_code
         .read_static_code_u32(address)
         .or_else(|| read_unicorn_u32(uc, address))
-        .or_else(|| mapped_code.read_u32(address))
 }
 
 #[cfg(feature = "unicorn")]
@@ -70890,6 +70889,63 @@ mod unicorn_tests {
             super::read_unicorn_code_u32(&uc, &mapped_code, 0x0010_0000),
             Some(trampoline_code)
         );
+    }
+
+    #[test]
+    fn mapped_code_index_unmapped_mutable_code_fails_closed_without_stale_fallback()
+    -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let sealed_base = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("production loader's sealed image run")
+            .base;
+        let stale_image = 0x2408_0001u32;
+        let stale_dll = 0x2409_0001u32;
+        let trampoline_code = 0x03e0_0008u32;
+        let image_base = 0x4800_0000u32;
+        let dll_base = 0x5000_0000u32;
+        let trampoline_base = 0x5100_0000u32;
+        let mut blobs = cpu.mapped_blobs.clone();
+        for (name, base, instruction) in [
+            ("image:mutable.exe", image_base, stale_image),
+            ("dll:mutable.dll", dll_base, stale_dll),
+            ("trampoline:fixed", trampoline_base, trampoline_code),
+        ] {
+            blobs.push(super::MappedBlob {
+                name: name.to_owned(),
+                base,
+                bytes: instruction.to_le_bytes().to_vec().into(),
+            });
+        }
+        let mapped_code = super::MappedCodeIndex::new(&blobs);
+        let uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sealed_code = mapped_code
+            .read_static_code_u32(sealed_base)
+            .expect("sealed image instruction remains statically readable");
+
+        assert_eq!(mapped_code.read_u32(image_base), Some(stale_image));
+        assert_eq!(mapped_code.read_u32(dll_base), Some(stale_dll));
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, image_base),
+            None,
+            "unmapped mutable image bytes must not authorize decoded control flow"
+        );
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, dll_base),
+            None,
+            "unmapped mutable DLL bytes must not authorize decoded control flow"
+        );
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, sealed_base),
+            Some(sealed_code)
+        );
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, trampoline_base),
+            Some(trampoline_code)
+        );
+        Ok(())
     }
 
     #[test]
