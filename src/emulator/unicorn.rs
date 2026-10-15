@@ -92479,7 +92479,8 @@ mod unicorn_tests {
             })
             .map(|blob| (blob.base, blob.bytes.len()))
             .collect();
-        assert_eq!(owned, vec![(BASE, 0x1000), (BASE + 0x2000, 0x1000)]);
+        // The loader retains one more aligned page for synthesized tail bytes.
+        assert_eq!(owned, vec![(BASE, 0x1000), (BASE + 0x2000, 0x2000)]);
         let original_blobs: Vec<_> = cpu
             .mapped_blobs
             .iter()
@@ -92490,6 +92491,12 @@ mod unicorn_tests {
         let conflict =
             crate::ce::memory::WritableImageRunIdentity::new(owner, 0x003f_0000, 1, BASE + 0x2000)
                 .expect("separate module identity at same VA");
+        assert!(super::ranges_overlap(
+            owned[1].0,
+            owned[1].1 as u32,
+            conflict.run_base(),
+            0x1000,
+        ));
         let conflict_prepared = kernel
             .memory
             .prepare_writable_image_run(conflict, &vec![0x7b; 0x1000])
