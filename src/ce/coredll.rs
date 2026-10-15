@@ -73191,6 +73191,43 @@ mod tests {
     }
 
     #[test]
+    fn public_virtual_alloc_reserve_only_does_not_charge_stable_page_budget() -> Result<()> {
+        let table = CoredllExportTable::default();
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let mut memory = UnitGuestMemory::default();
+        let thread_id = 0x6102;
+        let address = 0x5230_0000;
+        let baseline = kernel.memory.private_commit_used_bytes();
+
+        let reserved = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VIRTUAL_ALLOC,
+            [address, 0x10000, MEM_RESERVE, PAGE_READWRITE],
+        );
+        assert!(
+            matches!(reserved, CoredllDispatch::Returned { value: CoredllValue::Handle(ptr), .. } if ptr == address),
+            "public reserve-only VirtualAlloc must return the requested VA: {reserved:?}"
+        );
+        assert_eq!(kernel.memory.private_commit_used_bytes(), baseline);
+
+        let committed = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VIRTUAL_ALLOC,
+            [address + 0x2000, 0x1000, MEM_COMMIT, PAGE_READWRITE],
+        );
+        assert!(
+            matches!(committed, CoredllDispatch::Returned { value: CoredllValue::Handle(ptr), .. } if ptr == address + 0x2000),
+            "public commit into the reserved region must return the page VA: {committed:?}"
+        );
+        assert_eq!(kernel.memory.private_commit_used_bytes(), baseline + 0x1000);
+        Ok(())
+    }
+
+    #[test]
     fn pe_icon_bi_rgb_16bpp_uses_ce_555_masks() {
         assert_eq!(
             pe_icon_bi_rgb_masks(16),
