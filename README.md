@@ -45,7 +45,8 @@ remote-control HTTP/WebSocket surface.
   [validation receipt](evidence/scheduler-source-cut-a10/validation.receipt.md):
   18-group release-feature **2,045/0/9 ignored** and no-default **1,482/0/3
   ignored**, with unchanged pre/post source hashes, two alternate checks and a
-  release build passing; EXE/PDB copies were SHA-preserved, not run. A09's four
+  release build passing; EXE/PDB copies were SHA-preserved, with no app run.
+  A09's four
   same-process Send failures remain historical. A10 checks exact blocked-
   GetMessage/native wait and birth before recovering B, then resumes A on the
   next bounded lease. Only the runnable-receiver fixture proves a subsequent

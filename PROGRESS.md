@@ -90,8 +90,8 @@ retirement, exact send-ID completion and checked receiver/sender restoration.
 An ignored
 [receiver-exit/TID-reuse Kernel control](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
 failed as expected: B-prime took B's queued send while A had no failure
-result. These receipts preserve historical expected-red evidence, not the
-current candidate's test status. No reciprocal fixture or iNavi launch was
+result. These receipts preserve historical expected-red evidence, not A10's
+passing source/test status. No reciprocal fixture or iNavi launch was
 established by them.
 
 ## 2026-10-15 Architecture and measurement design refresh (no source/run)
