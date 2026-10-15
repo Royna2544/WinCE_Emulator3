@@ -26093,6 +26093,8 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     assert!(kernel.shell.change_notification(hwnd).is_none());
 
     let process_id = 0x2200;
+    // A real guest process has a canonical birth before it owns host windows.
+    let _process_handle = kernel.handles.create_process(process_id);
     kernel.set_current_process_id(process_id);
     let process_hwnd =
         kernel.create_window_ex_w(thread_id, "SHN_PROCESS_CLEANUP", "", None, 0, 0, 0);

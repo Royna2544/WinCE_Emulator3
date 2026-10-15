@@ -480,18 +480,22 @@ fn process_completion_removes_owned_waits_but_wakes_external_waiters() -> Result
 fn process_completion_does_not_destroy_window_of_reused_primary_tid() -> Result<()> {
     let mut kernel = boot()?;
     let launch = kernel.queue_process_launch(None, None);
-    let old_window = kernel.gwe.create_window_ex_with_process_and_rect(
-        launch.thread_id,
-        launch.process_id,
-        "old_child",
-        "old",
-        None,
-        0,
-        WS_VISIBLE,
-        0,
-        Rect::from_origin_size(0, 0, 100, 100),
-    );
-    assert_ne!(old_window, 0);
+    let old_birth = launch.primary_thread_birth.expect("original thread birth");
+    kernel.set_current_process_id(launch.process_id);
+    let old_window = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            old_birth,
+            "old_child",
+            "old",
+            None,
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        )
+        .expect("original exact-birth window");
+    kernel.set_current_process_id(1);
 
     assert!(kernel.mark_guest_thread_exited_by_id(launch.thread_id, 0));
     assert!(kernel.close_handle(launch.thread_handle)?);
@@ -513,18 +517,25 @@ fn process_completion_does_not_destroy_window_of_reused_primary_tid() -> Result<
         0,
         false,
     )?;
-    let unrelated_window = kernel.gwe.create_window_ex_with_process_and_rect(
-        launch.thread_id,
-        unrelated_birth.process_id(),
-        "new_child",
-        "new",
-        None,
-        0,
-        WS_VISIBLE,
-        0,
-        Rect::from_origin_size(0, 0, 100, 100),
-    );
-    assert_ne!(unrelated_window, 0);
+    let unrelated_thread_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(unrelated_thread_handle)
+        .expect("unrelated thread birth");
+    kernel.set_current_process_id(unrelated_birth.process_id());
+    let unrelated_window = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            unrelated_thread_birth,
+            "new_child",
+            "new",
+            None,
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        )
+        .expect("unrelated exact-birth window");
+    kernel.set_current_process_id(1);
 
     assert!(kernel.mark_process_launch_exited(&launch, 0x55));
     assert!(
