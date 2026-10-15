@@ -68,7 +68,7 @@ fn wait_until(started: Instant, delay: Duration) {
     }
 }
 
-fn run_iteration(sequence: usize, arm: Arm, offset_us: i64) -> u64 {
+fn run_iteration(sequence: usize, arm: Arm, offset_us: i64) -> (u64, bool) {
     let stop_delay_us = (NATIVE_TIMEOUT_US as i64 + offset_us) as u64;
     let stop_target_us = (arm != Arm::TimerOnly).then_some(stop_delay_us);
     emit(&format!(
@@ -126,20 +126,27 @@ fn run_iteration(sequence: usize, arm: Arm, offset_us: i64) -> u64 {
         arm.timeout_us(),
     ));
 
-    assert!(result.is_ok(), "native run failed at seq={sequence}: {result:?}");
+    assert!(
+        result.is_ok(),
+        "native run failed at seq={sequence}: {result:?}"
+    );
     assert_eq!(count_query, Ok(0), "count stop at seq={sequence}");
-    assert_ne!(pc, Ok(0), "guest PC zero at seq={sequence}");
+    let pc_value = pc.expect("read guest PC");
+    assert_ne!(pc_value, 0, "guest PC zero at seq={sequence}");
     if seen {
         assert_eq!(stop_ok, Some(true), "hook stop failed at seq={sequence}");
     }
     if arm == Arm::NoTimer {
-        assert!(seen, "timeout-zero control missed its hook at seq={sequence}");
+        assert!(
+            seen,
+            "timeout-zero control missed its hook at seq={sequence}"
+        );
         assert_eq!(timeout_query, Ok(0), "timeout-zero control expired");
     }
     if arm == Arm::TimerOnly {
         assert_eq!(timeout_query, Ok(1), "timer-only control did not expire");
     }
-    timeout_query.expect("read timer result") as u64
+    (timeout_query.expect("read timer result") as u64, seen)
 }
 
 #[test]
@@ -156,21 +163,35 @@ fn timer_boundary_fresh_owner_sweep() {
 
     let mut timed_expired_total = 0;
     let mut timed_unexpired_total = 0;
+    let mut timed_expired_with_hook = 0;
+    let mut timed_unexpired_with_hook = 0;
     for offset_us in STOP_OFFSETS_US {
         let mut expired_at_offset = 0;
+        let mut expired_with_hook_at_offset = 0;
+        let mut unexpired_with_hook_at_offset = 0;
         for _ in 0..SAMPLES_PER_OFFSET {
             sequence += 1;
             run_iteration(sequence, Arm::NoTimer, offset_us);
             sequence += 1;
-            if run_iteration(sequence, Arm::TimedStop, offset_us) == 1 {
+            let (timed_out, hook_seen) = run_iteration(sequence, Arm::TimedStop, offset_us);
+            if timed_out == 1 {
                 expired_at_offset += 1;
+                if hook_seen {
+                    expired_with_hook_at_offset += 1;
+                }
+            } else {
+                if hook_seen {
+                    unexpired_with_hook_at_offset += 1;
+                }
             }
         }
         let unexpired_at_offset = SAMPLES_PER_OFFSET - expired_at_offset;
         timed_expired_total += expired_at_offset;
         timed_unexpired_total += unexpired_at_offset;
+        timed_expired_with_hook += expired_with_hook_at_offset;
+        timed_unexpired_with_hook += unexpired_with_hook_at_offset;
         emit(&format!(
-            "OFFSET_SUMMARY offset_us={offset_us} timed_expired={expired_at_offset} timed_unexpired={unexpired_at_offset} matched_no_timer={} completed={sequence}",
+            "OFFSET_SUMMARY offset_us={offset_us} timed_expired={expired_at_offset} timed_unexpired={unexpired_at_offset} expired_with_hook={expired_with_hook_at_offset} unexpired_with_hook={unexpired_with_hook_at_offset} matched_no_timer={} completed={sequence}",
             SAMPLES_PER_OFFSET,
         ));
     }
@@ -180,13 +201,13 @@ fn timer_boundary_fresh_owner_sweep() {
         run_iteration(sequence, Arm::TimerOnly, 0);
     }
     emit(&format!(
-        "SWEEP_END completed={sequence} timed_expired={timed_expired_total} timed_unexpired={timed_unexpired_total} timer_only={} no_timer={} timed_stop={}",
+        "SWEEP_END completed={sequence} timed_expired={timed_expired_total} timed_unexpired={timed_unexpired_total} expired_with_hook={timed_expired_with_hook} unexpired_with_hook={timed_unexpired_with_hook} timer_only={} no_timer={} timed_stop={}",
         2 * TIMER_ONLY_SAMPLES_PER_END,
         STOP_OFFSETS_US.len() * SAMPLES_PER_OFFSET,
         STOP_OFFSETS_US.len() * SAMPLES_PER_OFFSET,
     ));
     assert!(
-        timed_expired_total > 0 && timed_unexpired_total > 0,
-        "inconclusive boundary sweep: retune timing; this is not an AV diagnosis"
+        timed_expired_with_hook > 0 && timed_unexpired_with_hook > 0,
+        "inconclusive hook/timer overlap: retune timing; this is not an AV diagnosis"
     );
 }
