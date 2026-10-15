@@ -120,7 +120,7 @@ use wince_emulation_v3::{
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
-            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions,
+            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions, STILL_ACTIVE,
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
@@ -8619,6 +8619,108 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn raw_pseudo_terminate_stale_caller_preserves_selected_process() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let process_a = kernel.current_process_birth_key().expect("boot process birth");
+    let (thread_a_handle, thread_a_id) = kernel.create_guest_thread(0x401000, 0, false);
+    let thread_a = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_a_handle)
+        .expect("captured A caller birth");
+    assert_eq!(
+        kernel.handles.thread_creation_owner_by_id(thread_a_id),
+        Some(process_a)
+    );
+
+    let launch_b = kernel.queue_process_launch(None, None);
+    let process_b = launch_b.process_birth.expect("B process birth");
+    let thread_b = launch_b.primary_thread_birth.expect("B caller birth");
+    assert_ne!(process_a, process_b);
+    assert!(kernel.mark_guest_thread_exited_by_id(thread_a_id, 0));
+    assert!(!kernel.is_live_thread_birth(thread_a));
+    kernel.set_current_process_id(launch_b.process_id);
+    let hwnd_b = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            thread_b,
+            "PSEUDO_EXIT_B",
+            "",
+            None,
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::default(),
+        )
+        .expect("B-owned window");
+    let process_trace_before = kernel.recent_process_ops().to_vec();
+    let message_trace_before = kernel.recent_message_ops().to_vec();
+    let selected_state_before = kernel.current_process_state();
+    const SENTINEL_ERROR: u32 = 0x55aa;
+    kernel.threads.set_last_error(thread_a_id, SENTINEL_ERROR);
+
+    let stale_result = table.dispatch_raw_ordinal_with_framebuffer_and_context(
+        &mut kernel,
+        &mut memory,
+        None,
+        CoredllRawContext {
+            thread_id: thread_a_id,
+            caller_birth: Some(thread_a),
+            ..Default::default()
+        },
+        ORD_TERMINATE_PROCESS,
+        [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x55],
+    );
+    assert!(matches!(
+        stale_result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_a_id), SENTINEL_ERROR);
+    assert!(kernel.gwe.is_window(hwnd_b));
+    assert_eq!(kernel.current_process_state(), selected_state_before);
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch_b.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(kernel.is_wait_ready(launch_b.process_handle, 1), Some(false));
+    assert!(kernel.handles.process_execution_live_by_birth(process_b));
+    assert_eq!(kernel.recent_process_ops(), process_trace_before.as_slice());
+    assert_eq!(kernel.recent_message_ops(), message_trace_before.as_slice());
+
+    // The exact live B caller can still use the same pseudo handle.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            CoredllRawContext {
+                thread_id: launch_b.thread_id,
+                caller_birth: Some(thread_b),
+                ..Default::default()
+            },
+            ORD_TERMINATE_PROCESS,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x66],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(launch_b.thread_id), 0);
+    assert!(!kernel.gwe.is_window(hwnd_b));
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch_b.process_handle),
+        Some(0x66)
+    );
+    assert_eq!(kernel.is_wait_ready(launch_b.process_handle, 1), Some(true));
     Ok(())
 }
 

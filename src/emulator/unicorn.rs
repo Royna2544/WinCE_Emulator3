@@ -82772,6 +82772,28 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn native_terminate_process_import_requires_captured_caller_birth() {
+        use crate::ce::coredll_ordinals::ORD_TERMINATE_PROCESS;
+        use crate::emulator::imports::ImportModuleKind;
+
+        for process_handle in [
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            0x1234,
+        ] {
+            assert!(super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Coredll,
+                Some(ORD_TERMINATE_PROCESS),
+                process_handle,
+            ));
+            assert!(!super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Fsdmgr,
+                Some(ORD_TERMINATE_PROCESS),
+                process_handle,
+            ));
+        }
+    }
+
+    #[test]
     fn native_send_imports_require_captured_caller_birth() {
         use crate::ce::coredll_ordinals::{
             ORD_CALL_WINDOW_PROC_W, ORD_DEF_DLG_PROC_W, ORD_DEF_WINDOW_PROC_W,
