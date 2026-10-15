@@ -290,399 +290,43 @@ E-44, O-M2); the pre-condense narrative is in `git show ca9abe8f:PROGRESS.md`.
   unconverted direct stack outputs, writable image/DLL pages, Stage 3, and a
   combined live run (needs fresh approval). No O-M2 app speed/RSS is measured.
 
-## 2026-10-13 Parallel Continuation
+## 2026-10-12 to 2026-10-13 live-run and Stage 2 history (condensed)
 
-- Stage 2 facts on the D: checkout, 2026-10-13/14. Details, receipts and suite
-  tallies are in ledger E-12 to E-29; the pre-condense narrative is in
-  `git show 3e4b52d6:PROGRESS.md`.
-  - D-003 keeps Stage 2-6 on the fresh-engine lifetime; persistent owners are
-    the Stage 8 swap.
-  - The repaired-PC scalar fallback lost F0-F31/FCSR. It is fixed by carrying
-    FPRs and FCSR in `MipsGuestContext`, with checked capture and restore onto
-    a blank engine (E-12, E-13).
-  - Native file-view sync is owner-qualified, and the injected two-PID same-VA
-    view control is green (E-14, E-16).
-  - Stop classification: `UnknownNormalStop`; typed `HookStop` reasons
-    (`HostWallBudget`, `VisibleParkedPeerYield`, `RemoteControlService`,
-    `ReadyParkedPeerYield`); `CountLimit` only from the vendored
-    `UC_QUERY_COUNT_STOP` witness; native errors hard-fail (E-15, E-17, E-19,
-    E-28).
-  - At the E-25 checkpoint, `LegacySeed` lost guest-written private bytes on
-    a fresh owner; only the `cfg(test)` slab opt-in made E-18 green. D-008
-    selected AddressSpace-owned stable slabs mapped with `mem_map_ptr`.
-  - Process birth keys and alias lifetime; owner-qualified private-VA metadata
-    and file-view mutation. The public two-PID same-VA allocation was still
-    red at that checkpoint (E-20 to E-24).
-  - The 13 historical Task controls live in `tests/` (1 pass, 12 expected red)
-    (E-26).
-  - Bounded 330 s live runs exit 0 but stay on the splash. GPS bytes and taps
-    reach the guest; parsing and map use are unproven. Persistent-owner memory
-    peaks at about 1.49-1.55 GiB (E-22, E-27, E-29).
-- D-007 now requires this D: checkout as the only active source and one Cargo
-  target. The validated Unicorn 2.1.5 dependency was copied in-repo (567/567
-  matching file hashes) and selected via Cargo's path patch. The initial
-  focused native count, nonzero unmapped-error and live pre-run rotation
-  controls passed here. After outgoing file-view readback was ordered before
-  PID rotation and stale typed outcomes were cleared on preflight swaps, the
-  serial full release suite passed **1,623 tests, 0 failures, 3 ignored** in
-  this dirty persistent-owner checkout before the E-12 repair above. The
-  separately run ignored closed-owner fixture reached its intended final
-  assertion and failed because the
-  default still retains the native owner; its preceding guest store and native
-  no-timeout checks passed. O-P1/O-P4/O-M1 and a bounded app run remain open;
-  this intermediate checkpoint is not fresh-engine Stage 2 acceptance.
-  Exact log/binary hashes and the expected-red receipt are in local
-  `evidence/stage2-e7-stop-20261013/post-order-and-retirement.receipt.md`.
-  The 243 immediate target-root run-evidence files and 28 release EXE/PDB
-  files were separately copied and hash-verified under local `evidence/`
-  receipts. After explicit approval, those 271 originals were
-  reverified and removed by exact paths; nested target directories remain intact.
-  The root-only `/evidence/` ignore rule keeps large local artifacts ignored
-  while `docs/evidence/ledger.md` is Git-visible.
-- Persistent-owner build 650 host-crashed at 129.1 s with 1.66 GiB RSS after
-  showing the splash by +4.800 s (ledger E-2).
-- The 1 GiB per-engine translation arena keeps its commitment through hook
-  churn (E-3, E-4).
-- Small pre-init arenas crashed from a commit-tail arithmetic defect (E-5,
-  E-6). It is fixed in the vendored source (E-33, D-009).
-- The full-backend mapping/context control passed. The stop/error controls
-  started red and are green since O-P1 (E-7, E-10).
-- The Task/alias controls are the Stage 3 baseline (E-8, E-11, E-26).
-- Stage 3 child-exit/worker sweep: real process waits signal only after
-  exact-birth verified completion; stale worker contexts fail closed;
-  completed child CPUs do not replay entry
-  ([receipt](evidence/stage3-sweep-20261014/validation.receipt.md)).
-- O-P1 count witness (diagnostic baseline 4E0A): positive-count and voluntary
-  stops report expiry 0, a genuine deadline reports 1. Its EXE/PDB are kept as
-  `native_outcome_baseline_1013.{exe,pdb}`.
-- HeapReAlloc/LocalReAlloc/CRT realloc map, copy the retained prefix and zero
-  only the grown tail before committing allocation metadata; IME resize uses
-  the same boundary. Failure keeps the old allocation, and partly written
-  destinations stay unused monotonic holes. Heap reuse and page reclamation
-  remain open.
-- Bundle A3BA00D6 330 s GPS/tap run: exit 0 at 330.239 s, peak RSS 566.0 MiB
-  (no late-memory improvement), first splash by +4.631 s, 206 location
-  responses and positive COM7 ReadFile payloads consumed. Taps arrive FIFO but
-  take 1.578 s, and handlers return in about 22 ms. Every frame was the
-  splash. The report is in the chat workspace
-  `validation/bringup-1013-heap-drive-evidence.md`.
-- That run executes 1,037,557,247 guest instructions across 3,406 slices;
-  weighted busy-slice MIPS is 12.846 versus preceding 12.314. Guest work and
-  late phase rates are comparable; no controlled speed improvement is claimed.
-- Explicit nonzero PC stops preserve native registers, thread/process,
-  pending callback state and ownership before thunk/callback repair or
-  handoff. Import traps honor the stop before dispatch, and PC zero remains an
-  error. Continuation and trace selection need the fresh matching stop and
-  retained context, never a historical snapshot.
-- Binary evidence (read-only): the splash manager show/destroy methods are at
-  0x5e7a0/0x5e880, WM_INITDIALOG startup is at 0x2bc34, and the first large
-  initializer is 0x30e1c (return 0x2bde4). Pool worker 5 starts at 0xe6cd0.
-  A valid first cache-miss node does not establish whole-job completion. No
-  completion event or app state is forced.
-- Direct visible callbacks bypassed the deferred typed-payload serializer, and
-  NotifyIcon output overran its 152-byte allocation. CE6 coredll ordinal 481
-  marshals exactly 0x98 bytes, so the fix corrects the shared payload writers
-  rather than enlarging the buffer. Sparse persisted heap pages use a
-  contiguous mapping frontier.
-- MapInit enters and returns normally on UI thread 1 with V0=1, on stack
-  0x7ffdf558 (0x20 below the 0x5237 caller's 0x7ffdf578). The old WNDPROC
-  fallback restored only PC/RA/V0. Authentic archived SP/GPR/HI/LO (including
-  K0/K1) restoration now passes native callback and caller-epilogue
-  regressions. Missing or ambiguous ownership fails closed.
-- Callback-drive 330 s GPS/tap run (installed BC2E13E0): exit 0 at 330.236 s.
-  0x5237 recovery restored UI thread 1's original stack at +2.796 s. Splash
-  appeared by +4.683 s and COM7 by +27.293 s, and every later frame was the
-  splash, not the map. 199 GPS responses and positive COM7 payloads were
-  delivered, with parsed position unproven. Tap DOWN/UP had 0.835 s initial
-  lag and about 22 ms per handler. Peak RSS/private was 492.6/503.2 MiB
-  (A3: 566.0/568.0), not cache-controlled. Report:
-  `validation/bringup-1013-callback-drive-evidence.md` (chat workspace).
-- That run executes 1,434,175,567 guest instructions in 3,211 slices at
-  weighted busy MIPS 14.071. iNavi contributes 1,002,008,727 at 13.140 MIPS;
-  most extra aggregate work is happyway (432,073,151 versus prior 2,072,966),
-  not a pure speed improvement or proof of startup completion.
-- Binary audit identifies the second startup initializer at 0x31970, return
-  0x2be44. It creates the pool and dispatches jobs, without a top-level wait.
-  Owner+0x39dd4 is the concrete MDC object (vtable 0x4e57dc, method 0x12e15c),
-  which invokes engine virtual +0x14c then can sleep/wait and repeat. A finite
-  cache lookup is not whole-job completion. Actual matching invocation/return
-  and current object reads are the next diagnostic boundary, not forced events.
-- Checked initial guest allocation now reserves without live metadata, maps
-  writable persistent RAM, explicitly zeros requested physical extent, runs
-  checked initializers, then commits/publishes. All 36 immediate raw/native
-  callers route through it; four host-queued typed reservations materialize
-  at delivery. Logical-zero allocations still have one physical byte. Failure
-  retains monotonic holes; no address reuse/page reclamation is introduced.
-  CREATESTRUCT failure now tears down only the failed new window and returns
-  zero, not raw HWND success; scratch lives through both create phases only.
-  Clipboard/IME/array/cache publication and cleanup are checked without an
-  invented rollback guarantee for already-live partial outputs.
-- Native current/blocked GetMessage and SetWindowPos delivery now prepares
-  known typed payloads before queue consumption/callback exposure. Sent
-  messages use exact send identity across expiry; MSG output requires all
-  28 bytes mapped RW. Unknown guest pointers stay untouched. Legacy wrappers
-  lacking mapping context defer known payloads for a mapped successor; they
-  are not claimed fully mapped. Failure preserves wait/FIFO/context; SetPos
-  returns handled-zero rather than repeating an already-applied operation.
-- Exact frozen source passes 17 focused tests and all 1,571 tests (one eVC4
-  fixture ignored), release build, two no-trace checks and stub check, fmt and
-  diff checks. Installed SHA256 354AA0FB...2E4327; prior BC executable/symbols
-  are preserved as `pre_boundaries_1013.{exe,pdb}`. Logs:
-  `target/bringup_1013_boundaries_fixed_*`. The initial compile-only Prot API
-  mismatch log is preserved separately; no failing build was installed.
-  Its requested 330 s GPS/tap/frame run `bringup_1013_boundaries_drive` FAILED
-  early at 260.174 s, exit 1/no watchdog. PC becomes zero on pool worker 10,
-  RA0x000e6de4/SP0x7feff1c8 after recorded ready-event wait resume (id4029,
-  handle0xff4, result0). Suspended worker5 retains PC0x00321c98. Do not suppress
-  this CPU error or call it a normal timeout; causality of the combined changes
-  is not yet established. Unit/source acceptance does not establish live stability.
-  Native restored continuation versus JALR target must be distinguished.
-- That failed run still observes genuine splash by +3.411 s, COM7 by +27.877 s,
-  actual positive GPS ReadFile, and FIFO tap DOWN/UP with clean returns. DOWN
-  delay is 1.489 s, handlers24.373/22.080 ms; no map presentation. Peak sampled
-  RSS/private509.3/520.6 MiB; the late cleanup dip is not a memory improvement.
-  Workload differs (iSearch rather than happyway executes much more work), and
-  duration is shorter than BC; no controlled performance claim is made.
-  Full outcome/evidence report is in chat validation; executable354 remains
-  identifiable and prior BC backup is preserved for explicit comparisons.
-- Frozen BC exact diagnostics independently reach second-init 0x31970 on
-  TID1/SP0x7ffdf578/RA0x2be44 and MDC engine return 0x12e180 on TID5, V0=1.
-  Live object/vtable and saved-frame chain match the binary job binding.
-  Current MDC body SP is 0x7ff9f1b0, not the older candidate 0x7ff9f190.
-  Missed later stops in bounded monitor chunks do not prove lost continuation;
-  remote debug publication is stale during interactive continuation. The
-  owned monitor quit normally; terminal image is still genuine splash.
+Stage 2 facts are in ledger E-12 to E-29. The full pre-condense text is at
+`git show 716ce0c4:PROGRESS.md`.
 
-- Bounded exception diagnostics and six genuine native handoff controls pass
-  1,580 tests (one unavailable eVC4 fixture ignored), release and three feature
-  checks, fmt/diff. Freeze A206/89F9 builds executable528F776B...EC705B;
-  it was not installed or live-run. Checked current GPR/IAT values are not
-  claimed historical cause. Logs: `target/bringup_1013_fault_diag_*`.
-- Two additional native caller-helper fixtures then reproduce generic defects:
-  native delay block0xb000 normalized to source0x1100 causes interrupt20/PC0
-  despite a valid IAT; completed-delay block0xc000 resumes its recipient cleanly
-  but source replay increments callerV0 twice (0x105 rather than0x103).
-  Separate failure logs are preserved. These do not yet prove the actual
-  wait4029 app failure traversed that boundary.
-- A minimal entry-only helper guard now defers interior scheduling instead of
-  treating the original source PC as a saved continuation. Frozen Unicorn
-  5152C897...A17CE5/types89F9 adds true/false native branch, entry, deferred
-  replay and direct predicate controls; independent source review accepts it.
-  Exact freeze passes 1,585 tests, one unavailable fixture ignored, release,
-  three feature checks and fmt/diff. Installed12DFB7B4...0CAFF5 after all62
-  Rust files matched; prior354 executable/symbols are preserved as
-  `pre_safe_handoff_1013.{exe,pdb}`. Normal330s GPS/tap run completes330.268s,
-  exit0/no watchdog/empty stderr, beyond the prior failure window. Authentic
-  original5237 stack restoration and actual GPS payload transfer continue.
-  This is bounded stability, not exact attribution of every prior live crash.
-- Latest12DF run accepts208 GPS updates; retained ring proves148 positive
-  COM7 reads/34,800B. Tap DOWN/UP are FIFO with0.777s first-delivery lag and
-  22.628/22.575ms handlers. All observed/terminal frames remain splash, exactly
-  matching BC. Capture started19.706s late, so first-splash timing is unavailable.
-  PeakRSS/private556.031/571.316MiB; helper workload differs sharply from BC
-  and354, and an extra GET-only memory observer was added. No controlled gain
-  is claimed. Fullguest1,015,592,266/iNavi1,013,426,929 instructions;
-  busy-weightedMIPS13.250/13.231. Logs:`target/bringup_1013_safe_handoff_drive_*`.
-- Saved helper backing observations are77/78MiB RAM, while separately retained
-  global live heap is30.085MiB. Ages and cached non-atomic PID brackets prevent
-  exact simultaneous ownership or RSS attribution; capacity/native bytes and
-  per-PID live heap are unavailable. No speculative reuse/reclamation landed.
-- A subsequent native raw-yield/fresh-engine audit reproduces silent wrong-path
-  execution for a not-taken branch at page-delay0xb000:3 controls pass,1 fails,
-  sourceA676. Separately, native ctl_get_timeout returns configured duration,
-  not expiry; production at that point used it as an expiry flag. A query-only
-  correction was held because count-tick rotation/cleanup/restart depended on
-  the false wall flag; the later connected D: correction is recorded above.
-  Four counted replay tests over64 native boundaries
-  pass; they do not cover full backend cleanup/process rotation.
-  No new states/priorities/hooks or CPU-error suppression were introduced.
-- The unsafe raw-yield fallback is now removed: its existing non-import and
-  no-pending-return gates imply contextNone, so it never served a safe boundary.
-  The earlier safe eligible-peer policy is preserved in a shared decision.
-  Four genuine native both-outcome tests now defer actual helper interiors,
-  execute the selected branch unaided, and freshly replay a safe destination
-  with exactly-once effects. ExactEE18/89F9 freeze passes1,593 tests, one fixture
-  ignored, release/three feature/fmt/diff checks; installedBED2F559...276E4F
-  after all62 Rust files match. Prior12DF executable/symbols are preserved in
-  `pre_safe_visible_yield_1013.{exe,pdb}`. No commit/push.
-- BED2 normal330s run completes330.234s, exit0/no watchdog/empty stderr.
-  Prelaunch frames observe genuine splash by4.358s, not full boot; a separate
-  overlapping tail covers the final frame without extending the first watcher.
-  Original5237SPf578 restoration remains intact.208GPS responses and a retained
-  146-read/35,148B COM7 ring prove payload transfer; tap FIFO first callback
-  takes0.397s, handlers22.746/22.898ms. All frames remain splash, not map.
-  PeakRSS/private555.633/568.383MiB is essentially12DF556.031/571.316, not a
-  memory gain. Profileguest1,009,828,063/iNavi1,007,664,687; busyMIPS13.126/13.107.
-  Extra observers and variable scheduling prevent controlled performance claims.
-  Artifacts:`target/bringup_1013_safe_visible_yield_drive_*`; detailed chat report
-  `validation/bringup-1013-safe-visible-yield-drive-evidence.md`.
-- Full terminal trace-all exposes no fault/probe marker only in its selected
-  retained helper67 GetMessage snapshot, not all native attempts. Summary emits
-  optional interrupt/invalid markers but omits memory faults; raw nativeResult
-  and actual expiry were absent from that BED2 profile. The later diagnostic
-  freeze logs both without changing timeout/error/rotation decisions. Full map and
-  authoritative heap PID/reserved-footprint/incarnation remain unfinished.
-
-## 2026-10-12 Parallel Continuation (baseline)
-
-The bounded-file baseline: 1,527 tests passed, one eVC4 fixture ignored; both
-no-trace Unicorn release checks pass. Exact mirror validation logs are
-`target/bringup_1012_bounded_files_{tests,build,check_ci,check_unicorn}.log`.
-That executable SHA256 is `C274BEE2...ADD1D1`; no commit/push was made.
-The prior executable/symbols remain in `pre_bounded_files_1012.{exe,pdb}`.
-
-- Corrected callback lifetime without expanding the stack grace: retain an
-  outer direct send while a later same-thread, lower-stack callback is live.
-  Real MIPS regressions verify nested return order and saved SP/S0/FP.
-- Removed historical child-lifetime traces from pending-CreateProcess
-  scheduling and preserve the selected slice-end rotation through run entry.
-  The loop-head wall-limit check also bounds paths that execute no slice.
-  A 600 s mounted run exited 0 at 600.45 s without an external watchdog.
-- Decoded the YAS526B command/selector protocol and Yamaha B/C packed samples.
-  The deterministic ideal sensor models calibration, rough/normal commands,
-  bank ordering, packed 11-bit values, and coordinate signs. Nine focused
-  sample/contract tests pass. The former invalid rough payload caused -15;
-  no such modal appeared throughout the corrected 600 s run.
-- Empty synchronous serial reads no longer add virtual time after spending
-  the timeout in real host sleep. The focused tick/host-time regression
-  passes. The broader hybrid clock remains an architectural gap.
-- Bare visible-window thread relabeling is now restricted to the actual
-  terminal thread stub, preserving worker contexts. The 300 s profile shows
-  thread 6 continuing real slices and a successful COM7 ReadFile of 174
-  injected NMEA bytes (not merely an empty host queue). It exited 0 at
-  300.773 s with empty stderr and no PC-zero/guest-exception marker.
-- Inactive/unmapped callback receivers are checked before removing a queued
-  message. DOWN/UP FIFO and filtered non-head regressions pass. The subsequent
-  330 s actual-input run delivered DOWN then UP through the real MFC wndproc,
-  with clean returns: tap response 13:53:05.483680Z, DOWN push 06.771140Z,
-  DOWN return 06.793756Z, UP push 06.861065Z, UP return 06.883623Z.
-  About 1.29 s to first guest delivery is still a responsiveness issue.
-- That run accepted 184 stationary location updates; the final retained file
-  ring proves 124 positive COM7 reads totaling 28,536 B. Rings are incomplete
-  history, not total injected/consumed bytes. Exit was 0 at 330.221 s, no
-  watchdog or stderr, but no map transition. Sampled peak RSS was
-  1,362,944,000 B/private 1,377,103,872 B. Boot2 frame timestamps were batch
-  stamps, so its ~2.5-4.7 s splash bracket is approximate, not exact timing.
-- Read-only ordinary files now use the existing bounded 64 KiB HostFile
-  window rather than eager whole-file retention, with no path special cases
-  or arbitrary RAM cap. Four new regressions plus converted cache tests cover
-  byte/seek/EOF, duplicates, streaming, flush/truncation/reopen and closed-file
-  lifetime; 22 file unit tests and all 136 raw memory/file tests pass. Writable
-  private-memory promotion is intentionally unchanged.
-- The bounded-window executable completed the matched 330 s live run in
-  330.259 s, exit 0/no watchdog/empty stderr/no CPU-error markers. Sampled
-  peak RSS is 589,615,104 B (562.3 MiB), private 601,038,848 B (573.2 MiB),
-  versus the prior 330 s run's RSS 1,362,944,000 B (1,299.8 MiB): about 57%
-  lower peak RSS. Phase-aligned samples are also lower. This is a bounded
-  observational comparison, not an OS-cache-controlled benchmark or full
-  allocation attribution; SD user data and host file cache were not reset.
-- New per-request clocks observe black at +2.605 s and splash at +4.837 s
-  (2 s polling cadence). COM7 opens at +27.897 s, MFS1 at +30.672 s, and
-  actual GPS payload reads continue after sustained input. HTTP accepted 204
-  location updates. Tap delivery again preserves DOWN then UP, but response
-  to first guest callback is 1.617 s; both guest handlers return in ~22 ms.
-  Pixels remain splash, with no map transition at the 330 s limit.
-  Logs/result/memory/frame: `target/bringup_1012_bounded_files_drive_*`.
-  The four SD zero-byte probe markers remain absent.
-- Full bring-up is NOT complete: these runs remain on the genuine splash,
-  without a map/interactive navigation transition. The 300 s run first
-  opened COM7 at 30.936 s, MFS1 at 34.338 s, and SMB1 at 34.578 s. Its frame
-  capture began late (+23.171 s), so that run cannot establish first-splash
-  latency. Report: chat-workspace `validation/bringup-1012-boot-profile-evidence.md`.
-- That profile sampled host working set up to 1,244,803,072 B (1,187.1 MiB)
-  and private bytes up to 1,253,953,536 B (1,195.9 MiB). This is host memory,
-  not CE guest heap or virtual reservation, and is not yet proof of a leak.
-  Eager whole-file storage caching is an evidenced contributor candidate:
-  31 reached read-only files total 263.30 MiB; all 44 mid-size candidates
-  total 428.62 MiB, with incomplete access/ownership history. The bounded
-  windows now materially lower live RSS as measured above. Remaining guest
-  pages/native engine/trace capacity and any writable duplication need
-  separate ownership measurements; do not infer a kernel-clone leak.
-- Read-only residual-memory audit finds that ordinary process switches move
-  CPU/blob owners; full cpu/kernel clones are optional monitor checkpoints,
-  not this run. The allocator has a global monotonic heap cursor, and each
-  process's `map_heap_spillover` persists pages up to that same shared high
-  water mark. In the prior run, persisted blobs grew to roughly 93/81/81 MiB
-  for PIDs 1/67/68 while live heap was about 31.6 MB. HeapFree removes live
-  metadata but neither reuses addresses nor shrinks spillover backing.
-  Measure per-process blob length/capacity and CE heap-reuse semantics before
-  reclaiming pages or changing allocator ownership; no speculative fix landed.
-
-Prior reproductions (fixed causes, retained for comparison):
-
-- Normal remote GPS input exposed another control-flow failure in the prior
-  validated executable (SHA256 `AF4CA1A7...E687DC2`): the 300 s input run
-  exited 1 at 86.90 s, not by watchdog. Location `37.5,127.25` was accepted
-  as three NMEA sentences; no touch was sent. Final PC/RA were zero and the
-  emulator correctly reported a guest CPU exception. Before it, an outer
-  SendMessageW callback was discarded while a nested visible callback still
-  ran, then recovered from a historical FP-only record. Fixed by preserving
-  the live callback ancestry above; the new actual-GPS run survives.
-  Logs/frame/result: `target/bringup_1012_modal_drive_*`.
-- A 600 s default-count live run reached a genuine Korean G-sensor error
-  dialog (`Error Code: -15`) over the splash. The dialog says navigation can
-  continue with GPS and offers OK. `COM7:`, `MFS1:`, and `SMB1:` opened;
-  actual serial reads and sensor IOCTLs are present. No input was consumed
-  before the run ended. Frame and timestamp/hash snapshots are under the
-  chat workspace's `validation/captures/remote-20261012-121948Z`.
-- That run stopped executing slices at 12:18:35Z but kept switching cached
-  helper contexts and consuming a host core. PID67 was genuinely runnable
-  (`can_run=true`, no ready wait/blocked send, PC `0x0001b4a0`). Historical
-  `CreateProcessChildParked` trace records were still treated as unreturned
-  parent API calls until child exit, reversing scheduler choices. Pre-run
-  `continue` paths also bypassed the CLI wall limit. The external watchdog
-  stopped PID6268 at 625.78 s, exit -1; this was not a clean guest completion.
-  Log: `target/bringup_1012_default_stdout.log` (stderr empty).
-- Disproved the old "command-flag readiness loop" lead: the flags
-  0x4000/0x2000/0x100/0x80 belong to libpng allocation cleanup, not a
-  splash-to-map handshake. `png_free_data` is VA `0x00308298`, image RVA
-  `+0x2f8298`; the old `+0x2f7298` was a .text-relative disassembly offset.
-  `png_sig_cmp` at VA `0x00307e74` and the PNG signature confirm the region.
-- The growing 5/10/15/20 s sleeps are sensor initialization retries, not an
-  unidentified helper/network wait. Sleep caller VA `0x000e69b8`, return
-  `0x000e69c0`, multiplies object retry count by 5000 after failure of
-  `0x000e6754`. The sensor read validation returns -15 after invalid
-  rough-offset status; the command/packed-sample correction above closes
-  this demonstrated failure. Do not interpret normal 50 ms sensor pacing
-  arithmetic as a fresh SensorError merely because V0 was briefly negative.
-- Fixed live-pump `CreateProcessW` replay: the child previously executed inside
-  the parent import hook before its return registers/PC were committed. A child
-  consuming the parent's native timeout left the parent on the completed import.
-  Successful live launches now commit the return, stop the parent, and drain
-  children after the outer `emu_start` and timeout check. Non-live execution
-  retains its synchronous launch path.
-- Fresh count=0 / native-timeout=100 ms reproduction dispatched the same helper
-  launch at RA `0x00059ba0` 16 times, producing PIDs 67-82. The fixed 120 s run
-  dispatched that site once, launched three distinct children (66-68), executed
-  735,491,203 guest instructions, and exited normally at the requested limit.
-  Logs: `target/parallel_1012_{baseline,fixed}_stdout.log`. The framebuffer is
-  still the real splash; this does not establish map/route completion.
-  A lower-noise 180 s repeat also exited 0 with only PIDs 1/66/67/68, executed
-  1,280,494,534 instructions, and measured 84.56 busy-slice MIPS for iNavi.
-  The helper received only one slice; fairness remains open. No explicit device
-  open evidence was captured. The four zero-byte probe markers remain absent.
-  Repeat artifacts: `target/parallel_1012_repeat_{stdout.log,frame.png}`.
-- Corrected scheduler block sampling: prior TB starts were mistaken for prior
-  instructions, rejecting ordinary branch targets/fallthrough blocks. The block
-  path now checks the word at PC-4 for a possible delay slot. Separate block and
-  instruction stop helpers preserve the sparse/global hook guards. A real
-  Unicorn count=0 test crosses a page-end branch, executes its delay slot once,
-  and stops before the target instruction.
-- Explicit global-hook requests and arbitrary-PC diagnostics now override
-  legacy sparse flags. Non-trace selector bindings are covered by feature checks.
-- Exact source copies in `C:\Temp\wce-1012-parallel` passed 1,511 tests: lib 582,
-  bin 28, basic 130, dispatch 10, GWE 495, kernel 125, memory/file 136, waveOut 3,
-  host helpers 2. The eVC4 fixture runner is ignored because the MIPS compiler is
-  unavailable. `cargo check --release` passes for `unicorn,win32-desktop` and
-  `unicorn` without trace. Validation log: `target/parallel_1012_tests.log`.
-- At the time, direct repository builds hit Unicorn's Windows symlink privilege
-  error. The temporary mirror changed only its local dependency build to copy
-  the archive and watch the correct source paths; global registry/system settings
-  were not changed. The later in-repo vendor patch and focused D: build are
-  recorded above. The 1M-instruction default remains while scheduling fairness
-  and native-timeout branch-state preservation are validated. The then-validated
-  executable/symbols were installed under `target/release/`; their later
-  preservation and exact-path cleanup are recorded above.
+- Live runs of 330-600 s with GPS and taps exited 0 but stayed on the genuine
+  splash. GPS bytes and taps reach the guest; parsing and map use are
+  unproven. Persistent-owner memory peaked at about 1.49-1.55 GiB (E-22, E-27,
+  E-29), and build 650 host-crashed at 129.1 s with 1.66 GiB RSS. E-38 is the
+  only fresh-default run.
+- A 600 s run showed a genuine Korean G-sensor error dialog (`Error Code: -15`)
+  after `COM7:`, `MFS1:` and `SMB1:` opened. The growing 5/10/15/20 s sleeps
+  are sensor-init retries: the Sleep caller at VA `0x000e69b8` multiplies a
+  retry count by 5000 after `0x000e6754` fails. Decoding the YAS526B command
+  protocol and Yamaha packed samples fixed that failure.
+- Binary audit (read-only; no events forced):
+  - The splash manager's show/destroy methods are `0x5e7a0`/`0x5e880`,
+    WM_INITDIALOG startup is `0x2bc34`, the first initializer is `0x30e1c`
+    (return `0x2bde4`) and pool worker 5 starts at `0xe6cd0`.
+  - The second initializer `0x31970` (return `0x2be44`) creates the pool and
+    dispatches jobs with no top-level wait. Owner+`0x39dd4` is the MDC object
+    (vtable `0x4e57dc`, method `0x12e15c`); it calls engine virtual `+0x14c`
+    and can sleep/wait and repeat.
+  - MapInit returns normally on UI thread 1 with V0=1.
+  - The old "command-flag readiness loop" lead was libpng cleanup
+    (`png_free_data` at VA `0x00308298`).
+- Fixed in that period, each with regressions:
+  - the NotifyIcon payload overran 152 bytes (CE6 ordinal 481 marshals
+    exactly 0x98);
+  - the WNDPROC fallback restored only PC/RA/V0 (it now restores archived
+    SP/GPR/HI/LO);
+  - live-pump `CreateProcessW` replay;
+  - historical child-lifetime traces reversed scheduler choices;
+  - pre-run paths bypassed the CLI wall limit;
+  - the unsafe raw-yield fallback was removed.
+- The `C:\Temp` mirror and `target/` logs cited before the condense predate
+  D-007 and are not current evidence.
 
 ## 2026-10-12 Session Facts (guest throughput)
 
