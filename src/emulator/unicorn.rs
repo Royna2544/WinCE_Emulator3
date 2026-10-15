@@ -89,6 +89,21 @@ struct StoppedPseudoSelfExit {
     stop_pc: u32,
 }
 
+/// A native code hook observed the actual JALR instruction and source GPR in
+/// this run attempt. Static RA-relative code bytes are only candidates, never
+/// authority to retire a child whose CPU later stops at PC zero.
+#[cfg(feature = "unicorn")]
+#[derive(Debug)]
+struct DecodedExitCallWitness {
+    call_pc: u32,
+    sp: u32,
+    source_register: u32,
+    target: u32,
+    caller: crate::ce::object::ThreadBirthKey,
+    owner: crate::ce::object::ProcessBirthKey,
+    direct_load_verified: bool,
+}
+
 #[cfg(feature = "unicorn")]
 impl NativeStopEvidence {
     fn outcome(self) -> NativeSliceOutcome {
@@ -80665,7 +80680,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn forged_ra_branch_to_zero_cannot_complete_decoded_child_exit() -> crate::Result<()> {
+    fn decoded_forged_ra_branch_to_zero_cannot_complete_child_exit() -> crate::Result<()> {
         let mut kernel = phase1_kernel("decoded-forged-ra.exe")?;
         let launch = kernel.queue_process_launch(Some("\\Test\\decoded-forged-ra.exe".to_owned()), None);
         let birth = launch.process_birth.expect("child birth");
