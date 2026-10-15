@@ -81,6 +81,9 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     Broadcast, HWND-owned timers, hotkeys, sent/paint/modal producers, remote
     input and host teardown remain outside W-B1a; their reuse isolation is
     unproved.
+  - Remote input drains touches before keys without a shared sequence: a key
+    queued before a focus-changing tap may reach the new focus owner. Mixed
+    touch/key ordering is a separate gate after W-B1b.
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
     native wait payloads are unpinned despite exact-birth publication. Wait-ID
     wrap/reuse and live modal continuation behavior remain unproved.
