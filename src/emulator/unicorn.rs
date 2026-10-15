@@ -6863,14 +6863,15 @@ impl UnicornMips {
             }
         }
         if let Some(modal) = parked.cpu.blocked_modal_message_box.as_ref() {
-            let ready = kernel.blocked_waiter(modal.wait_id).is_none_or(|wait| {
-                scheduler_blocked_wait_is_ready(wait, kernel)
-                    || crate::ce::scheduler::blocked_wait_timed_out(
-                        wait,
-                        kernel.timers.tick_count(),
-                    )
-            });
-            if ready {
+            if verified_native_modal_wait_birth(kernel, modal).is_some()
+                && kernel.blocked_waiter(modal.wait_id).is_some_and(|wait| {
+                    scheduler_blocked_wait_is_ready(wait, kernel)
+                        || crate::ce::scheduler::blocked_wait_timed_out(
+                            wait,
+                            kernel.timers.tick_count(),
+                        )
+                })
+            {
                 return Some(modal.wait_id);
             }
         }
@@ -21508,6 +21509,30 @@ fn ready_modal_message_box_result(
 }
 
 #[cfg(feature = "unicorn")]
+fn verified_native_modal_wait_birth(
+    kernel: &CeKernel,
+    modal: &BlockedModalMessageBox,
+) -> Option<crate::ce::object::ThreadBirthKey> {
+    let wait = kernel.blocked_waiter(modal.wait_id)?;
+    let birth = wait.owner_birth?;
+    (wait.thread_id == modal.thread_id
+        && wait.thread_handle == modal.thread_handle
+        && matches!(
+            wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd }
+                if dialog_hwnd == modal.modal_state.dialog_hwnd()
+        )
+        && birth.thread_id() == modal.thread_id
+        && kernel.is_live_thread_birth(birth)
+        && (modal.thread_handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+            || kernel
+                .handles
+                .thread_birth_key_for_handle(modal.thread_handle)
+                == Some(birth)))
+    .then_some(birth)
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_resume_blocked_modal_message_box<D>(
     kernel: &mut CeKernel,
@@ -21533,26 +21558,7 @@ fn try_resume_blocked_modal_message_box<D>(
     // A ready dialog result is consumed when read. Prove the still-published
     // modal wait's exact live owner before taking that result or restoring a
     // native register image, so a reused numeric TID cannot inherit it.
-    let modal_birth = kernel.blocked_waiter(modal.wait_id).and_then(|wait| {
-        if wait.thread_id != modal.thread_id
-            || wait.thread_handle != modal.thread_handle
-            || !matches!(
-                wait.kind,
-                crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd }
-                    if dialog_hwnd == modal.modal_state.dialog_hwnd()
-            )
-        {
-            return None;
-        }
-        let birth = wait.owner_birth?;
-        (kernel.is_live_thread_birth(birth)
-            && (modal.thread_handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
-                || kernel
-                    .handles
-                    .thread_birth_key_for_handle(modal.thread_handle)
-                    == Some(birth)))
-        .then_some(birth)
-    });
+    let modal_birth = verified_native_modal_wait_birth(kernel, &modal);
     let Some(modal_birth) = modal_birth else {
         let wait_id = modal.wait_id;
         let thread_id = modal.thread_id;
@@ -50551,6 +50557,96 @@ mod guest_thread_stack_tests {
         });
 
         assert_eq!(cpu.active_terminal_child_process_return_code(&kernel), None);
+        Ok(())
+    }
+
+    #[test]
+    fn parked_modal_ready_probe_requires_published_wait_after_button_result() -> Result<()> {
+        use crate::ce::gwe::Point;
+        use crate::ce::scheduler::SchedulerBlockedWaitKind;
+
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let thread_id = MAIN_GUEST_THREAD_ID;
+        let birth = kernel
+            .live_thread_birth_key_by_id(thread_id)
+            .expect("boot modal thread birth");
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let mut memory = ModalTestMemory::default();
+        let text_ptr = 0x2000;
+        let caption_ptr = 0x2100;
+        memory.write_wide_z(text_ptr, "Continue");
+        memory.write_wide_z(caption_ptr, "Modal");
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            None,
+            None,
+            thread_id,
+            &[0, text_ptr, caption_ptr, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        let dialog = modal_state.dialog_hwnd();
+        let button = kernel
+            .gwe
+            .get_dlg_item(dialog, 1)
+            .expect("MessageBox OK button");
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                birth,
+                thread_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::ModalMessageBox {
+                    dialog_hwnd: dialog,
+                },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            )
+            .expect("birth-owned modal wait");
+        let mut cpu = UnicornMips::new()?;
+        cpu.set_initial_thread_id(thread_id);
+        cpu.current_thread_id = thread_id;
+        cpu.blocked_modal_message_box = Some(BlockedModalMessageBox {
+            wait_id,
+            thread_id,
+            thread_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+        let parked = parked_process_for_cpu(thread_id, cpu);
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        let rect = kernel.gwe.get_window_rect(button).expect("button rect");
+        let point = Point {
+            x: rect.left + rect.width() / 2,
+            y: rect.top + rect.height() / 2,
+        };
+        assert_eq!(
+            kernel.gwe.window_from_point_for_thread(thread_id, point),
+            Some(button)
+        );
+        kernel
+            .remote
+            .enqueue_touch("tap", point.x, point.y)
+            .expect("button tap");
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(thread_id, Some(dialog)),
+            2
+        );
+        assert!(kernel.has_modal_dialog_result(thread_id, dialog));
+        assert_eq!(
+            UnicornMips::parked_process_ready_wait_id(&parked, &kernel),
+            Some(wait_id)
+        );
+
+        // The result is still queued, but a detached modal payload cannot
+        // nominate an absent wait as a runnable parked-process continuation.
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        assert!(kernel.has_modal_dialog_result(thread_id, dialog));
+        assert_eq!(
+            UnicornMips::parked_process_ready_wait_id(&parked, &kernel),
+            None
+        );
         Ok(())
     }
 
@@ -80258,6 +80354,16 @@ mod unicorn_tests {
 
     #[test]
     fn native_modal_button_tap_resumes_before_orphaned_get_message_fence() -> crate::Result<()> {
+        native_modal_button_tap_fixture(false)
+    }
+
+    #[test]
+    fn native_modal_missing_wait_fails_before_guest_entry_without_consuming_result()
+    -> crate::Result<()> {
+        native_modal_button_tap_fixture(true)
+    }
+
+    fn native_modal_button_tap_fixture(remove_modal_wait: bool) -> crate::Result<()> {
         use crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W;
         use crate::ce::{
             coredll::CoredllGuestMemory,
@@ -80442,6 +80548,71 @@ mod unicorn_tests {
         assert_eq!(kernel.shell.message_boxes().count(), 0);
 
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        if remove_modal_wait {
+            let blocked_before = cpu
+                .blocked_guest_thread
+                .as_ref()
+                .expect("parked GetMessage payload")
+                .clone();
+            let modal_before = cpu
+                .blocked_modal_message_box
+                .as_ref()
+                .expect("parked MessageBox payload")
+                .clone();
+            // Fault-inject only the modal scheduler record after the real
+            // button tap. The queued button result must not be consumed by an
+            // unowned modal return, nor may the stale GetMessage PC run.
+            assert!(kernel.remove_blocked_waiter(modal_wait_id).is_some());
+            let rejected = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 64,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: Some(entry + 4),
+                    live_pump: false,
+                },
+            );
+            assert!(
+                matches!(&rejected.result, Err(Error::Backend(reason)) if reason.contains("modal")),
+                "missing exact modal wait must fail closed: {:?}; report={:?}",
+                rejected.result,
+                rejected.report,
+            );
+            assert!(matches!(
+                rejected.report.native_result(),
+                super::AttemptObservation::Uncollected
+            ));
+            assert!(matches!(
+                rejected.report.count_stop_query(),
+                super::AttemptObservation::Uncollected
+            ));
+            assert!(matches!(
+                rejected.report.timeout_query(),
+                super::AttemptObservation::Uncollected
+            ));
+            assert!(matches!(
+                rejected.report.context_capture(),
+                super::AttemptObservation::Uncollected
+            ));
+            assert_eq!(cpu.blocked_guest_thread.as_ref(), Some(&blocked_before));
+            let retained_modal = cpu
+                .blocked_modal_message_box
+                .as_ref()
+                .expect("unconsumed MessageBox payload");
+            assert_eq!(retained_modal.wait_id, modal_before.wait_id);
+            assert_eq!(retained_modal.thread_id, modal_before.thread_id);
+            assert_eq!(retained_modal.thread_handle, modal_before.thread_handle);
+            assert_eq!(retained_modal.regs, modal_before.regs);
+            assert_eq!(retained_modal.return_pc, modal_before.return_pc);
+            assert_eq!(retained_modal.modal_state.dialog_hwnd(), dialog);
+            assert!(kernel.has_modal_dialog_result(thread_id, dialog));
+            assert!(kernel.gwe.is_window(dialog));
+            assert!(kernel.blocked_waiter(modal_wait_id).is_none());
+            assert!(kernel.blocked_waiter(get_wait_id).is_none());
+            assert_eq!(kernel.shell.message_boxes().count(), 0);
+            return Ok(());
+        }
         let resumed = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
