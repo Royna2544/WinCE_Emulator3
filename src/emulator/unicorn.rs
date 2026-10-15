@@ -9073,6 +9073,34 @@ impl UnicornMips {
             trampoline_origins_all_direct,
         );
         let hookless_trampolines_enabled = code_hook_mode == UnicornCodeHookMode::Hookless;
+        let decoded_exit_call_witness = Rc::new(RefCell::new(None::<DecodedExitCallWitness>));
+        // The indirect-site scan is cached per sealed blob generation. Only
+        // static canonical exit-call candidates receive exact-address hooks;
+        // each callback still rechecks live native bytes and the source GPR.
+        let direct_exit_candidate_sites = if native_owner_birth.is_some() {
+            let sites = cached_fast_start_indirect_transfer_sites(
+                &mut self.fast_start_site_cache,
+                &self.mapped_blobs,
+            );
+            sites
+                .into_iter()
+                .filter(|&call_pc| {
+                    let Some((source_register, target)) = call_pc
+                        .checked_sub(4)
+                        .and_then(|load_pc| self.read_mapped_u32(load_pc))
+                        .and_then(decode_addiu_zero)
+                    else {
+                        return false;
+                    };
+                    self.read_mapped_u32(call_pc)
+                        .and_then(canonical_ra_jalr_register)
+                        == Some(source_register)
+                        && decode_old_mips_kernel_call(target) == Some((2, 2))
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         // ── Code hook: per-instruction trampoline dispatch, call tracing, indirect-call probe ──
         if hookless_trampolines_enabled {
             tracing::debug!(
@@ -9082,6 +9110,7 @@ impl UnicornMips {
         } else if code_hook_mode == UnicornCodeHookMode::Global {
             let native_hook_stop_reason_code_hook = Rc::clone(&native_hook_stop_reason);
             let native_hook_control_error_code_hook = Rc::clone(&native_hook_control_error);
+            let decoded_exit_call_witness_global = Rc::clone(&decoded_exit_call_witness);
             pre_run_state_try!(uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             if pc != 0 && stop_pc == Some(pc) {
@@ -9471,6 +9500,14 @@ impl UnicornMips {
             let Some(instruction) = instruction else {
                 return;
             };
+            latch_decoded_exit_call_witness(
+                uc,
+                pc,
+                &current_thread_id_code_hook,
+                native_owner_birth,
+                false,
+                &decoded_exit_call_witness_global,
+            );
             let Some(register) = decode_indirect_call_register(instruction) else {
                 return;
             };
@@ -9765,6 +9802,31 @@ impl UnicornMips {
                     ))
                 }));
             }
+        }
+
+        // This narrow hook is present even in hookless trampoline mode. A
+        // forged RA can name identical static code without executing JALR;
+        // only this attempt-local callback may supply direct-call authority.
+        for call_pc in direct_exit_candidate_sites {
+            let current_thread_id_exit_hook = Rc::clone(&current_thread_id);
+            let decoded_exit_call_witness_hook = Rc::clone(&decoded_exit_call_witness);
+            pre_run_state_try!(uc.add_code_hook(
+                u64::from(call_pc),
+                u64::from(call_pc),
+                move |uc, address, _size| {
+                    latch_decoded_exit_call_witness(
+                        uc,
+                        address as u32,
+                        &current_thread_id_exit_hook,
+                        native_owner_birth,
+                        true,
+                        &decoded_exit_call_witness_hook,
+                    );
+                },
+            )
+            .map_err(|err| Error::Backend(format!(
+                "install decoded-exit callsite hook 0x{call_pc:08x}: {err:?}"
+            ))));
         }
 
         // ── Block trace hook (full_trace only) ───────────────────────────────────
@@ -14256,13 +14318,41 @@ impl UnicornMips {
                     && snapshot.a0 == exit.process
                     && snapshot.a1 == exit.exit_code
             });
+            let observed_executed_call = decoded_exit_call_witness
+                .borrow_mut()
+                .take()
+                .is_some_and(|witness| {
+                    let indirect_probe_matches = code_hook_mode == UnicornCodeHookMode::Global
+                        && self.last_debug.as_ref().is_some_and(|snapshot| {
+                            snapshot.indirect_call_probe.as_ref().is_some_and(|probe| {
+                                probe.pc == witness.call_pc
+                                    && probe.sp == witness.sp
+                                    && probe.register == witness.source_register
+                                    && probe.target == witness.target
+                                    && canonical_ra_jalr_register(probe.instruction)
+                                        == Some(witness.source_register)
+                            })
+                        });
+                    witness.call_pc == exit.caller
+                        && witness.target == exit.target
+                        && self.last_debug.as_ref().is_some_and(|snapshot| {
+                            witness.sp == snapshot.sp
+                                && witness.call_pc.checked_add(8) == Some(snapshot.ra)
+                        })
+                        && caller_owner == Some((witness.caller, witness.owner))
+                        && (witness.direct_load_verified || indirect_probe_matches)
+                });
             let stopped_on_call = matches!(report.raw_stop_pc, AttemptObservation::Value(0))
                 && staged_saved_context
                     .as_ref()
                     .is_some_and(|saved| saved.pc == 0)
                 && matches!(report.count_stop_query, AttemptObservation::Value(false))
                 && matches!(report.timeout_query, AttemptObservation::Value(false))
-                && observed_callsite;
+                && native_hook_stop_reason.get().is_none()
+                && native_requested_pc_stop.is_none()
+                && !native_deadline_expired
+                && observed_callsite
+                && observed_executed_call;
             let Some((caller, owner)) = caller_owner else {
                 reject_private_attempt!(
                     Error::HostExitAuthorityRecoveryRequired {
@@ -14856,7 +14946,7 @@ impl UnicornMips {
             let load = self.read_mapped_u32(load_pc)?;
             let call = self.read_mapped_u32(call_pc)?;
             let target_reg = decode_addiu_zero(load)?;
-            if decode_jalr_register(call)? != target_reg.0 {
+            if canonical_ra_jalr_register(call)? != target_reg.0 {
                 return None;
             }
             Some((target_reg.1, call_pc))
@@ -14869,7 +14959,7 @@ impl UnicornMips {
             let call_pc = snapshot.ra.checked_sub(8)?;
             if probe.pc != call_pc
                 || probe.sp != snapshot.sp
-                || decode_jalr_register(probe.instruction) != Some(probe.register)
+                || canonical_ra_jalr_register(probe.instruction) != Some(probe.register)
                 || self.read_mapped_u32(call_pc) != Some(probe.instruction)
             {
                 return None;
@@ -18821,32 +18911,7 @@ fn run_pending_process_launches<D>(
             let outcome = if child.completed_active_process_exit {
                 ChildProcessRunOutcome::Completed
             } else {
-                child
-                    .last_debug_snapshot()
-                    .and_then(|snapshot| {
-                        snapshot
-                            .encoded_kernel_exit
-                            .clone()
-                            .or_else(|| child.decode_encoded_kernel_exit(snapshot))
-                            .filter(|exit| {
-                                exit.process == crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
-                                    || exit.process == launch.process_handle
-                                    || exit.process == launch.process_id
-                            })
-                            .map(|exit| ChildProcessRunOutcome::Exited(exit.exit_code))
-                            .or_else(|| {
-                                (child.current_thread_id == child.initial_thread_id
-                                    && (snapshot.thread_exit_reached
-                                        || snapshot.pc == THREAD_EXIT_STUB_ADDR))
-                                    .then_some(ChildProcessRunOutcome::Exited(snapshot.v0))
-                            })
-                            .or_else(|| {
-                                child
-                                    .active_terminal_child_process_return_code(kernel)
-                                    .map(ChildProcessRunOutcome::Exited)
-                            })
-                    })
-                    .unwrap_or(ChildProcessRunOutcome::Parked)
+                classify_uncompleted_deferred_child(&child, kernel)
             };
             // Keep the CPU until the kernel accepts a checked completion. A
             // rejected exit must remain owned even if the child stopped at an
@@ -19009,6 +19074,29 @@ enum ChildProcessRunOutcome {
     Exited(u32),
     Parked,
     RecoveryRequired(Error),
+}
+
+/// A decoded pseudo-exit cannot be inferred from a debug snapshot here. The
+/// child CPU's stopped, birth-checked finalizer is the only route to Completed.
+/// Keep independently proven primary-thread return handling intact.
+#[cfg(feature = "unicorn")]
+fn classify_uncompleted_deferred_child(
+    child: &UnicornMips,
+    kernel: &CeKernel,
+) -> ChildProcessRunOutcome {
+    child
+        .last_debug_snapshot()
+        .and_then(|snapshot| {
+            (child.current_thread_id == child.initial_thread_id
+                && (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR))
+                .then_some(ChildProcessRunOutcome::Exited(snapshot.v0))
+                .or_else(|| {
+                    child
+                        .active_terminal_child_process_return_code(kernel)
+                        .map(ChildProcessRunOutcome::Exited)
+                })
+        })
+        .unwrap_or(ChildProcessRunOutcome::Parked)
 }
 
 #[cfg(feature = "unicorn")]
@@ -20456,6 +20544,69 @@ fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opt
     uc.mem_read(u64::from(address), &mut bytes)
         .ok()
         .map(|()| u32::from_le_bytes(bytes))
+}
+
+#[cfg(feature = "unicorn")]
+fn canonical_ra_jalr_register(instruction: u32) -> Option<u32> {
+    // JALR rs,ra requires opcode/rt/shamt zero, rd=ra, and funct=9.
+    (instruction & !(0x1f << 21) == 0x0000_f809).then_some((instruction >> 21) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn latch_decoded_exit_call_witness<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    call_pc: u32,
+    current_thread: &NativeCurrentThread,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+    direct_load_required: bool,
+    witness: &RefCell<Option<DecodedExitCallWitness>>,
+) {
+    // Read the executing native bytes, not MappedCodeIndex's preferred static
+    // snapshot: guest-modified code may no longer be the candidate we scanned.
+    let live_instruction = read_unicorn_u32(uc, call_pc);
+    let Some(source_register) = live_instruction.and_then(canonical_ra_jalr_register)
+    else {
+        if witness
+            .borrow()
+            .as_ref()
+            .is_some_and(|previous| previous.call_pc == call_pc)
+        {
+            witness.borrow_mut().take();
+        }
+        return;
+    };
+    // A later canonical JALR cannot reuse authority from an earlier call.
+    witness.borrow_mut().take();
+    let Some(target) = read_mips_gpr(uc, source_register) else {
+        return;
+    };
+    if decode_old_mips_kernel_call(target) != Some((2, 2)) {
+        return;
+    }
+    let direct_load_verified = call_pc
+        .checked_sub(4)
+        .and_then(|load_pc| read_unicorn_u32(uc, load_pc))
+        .and_then(decode_addiu_zero)
+        == Some((source_register, target));
+    if direct_load_required && !direct_load_verified {
+        return;
+    }
+    let (thread_id, caller) = current_thread.get();
+    let (Some(caller), Some(owner)) = (caller, owner) else {
+        return;
+    };
+    if caller.thread_id() != thread_id {
+        return;
+    }
+    *witness.borrow_mut() = Some(DecodedExitCallWitness {
+        call_pc,
+        sp: read_mips_reg(uc, RegisterMIPS::SP),
+        source_register,
+        target,
+        caller,
+        owner,
+        direct_load_verified,
+    });
 }
 
 /// Exception-only, bounded observations. This does not capture hidden native
@@ -80098,6 +80249,39 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn decoded_exit_delay_slot_hook_follows_executed_jalr_not_redirect() {
+        fn run(redirect_at_call: bool) -> (bool, Option<u32>) {
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let call_pc = 0x6002_4004_u32;
+            let delay_pc = call_pc + 4;
+            uc.mem_map(0x6002_4000, 0x1000, Prot::ALL).unwrap();
+            write_u32(&mut uc, 0x6002_4000, 0x2408_f3fa); // encoded target in t0
+            write_u32(&mut uc, u64::from(call_pc), 0x0100_f809); // jalr t0,ra
+            write_u32(&mut uc, u64::from(delay_pc), 0x2404_0042); // exit a0 delay slot
+            let call_seen = Rc::new(std::cell::Cell::new(false));
+            let call_seen_hook = Rc::clone(&call_seen);
+            let delay_ra = Rc::new(std::cell::Cell::new(None::<u32>));
+            let delay_ra_hook = Rc::clone(&delay_ra);
+            uc.add_code_hook(u64::from(call_pc), u64::from(call_pc), move |uc, _, _| {
+                call_seen_hook.set(true);
+                if redirect_at_call {
+                    uc.reg_write(RegisterMIPS::PC, 0).unwrap();
+                }
+            })
+            .unwrap();
+            uc.add_code_hook(u64::from(delay_pc), u64::from(delay_pc), move |uc, _, _| {
+                delay_ra_hook.set(Some(super::read_mips_reg(uc, RegisterMIPS::RA)));
+            })
+            .unwrap();
+            let _ = uc.emu_start(0x6002_4000, 0, 0, 16);
+            (call_seen.get(), delay_ra.get())
+        }
+
+        assert_eq!(run(false), (true, Some(0x6002_400c)));
+        assert_eq!(run(true), (true, None));
+    }
+
+    #[test]
     fn decodes_old_mips_terminate_process_thunk_from_zero_pc_stop() {
         let mut emulator = super::UnicornMips::new().unwrap();
         let base = 0x0001_0000;
@@ -80738,6 +80922,10 @@ mod unicorn_tests {
         );
         assert!(attempt.result.is_err(), "forged RA must not authorize exit");
         assert!(!cpu.active_process_execution_completed());
+        assert!(matches!(
+            super::classify_uncompleted_deferred_child(&cpu, &kernel),
+            super::ChildProcessRunOutcome::Parked
+        ));
         assert!(kernel.handles.process_execution_live_by_birth(birth));
         assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
         Ok(())
