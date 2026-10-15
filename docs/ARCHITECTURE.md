@@ -62,18 +62,19 @@ ignored). It connects one exact-birth frame through wait selection and native
 resume, not a general `CeMachine`/TaskDirectory, completed Stage 3 or a live
 iNavi result. A1-A3 below remain the target shared contracts.
 
-The follow-on ordinary A→B `SendMessageW` → blocked `GetMessageW` bridge is a
-bounded source candidate, not another accepted architecture migration. A07
-broad suites passed on prior source; A08's expected-red sender-restore fault
-exposed a further return-boundary defect. The repaired candidate passed focused
-Send 30/30 and Kernel 1/1, but its sealed A09 broad release-feature suite
-failed four existing native same-process Send controls (1,048 passed, 4 failed,
-6 ignored); no-default was not run
-([receipt](../evidence/scheduler-source-cut-a09/validation.receipt.md)).
-Strict extra-lease controls exposed a blocked-GetMessage liveness gap, so a
-narrow guard and tests need a new seal. This work does not establish
-cross-process sends, legacy numeric-only HWND ownership, post-wake MsgWait,
-`SMF_TIMEOUT` semantics, completed Stage 3 or live-iNavi behavior.
+The follow-on ordinary A→B `SendMessageW` → blocked `GetMessageW` bridge has a
+bounded [A10 source/test seal](../evidence/scheduler-source-cut-a10/source-seal.md)
+and [validation receipt](../evidence/scheduler-source-cut-a10/validation.receipt.md),
+not a general `CeMachine` or Task/Frame migration. Release-feature passed
+2,045/0/9 ignored and no-default passed 1,482/0/3 ignored across 18 groups
+each, with unchanged pre/post source hashes. A09's four same-process failures
+are historical: A10 verifies the exact GetMessage/native wait and saved/live
+birth before recovery, then A's next-lease continuation. Only the runnable-
+receiver fixture checks a later no-replay slice; the three finite-Sleep
+fixtures stop at A's continuation. The same-birth orphaned GetMessage payload
+with a missing scheduler wait, reciprocal/cross-process sends, legacy numeric-
+only HWND ownership, post-wake MsgWait, `SMF_TIMEOUT` last-error semantics,
+completed Stage 3 and live-iNavi behavior remain open.
 
 ## A1. Machine authority
 
