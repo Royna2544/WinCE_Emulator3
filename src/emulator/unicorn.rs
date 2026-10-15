@@ -52156,6 +52156,211 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn requested_active_child_retains_same_birth_parked_popup_before_exit() -> Result<()> {
+        use crate::ce::scheduler::SchedulerBlockedWaitKind;
+
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let launch = kernel.queue_process_launch(Some("\\Test\\same-birth-popup.exe".to_owned()), None);
+        let owner = launch.process_birth.expect("child process birth");
+        let thread_birth = launch.primary_thread_birth.expect("child primary birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_birth,
+                "POPUP_OWNER",
+                "",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 100, 100),
+            )
+            .expect("child-owned popup owner window");
+        let menu = kernel.resources.create_popup_menu();
+        assert!(kernel.resources.append_menu_item(
+            menu,
+            crate::ce::resource::MenuItem::from_insert_flags(0, 0x42, Some("Choice".to_owned()),),
+        ));
+        let mut source = VirtualFramebuffer::default_primary()?;
+        let modal_state = crate::ce::coredll::track_popup_menu_ex_prepare(
+            &mut kernel,
+            &ModalTestMemory::default(),
+            Some(&mut source),
+            launch.thread_id,
+            &[menu, 0, 100, 100, hwnd, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare TrackPopupMenuEx returned {result}")))?;
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                thread_birth,
+                launch.thread_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::PopupMenuModal {
+                    mouse_message_max: modal_state.mouse_message_max,
+                },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact popup modal wait");
+        let mut modal_cpu = UnicornMips::new()?;
+        modal_cpu.owned_process_launch = Some(launch.clone());
+        modal_cpu.set_initial_thread_id(launch.thread_id);
+        modal_cpu.current_thread_id = launch.thread_id;
+        modal_cpu.blocked_popup_menu_modal = Some(BlockedPopupMenuModal {
+            wait_id,
+            thread_id: launch.thread_id,
+            thread_handle: launch.thread_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+        let mut parked = parked_process_for_cpu(launch.thread_id, modal_cpu);
+        parked.process_state.process_id = launch.process_id;
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        let mut active = UnicornMips::new()?;
+        active.owned_process_launch = Some(launch.clone());
+        active.set_initial_thread_id(launch.thread_id);
+        active.current_thread_id = launch.thread_id;
+        active.parked_child_processes.push_back(parked);
+
+        active.prune_active_process_from_parked(&kernel);
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert!(active.blocked_popup_menu_modal.is_none());
+        let parked_cpu_before = active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
+        assert!(kernel.terminate_process(launch.process_handle, 0x5e));
+        let mut destination = VirtualFramebuffer::new(
+            VirtualFramebuffer::DEFAULT_WIDTH,
+            VirtualFramebuffer::DEFAULT_HEIGHT,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        let pixels_before = destination.pixels().to_vec();
+        let dirty_before = destination.dirty_rects().to_vec();
+        let trace_before = kernel.recent_process_ops().len();
+        let error = active
+            .complete_requested_active_child_termination(&mut kernel, Some(&mut destination))
+            .expect_err("parked same-birth popup requires stopped-exit recovery");
+        assert!(matches!(
+            error,
+            Error::HostExitRecoveryRequired { process_id, incarnation, .. }
+                if process_id == owner.process_id() && incarnation == owner.incarnation()
+        ));
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert_eq!(active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips, parked_cpu_before);
+        assert!(active.parked_child_processes[0].cpu.blocked_popup_menu_modal.is_some());
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(destination.pixels(), pixels_before);
+        assert_eq!(destination.dirty_rects(), dirty_before.as_slice());
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        Ok(())
+    }
+
+    #[test]
+    fn requested_active_child_preserves_foreign_modal_nested_under_same_birth_cpu() -> Result<()> {
+        use crate::ce::scheduler::SchedulerBlockedWaitKind;
+
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let parent = kernel.queue_process_launch(Some("\\Test\\modal-parent.exe".to_owned()), None);
+        let foreign = kernel.queue_process_launch(Some("\\Test\\modal-foreign.exe".to_owned()), None);
+        let parent_birth = parent.process_birth.expect("parent process birth");
+        let foreign_birth = foreign.process_birth.expect("foreign process birth");
+        let foreign_thread_birth = foreign.primary_thread_birth.expect("foreign thread birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(foreign.process_id);
+        let mut memory = ModalTestMemory::default();
+        memory.write_wide_z(0x2000, "Nested modal");
+        memory.write_wide_z(0x2100, "Foreign child");
+        let mut source = VirtualFramebuffer::default_primary()?;
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            Some(&mut source),
+            None,
+            foreign.thread_id,
+            &[0, 0x2000, 0x2100, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        let dialog = modal_state.dialog_hwnd();
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                foreign_thread_birth,
+                foreign.thread_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd: dialog },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            )
+            .expect("foreign modal wait");
+        let mut foreign_cpu = UnicornMips::new()?;
+        foreign_cpu.owned_process_launch = Some(foreign.clone());
+        foreign_cpu.set_initial_thread_id(foreign.thread_id);
+        foreign_cpu.current_thread_id = foreign.thread_id;
+        foreign_cpu.blocked_modal_message_box = Some(BlockedModalMessageBox {
+            wait_id,
+            thread_id: foreign.thread_id,
+            thread_handle: foreign.thread_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+        let mut foreign_parked = parked_process_for_cpu(foreign.thread_id, foreign_cpu);
+        foreign_parked.process_state.process_id = foreign.process_id;
+        foreign_parked.process_handle = Some(foreign.process_handle);
+        foreign_parked.thread_handle = Some(foreign.thread_handle);
+
+        let mut duplicate_cpu = UnicornMips::new()?;
+        duplicate_cpu.owned_process_launch = Some(parent.clone());
+        duplicate_cpu.set_initial_thread_id(parent.thread_id);
+        duplicate_cpu.current_thread_id = parent.thread_id;
+        duplicate_cpu.parked_child_processes.push_back(foreign_parked);
+        let mut duplicate_parked = parked_process_for_cpu(parent.thread_id, duplicate_cpu);
+        duplicate_parked.process_state.process_id = parent.process_id;
+        duplicate_parked.process_handle = Some(parent.process_handle);
+        duplicate_parked.thread_handle = Some(parent.thread_handle);
+        let mut active = UnicornMips::new()?;
+        active.owned_process_launch = Some(parent.clone());
+        active.set_initial_thread_id(parent.thread_id);
+        active.current_thread_id = parent.thread_id;
+        active.parked_child_processes.push_back(duplicate_parked);
+        kernel.set_current_process_id(parent.process_id);
+        assert!(kernel.terminate_process(parent.process_handle, 0x6e));
+
+        let mut destination = VirtualFramebuffer::new(
+            VirtualFramebuffer::DEFAULT_WIDTH,
+            VirtualFramebuffer::DEFAULT_HEIGHT,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        let pixels_before = destination.pixels().to_vec();
+        let dirty_before = destination.dirty_rects().to_vec();
+        let trace_before = kernel.recent_process_ops().len();
+        let error = active
+            .complete_requested_active_child_termination(&mut kernel, Some(&mut destination))
+            .expect_err("foreign modal in a discarded same-birth subtree requires recovery");
+        assert!(matches!(
+            error,
+            Error::HostExitRecoveryRequired { process_id, incarnation, .. }
+                if process_id == parent_birth.process_id()
+                    && incarnation == parent_birth.incarnation()
+        ));
+        assert!(kernel.handles.process_execution_live_by_birth(parent_birth));
+        assert!(kernel.handles.process_execution_live_by_birth(foreign_birth));
+        assert_eq!(active.parked_child_processes.len(), 1);
+        let foreign_retained = &active.parked_child_processes[0].cpu.parked_child_processes[0];
+        assert!(foreign_retained.cpu.blocked_modal_message_box.is_some());
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(kernel.gwe.is_window(dialog));
+        assert_eq!(destination.pixels(), pixels_before);
+        assert_eq!(destination.dirty_rects(), dirty_before.as_slice());
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        Ok(())
+    }
+
+    #[test]
     fn parked_modal_ready_probe_requires_published_wait_after_button_result() -> Result<()> {
         use crate::ce::gwe::Point;
         use crate::ce::scheduler::SchedulerBlockedWaitKind;
