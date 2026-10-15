@@ -189,21 +189,20 @@ the after-owner-close case, not exit while an engine remains mapped. The
 next connected sequence is synthetic host-write/pin ownership and O-M3
 physical-page accounting. Only after accounting is established may production
 writable main-image integration proceed, followed by preloaded DLLs and
-dynamic DLL load/unload/reload; do not treat byte
-persistence through the old copy path as the ownership proof. Each cut needs
+dynamic DLL load/unload/reload; do not treat byte persistence through the old
+copy path as the ownership proof. Each cut needs
 real-MIPS bytes, exact birth/module-generation pins, native copy/readback
 exclusion and failure controls. The tested second-run `mem_map_ptr` collision
 retains pins through checked abort-close; other direct host-write/restore/rebind
 paths and exact module-retirement effects still need synthetic fences
 before production activation. A native owner-close failure itself was not
-injected. The
-[memory](subsystems/guest-memory.md) and [loader](subsystems/pe-loader.md)
-plans detail those gates. [O-M3](DECISIONS.md)
+injected. The [memory](subsystems/guest-memory.md) and
+[loader](subsystems/pe-loader.md) plans detail those gates. [O-M3](DECISIONS.md)
 keeps ROM/XIP versus RAM page provenance and `GlobalMemoryStatus` charge timing
 open. The user chose to keep production images copy-backed until that
 accounting is known; synthetic pinned controls are not production adoption.
-A writable-mount run still needs
-a distinct approval and fresh verified adjacent backups.
+A writable-mount run still needs a distinct approval and fresh verified
+adjacent backups.
 
 ### Parallel lanes (never gate a stage)
 

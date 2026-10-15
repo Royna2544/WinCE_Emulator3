@@ -71,12 +71,16 @@ MessageBox but not popup (`unicorn.rs:5989-6037,6334-6433,6646-6650,6705-6721,68
 An initial child returning from its bounded run can take another stopped
 completion route (`unicorn.rs:19639-19724,19759-19775`); pending launches
 before their first child CPU have no modal slot.
-The pseudo self-exit path already fails closed for both modal types.
+The pseudo self-exit path already fails closed for its own local modal state,
+but not for an affected parked subtree.
 
 The first connected safety cut is **fail-closed**, not invented restoration.
 After exact-birth authority selects an exit target, preflight the stopped CPU
 and every parked CPU in each subtree that completion would discard: this
 includes same-birth active duplicates and nested foreign-birth descendants.
+It also includes a scheduler successor temporarily popped from the parked
+queue before a terminal-child finalizer, if that successor contains an
+affected exact-birth CPU.
 The descendant's modal presence blocks disposal; its numeric PID/TID does
 not authorize the parent's exit. Before Kernel finalization or destructive
 tree pruning, a blocked MessageBox or popup in that affected set yields typed
@@ -117,7 +121,9 @@ descendant under an affected parked root. Include a GWE-plus-modal later
 target within one completion to prove no earlier GWE restore for that target;
 this does not promise rollback of previously completed siblings in a prune
 batch. Then keep existing GWE-only D-011 controls green in release and
-no-default builds. Successful completion with nonmodal descendant CPU queues
+no-default builds. Review ordinary boot, stopped pseudo self-exit and the
+popped terminal-child successor as distinct source paths before claiming
+coverage. Successful completion with nonmodal descendant CPU queues
 still needs a separate ownership/hoisting gate; this modal-presence cut does
 not solve it.
 Pending launches with no CPU/modal still use the GWE-only preflight. Include

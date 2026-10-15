@@ -220,7 +220,9 @@ Raw direct pseudo compatibility remains fixture-only and fail-closed; this is
 not full Task/VM authority or live-app proof. No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
-but normal SD-app loading remains copy-backed. The later bounded
+but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL
+images on that path until O-M3 physical-page accounting is known; synthetic
+pinned-image ownership tests do not change the loader. The later bounded
 [native-map failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
 and [legacy file-view overlap](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
 and [VM-allocation overlap](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
