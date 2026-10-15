@@ -17336,4 +17336,93 @@ mod tests {
         assert!(kernel.thread_has_pending_sent_message(receiver_tid));
         Ok(())
     }
+
+    #[test]
+    #[ignore = "expected red: ordinary queued send survives receiver exit and TID reuse"]
+    fn ordinary_queued_send_fails_once_on_receiver_exit_before_tid_reuse() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .expect("B's exact thread birth");
+        let (_, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "QUEUED_SEND_BIRTH_B",
+                "B",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("B's exact-birth HWND");
+        assert!(matches!(
+            kernel.gwe.window(hwnd).unwrap().delivery_owner(),
+            WindowDeliveryOwner::Birth { thread, .. } if thread == receiver_birth
+        ));
+
+        let message_id = crate::ce::gwe::WM_USER + 0x9b;
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(sender_tid, hwnd, message_id, 0, 0, None)
+            .expect("A's ordinary queued SendMessage to B");
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .and_then(|send| send.deferred_from_sleep_frame),
+            None,
+            "this is not the finite-Sleep deferred-send case"
+        );
+        assert!(kernel.thread_has_pending_sent_message(receiver_tid));
+        assert!(!kernel.sent_message_result_ready(send_id));
+
+        assert!(kernel.mark_guest_thread_exited_by_birth(receiver_birth, 0));
+        assert!(kernel.close_handle(receiver_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(receiver_birth));
+        let replacement_process = kernel.queue_process_launch(None, None);
+        let replacement_owner = kernel
+            .handles
+            .process_birth_key(replacement_process.process_id)
+            .expect("replacement process birth");
+        let replacement_handle = kernel.handles.try_create_thread_in_birth(
+            replacement_owner,
+            receiver_tid,
+            0x0040_3000,
+            0,
+            false,
+        )?;
+        let replacement_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(replacement_handle)
+            .expect("B-prime's exact thread birth");
+        assert_ne!(receiver_birth, replacement_birth);
+        assert_eq!(replacement_birth.thread_id(), receiver_tid);
+        assert_eq!(
+            kernel.live_thread_birth_key_by_id(receiver_tid),
+            Some(replacement_birth),
+            "B-prime really occupies B's numeric TID"
+        );
+
+        let result_ready_after_exit = kernel.sent_message_result_ready(send_id);
+        let replacement_delivery = kernel
+            .get_message_w_filtered(receiver_tid, None, 0, 0)
+            .map(|message| (message.hwnd, message.msg));
+        let sender_result = kernel.take_completed_send_message_result(send_id);
+        assert!(
+            replacement_delivery.is_none()
+                && result_ready_after_exit
+                && sender_result == Some(0),
+            "B-prime GetMessage={replacement_delivery:?}; A result-ready after B exit={result_ready_after_exit}; A one failure result={sender_result:?}"
+        );
+        assert_eq!(
+            kernel.take_completed_send_message_result(send_id),
+            None,
+            "A must not receive the failure result twice"
+        );
+        Ok(())
+    }
 }

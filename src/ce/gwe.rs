@@ -423,6 +423,10 @@ pub struct SentMessage {
     pub sender_thread_id: Option<u32>,
     pub sender_process_id: Option<u32>,
     pub receiver_thread_id: u32,
+    /// Frozen from the HWND at queue time. Legacy fixture HWNDs remain
+    /// explicitly numeric-only; a later TID incarnation cannot claim a send
+    /// addressed to a birth-owned window.
+    pub receiver_birth: Option<ThreadBirthKey>,
     /// Immutable provenance for a send queued while its exact receiver birth
     /// was blocked in finite Sleep. Pre-run callouts must leave it queued;
     /// guest message retrieval may still activate it after Sleep returns.
@@ -433,6 +437,12 @@ pub struct SentMessage {
     pub send_timeout_flags: u32,
     pub result_ptr: Option<u32>,
     pub result: Option<u32>,
+}
+
+impl SentMessage {
+    fn visible_to_reader(&self, birth: Option<ThreadBirthKey>) -> bool {
+        self.receiver_birth.is_none_or(|owner| Some(owner) == birth)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3834,7 +3844,14 @@ impl Gwe {
         };
         if window.destroyed
             || deferred_from_sleep_frame
-                .is_some_and(|frame| frame.key().owner_birth().thread_id() != window.thread_id)
+                .is_some_and(|frame| {
+                    frame.key().owner_birth().thread_id() != window.thread_id
+                        || matches!(
+                            window.delivery_owner,
+                            WindowDeliveryOwner::Birth { thread, .. }
+                                if frame.key().owner_birth() != thread
+                        )
+                })
         {
             return None;
         }
@@ -3842,6 +3859,10 @@ impl Gwe {
             message.source = MSGSRC_SOFTWARE_SEND;
         }
         let ready_time = message.time_ms;
+        let receiver_birth = match window.delivery_owner {
+            WindowDeliveryOwner::Birth { thread, .. } => Some(thread),
+            WindowDeliveryOwner::LegacyUnknown { .. } | WindowDeliveryOwner::SystemDesktop => None,
+        };
         let id = self.next_sent_message_id;
         self.next_sent_message_id = self.next_sent_message_id.saturating_add(1).max(1);
         self.sent_messages.insert(
@@ -3851,6 +3872,7 @@ impl Gwe {
                 sender_thread_id,
                 sender_process_id: None,
                 receiver_thread_id: window.thread_id,
+                receiver_birth,
                 deferred_from_sleep_frame,
                 message,
                 flags,
@@ -4594,6 +4616,16 @@ impl Gwe {
             return self.complete_active_sent_message(thread_id, result);
         }
 
+        // The WNDPROC return hook may have already completed this exact send
+        // before restoring its sender. In that case an ancestor can now be the
+        // active top; it must not be popped a second time for this ID.
+        if sent.flags & SMF_RESULT_READY != 0 {
+            return Some(id);
+        }
+        if self.active_sent_message_id(thread_id).is_some() {
+            return None;
+        }
+
         if let Some(sent) = self.sent_messages.get_mut(&id) {
             if sent.flags & SMF_RESULT_READY == 0 {
                 sent.flags |= SMF_RESULT_READY;
@@ -4607,6 +4639,7 @@ impl Gwe {
         for queue in self.sent_queues.values_mut() {
             queue.retain(|queued_id| *queued_id != id);
         }
+        // The missing-stack recovery path has no active send to consume.
         self.end_send_message(thread_id);
         Some(id)
     }
@@ -4715,11 +4748,25 @@ impl Gwe {
     }
 
     pub fn has_pending_sent_message_for_thread(&self, thread_id: u32) -> bool {
+        self.has_pending_sent_message_for_reader(thread_id, None)
+    }
+
+    pub fn has_pending_sent_message_for_birth(&self, birth: ThreadBirthKey) -> bool {
+        self.has_pending_sent_message_for_reader(birth.thread_id(), Some(birth))
+    }
+
+    fn has_pending_sent_message_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+    ) -> bool {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages
                     .get(id)
-                    .is_some_and(|sent| sent.flags & SMF_RESULT_READY == 0)
+                    .is_some_and(|sent| {
+                        sent.flags & SMF_RESULT_READY == 0 && sent.visible_to_reader(birth)
+                    })
             })
         })
     }
@@ -4809,6 +4856,20 @@ impl Gwe {
             .iter()
             .filter(|(_, sent)| {
                 sent.receiver_thread_id == receiver_thread_id && sent.flags & SMF_RESULT_READY == 0
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        self.terminate_selected_sent_messages_to_receiver(sent_ids)
+    }
+
+    /// Fail sends owned by this exact receiver incarnation. Numeric-only
+    /// compatibility sends and sends for a later incarnation are unaffected.
+    pub fn terminate_sent_messages_to_birth(&mut self, birth: ThreadBirthKey) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| {
+                sent.receiver_birth == Some(birth) && sent.flags & SMF_RESULT_READY == 0
             })
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
@@ -5399,7 +5460,10 @@ impl Gwe {
             queue.iter().any(|id| {
                 self.sent_messages
                     .get(id)
-                    .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
+                    .is_some_and(|sent| {
+                        sent.visible_to_reader(birth)
+                            && message_matches(&sent.message, hwnd, min_msg, max_msg)
+                    })
             })
         }) || self.queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|entry| {
@@ -5449,7 +5513,8 @@ impl Gwe {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages.get(id).is_some_and(|sent| {
-                    message_matches(&sent.message, hwnd, min_msg, max_msg)
+                    sent.visible_to_reader(birth)
+                        && message_matches(&sent.message, hwnd, min_msg, max_msg)
                         && self.message_targets_visible_window(&sent.message)
                 })
             })
@@ -5501,7 +5566,8 @@ impl Gwe {
         self.sent_queues.get(&thread_id).is_some_and(|queue| {
             queue.iter().any(|id| {
                 self.sent_messages.get(id).is_some_and(|sent| {
-                    message_matches(&sent.message, hwnd, min_msg, max_msg)
+                    sent.visible_to_reader(birth)
+                        && message_matches(&sent.message, hwnd, min_msg, max_msg)
                         && self.message_targets_visible_window(&sent.message)
                 })
             })
@@ -5549,7 +5615,7 @@ impl Gwe {
         max_msg: u32,
     ) -> Option<Message> {
         if let Some(sent) =
-            self.first_matching_queued_sent_message(thread_id, hwnd, min_msg, max_msg, true)
+            self.first_matching_queued_sent_message(thread_id, birth, hwnd, min_msg, max_msg, true)
         {
             // A pre-run visible peek must not present a finite-Sleep-deferred
             // send as dispatchable, nor let a later queued item pass it.
@@ -5665,11 +5731,15 @@ impl Gwe {
         max_msg: u32,
     ) -> Option<Message> {
         if self
-            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, false)
+            .first_matching_sent_message_is_sleep_deferred(
+                thread_id, birth, hwnd, min_msg, max_msg, false,
+            )
         {
             return None;
         }
-        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) =
+            self.take_matching_sent_message(thread_id, birth, hwnd, min_msg, max_msg)
+        {
             return Some(message);
         }
         if let Some(message) = self.take_matching_message(thread_id, birth, hwnd, min_msg, max_msg)
@@ -5721,12 +5791,14 @@ impl Gwe {
         max_msg: u32,
     ) -> Option<Message> {
         if self
-            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, true)
+            .first_matching_sent_message_is_sleep_deferred(
+                thread_id, birth, hwnd, min_msg, max_msg, true,
+            )
         {
             return None;
         }
         if let Some(message) =
-            self.take_matching_visible_sent_message(thread_id, hwnd, min_msg, max_msg)
+            self.take_matching_visible_sent_message(thread_id, birth, hwnd, min_msg, max_msg)
         {
             return Some(message);
         }
@@ -5752,7 +5824,23 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg)
+        self.take_matching_sent_message(thread_id, None, hwnd, min_msg, max_msg)
+    }
+
+    pub fn take_sent_message_filtered_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.take_matching_sent_message(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
     }
 
     pub(crate) fn peek_sent_message_filtered(
@@ -5775,11 +5863,41 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
+        self.peek_sent_message_filtered_with_sleep_frame_for_reader(
+            thread_id, None, hwnd, min_msg, max_msg,
+        )
+    }
+
+    pub(crate) fn peek_sent_message_filtered_with_sleep_frame_for_birth(
+        &self,
+        birth: ThreadBirthKey,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
+        self.peek_sent_message_filtered_with_sleep_frame_for_reader(
+            birth.thread_id(),
+            Some(birth),
+            hwnd,
+            min_msg,
+            max_msg,
+        )
+    }
+
+    fn peek_sent_message_filtered_with_sleep_frame_for_reader(
+        &self,
+        thread_id: u32,
+        birth: Option<ThreadBirthKey>,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
         self.sent_queues.get(&thread_id)?.iter().find_map(|id| {
             self.sent_messages
                 .get(id)
                 .filter(|sent| {
                     sent.flags & SMF_RESULT_READY == 0
+                        && sent.visible_to_reader(birth)
                         && message_matches(&sent.message, hwnd, min_msg, max_msg)
                 })
                 .map(|sent| (*id, sent.message.clone(), sent.deferred_from_sleep_frame))
@@ -5825,12 +5943,14 @@ impl Gwe {
         flags: PeekFlags,
     ) -> Option<Message> {
         if self
-            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, false)
+            .first_matching_sent_message_is_sleep_deferred(
+                thread_id, birth, hwnd, min_msg, max_msg, false,
+            )
         {
             return None;
         }
         if let Some(message) =
-            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
+            self.peek_matching_sent_message(thread_id, birth, hwnd, min_msg, max_msg, flags)
         {
             return Some(message);
         }
@@ -8169,6 +8289,69 @@ mod tests {
             Some(outer_id)
         );
         assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.take_completed_sent_message_result(inner_id),
+            Some(0x2222)
+        );
+        assert_eq!(
+            gwe.take_completed_sent_message_result(outer_id),
+            Some(0x1111)
+        );
+    }
+
+    #[test]
+    #[ignore = "expected red: repeated completion of an inner send must not retire its active ancestor"]
+    fn restored_inner_send_completion_after_active_completion_preserves_outer_send() {
+        let mut gwe = Gwe::default();
+        let receiver_thread = 36;
+        let hwnd = gwe.create_window(receiver_thread, "nested-restored-send", "");
+        let outer_id = gwe
+            .queue_send_message_for_window(
+                Some(35),
+                hwnd,
+                Message::new(hwnd, WM_USER + 73, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("outer sender queued");
+        let inner_id = gwe
+            .queue_send_message_for_window(
+                Some(37),
+                hwnd,
+                Message::new(hwnd, WM_USER + 74, 3, 4, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("inner sender queued");
+        assert!(gwe.activate_sent_message_for_receiver(receiver_thread, outer_id));
+        assert!(gwe.activate_sent_message_for_receiver(receiver_thread, inner_id));
+        assert_eq!(
+            gwe.active_sent_stack_by_thread.get(&receiver_thread),
+            Some(&vec![outer_id, inner_id])
+        );
+
+        // The WNDPROC return path first completes the active send, then takes
+        // the saved send_restore path for the same ID. Its second completion
+        // must not consume the older active send below this inner one.
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x2222),
+            Some(inner_id)
+        );
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(outer_id));
+        let completed_once = gwe.stats().send_transaction_completed_count;
+        let _ = gwe.complete_restored_sent_message(receiver_thread, inner_id, 0x2222);
+        assert_eq!(
+            gwe.active_sent_message_id(receiver_thread),
+            Some(outer_id),
+            "inner send's second completion consumed the outer active send"
+        );
+        assert!(gwe.in_send_message(receiver_thread));
+        assert_eq!(gwe.stats().send_transaction_completed_count, completed_once);
+        assert!(!gwe.sent_message_result_ready(outer_id));
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x1111),
+            Some(outer_id)
+        );
         assert_eq!(
             gwe.take_completed_sent_message_result(inner_id),
             Some(0x2222)
