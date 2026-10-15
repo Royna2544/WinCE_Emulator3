@@ -103,7 +103,12 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     KData PID follows mutable process selection, not the captured lease.
   - SendMessageTimeout global expiry can read as ready/success; receiver-side
     `DestroyWindow` result writes, delivery and the broader GWE send lifecycle
-    are ungated.
+    are ungated. Ordinary queued `SentMessage` records only receiver TID;
+    unlike finite-Sleep-deferred sends, it has no frozen receiver birth.
+    Receiver exit currently retires deferred sends to that birth, not ordinary
+    queued sends to it, so a reused TID may see an old send. This is a
+    source-inferred isolation risk pending an exit/reuse control, not a
+    reproduced live-app failure.
   - **Reproduced source-control failure, not a live-app result:** an ignored
     real-MIPS test puts B in a verified-birth `GetMessageW` wait, then A's
     cross-thread `SendMessageW` fails before B's WNDPROC assertions with
@@ -111,6 +116,11 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)).
     The shortcut's use of A's live SP for B's WNDPROC is source-inferred;
     callback stack and eventual return are not yet measured by this red.
+    **Source-inferred live-run risk:** the same shortcut labels B unverified;
+    if its WNDPROC remains active at a native slice end, the provenance guard
+    rejects the staged context as terminal `Backend`, ending that run. E-38
+    predates this guard, and no iNavi run has reproduced this failure. A
+    bounded slice-spanning WNDPROC control is the next source gate.
   - **UNTESTED / inferred risk (not a reproduced bug):** after a finite-Sleep
     receiver T wakes, it could call `SendMessage` to sender S while S remains
     blocked in its outgoing `SendMessage` to T. No reciprocal cross-Send native
