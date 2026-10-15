@@ -17183,16 +17183,21 @@ mod tests {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
         let (_, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let (_, neighbor_tid) = kernel.create_guest_thread(0x0040_3000, 0, false);
         let receiver_birth = kernel
             .handles
             .thread_birth_key_for_handle(receiver_handle)
             .unwrap();
         let hwnd = kernel.create_window_ex_w(receiver_tid, "SLEEP_EXIT_SEND", "", None, 0, 0, 0);
+        let neighbor_hwnd = kernel.create_window_ex_w(neighbor_tid, "NEIGHBOR_SEND", "", None, 0, 0, 0);
         let frame = kernel
             .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
             .unwrap();
         let deferred_send = kernel
             .begin_cross_thread_send_message_w(sender_tid, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
+            .unwrap();
+        let neighbor_send = kernel
+            .begin_cross_thread_send_message_w(sender_tid, neighbor_hwnd, crate::ce::gwe::WM_USER + 2, 0, 0, None)
             .unwrap();
         assert_eq!(
             kernel.gwe.sent_message(deferred_send).unwrap().deferred_from_sleep_frame,
@@ -17202,5 +17207,8 @@ mod tests {
         assert!(kernel.blocked_waiter(frame.wait_id()).is_none());
         assert!(!kernel.thread_has_pending_sent_message(receiver_tid));
         assert_eq!(kernel.take_completed_send_message_result(deferred_send), Some(0));
+        assert!(kernel.thread_has_pending_sent_message(neighbor_tid));
+        assert!(!kernel.sent_message_result_ready(neighbor_send));
+        assert!(kernel.gwe.sent_message(neighbor_send).is_some());
     }
 }
