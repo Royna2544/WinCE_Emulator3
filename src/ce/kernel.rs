@@ -17280,7 +17280,12 @@ mod tests {
         let frame = kernel
             .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
             .expect("new incarnation finite Sleep frame");
-        assert!(kernel.gwe.sent_message_ids_for_windows(&[old_hwnd, live_hwnd]).is_empty());
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[old_hwnd, live_hwnd])
+                .is_empty()
+        );
         assert_eq!(
             kernel.send_message_w(old_hwnd, crate::ce::gwe::WM_USER, 0, 0),
             None,
@@ -17299,8 +17304,16 @@ mod tests {
             None,
             "an old birth-owned HWND must not borrow the reused TID's Sleep frame",
         );
-        assert!(kernel.gwe.sent_message_ids_for_windows(&[old_hwnd]).is_empty());
-        assert_eq!(kernel.handles.active_finite_sleep_frame(receiver_birth), Some(frame));
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[old_hwnd])
+                .is_empty()
+        );
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(receiver_birth),
+            Some(frame)
+        );
         assert!(kernel.blocked_waiter(frame.wait_id()).is_some());
 
         let live_send = kernel
