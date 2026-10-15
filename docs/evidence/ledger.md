@@ -1783,6 +1783,29 @@ and cross-process variants remain unsupported and may fail closed with
 terminal `Backend`; no iNavi, writable mount, LAN server or Stage 3/live
 acceptance follows.
 
+## A13 orphaned GetMessage source gate (2026-10-15, executed)
+
+The test-only [expected red](../../evidence/scheduler-source-cut-a13-red/validation.receipt.md)
+showed a same-birth blocked `GetMessageW` payload being revived from saved
+context after its scheduler wait was removed. The bounded
+[production receipt](../../evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+seals `unicorn.rs` SHA-256
+`E12BEEE86A6A9BC2D429052FF79B110C794F8A079F93DFD4594F30669B65BD9F`.
+Its [source patch](../../evidence/scheduler-source-cut-a13/source-at-seal.patch)
+against the A12 source commit `ef23090d` is SHA-256
+`E1EBE0C94D44F3F926A32107C8499DDA62AF2396ECB28DE74C56F7B4B3DCBFED`
+and reverse-apply checks against the sealed source. The payload now always
+carries an exact birth; matching saved-context promotion is suppressed, and
+a selected payload lacking its exact wait fails before guest entry without
+consuming the sender reply/wait. Exact live modal-wait ownership also gates
+parked readiness and modal continuation; the real-button positive and
+missing-wait negative controls are source tests, not live-modal acceptance.
+Focused saved-context 7/7, integrated native orphan 1/1 and modal 11/11
+passed. Both 18-group broad suites passed release **2,052/0/9 ignored** and
+no-default **1,482/0/3 ignored**; Unicorn-only and desktop-without-trace
+checks, formatting and diff checks exited 0. No iNavi app, writable mount,
+remote LAN server or full Stage 3 acceptance is part of this gate.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

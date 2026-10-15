@@ -10,7 +10,10 @@ boundaries above remain open. The strict same-process plain S→T→S reciprocal
 shape has a separate bounded
 [A12 source/test gate](../../evidence/scheduler-source-cut-a12/validation.production.receipt.md)
 with post-format release 2,047/0/9 ignored and no-default 1,482/0/3 ignored;
-it is not general nested-send authority.
+it is not general nested-send authority. The separate bounded
+[A13 orphan source/test gate](../../evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+passed release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored;
+it does not convert GetMessage or modal waits into canonical frames.
 
 ## Responsibility and scope
 
@@ -248,10 +251,11 @@ double-completion red are historical controls now promoted into the connected
 cut. A07 broad suites passed on earlier source.
 A08's new negative was red and its repair passed focused checks; A09's failed
 seal is historical. A10 passed the strict extra-lease and two broad suites on
-one exact source/test seal. This does not establish a same-birth orphaned
-GetMessage payload after its scheduler wait has disappeared. Hidden native
-state, restore failure, two-sender exact completion, one-return/parent
-continuation and runnable-B remain bounded controls, not general Task/Frame
+one exact source/test seal. A10 alone did not establish a same-birth orphaned
+GetMessage payload after its scheduler wait disappeared; A13 later covered
+that narrow boundary. Hidden native state, restore failure, two-sender exact
+completion, one-return/parent continuation and runnable-B remain bounded
+controls, not general Task/Frame
 acceptance. Cross-process parked-sender restore, legacy numeric-only HWNDs,
 post-wake MsgWait and overloaded `SMF_TIMEOUT` last-error semantics remain
 separate from this cut.
@@ -296,6 +300,23 @@ second pending return/deeper nesting or cross-process pair makes the strict
 handoff ineligible and can fail closed with terminal `Backend`; these are
 live-run risks, not import replays or accepted CE behavior. Full Stage 3 and
 live iNavi remain open.
+
+The separate bounded
+[A13 source/test receipt](../../evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+records the historical expected red and the source-only repair. A blocked
+GetMessage payload now carries a required exact `ThreadBirthKey`; its presence
+prevents saved-context recovery from promoting that same birth even after the
+wait disappears. If the selected native import still has that payload but no
+matching scheduler wait, a typed `Backend` stops before guest entry, preserving
+the tested sender send/wait and blocked receiver payload. A stale payload from
+an older birth cannot stop a replacement that reused its numeric TID. The
+tested real button-tap modal path may retire its filtered GetMessage wait and
+resume through the exact live modal wait; a missing modal wait fails closed
+before consuming the result. Focused saved-context 7/7, integrated orphan
+1/1 and modal 11/11 passed on the final source; the two 18-group suites passed
+release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored. This is
+not general modal continuation, Task/Frame migration or live-app acceptance;
+no mount or iNavi run was made.
 
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval

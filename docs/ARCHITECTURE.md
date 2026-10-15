@@ -77,12 +77,19 @@ S→T→S plain-Send shape has a bounded
 formatted-source release 2,047/0/9 ignored and no-default 1,482/0/3 ignored.
 The historical A11b import replay is repaired for that exact next-lease
 handoff and full inner/outer return, including a wrong-parent-birth refusal.
-It is not a general nested-send or machine-owned Task/Frame migration. The
-same-birth orphaned GetMessage payload with a missing scheduler wait, third
-sender/timed/result-pointer/deeper/cross-process reciprocal forms, legacy
-numeric-only HWND ownership, post-wake MsgWait, `SMF_TIMEOUT` last-error
-semantics, completed Stage 3 and live-iNavi behavior remain open. Ineligible
-blocked reciprocal sends fail closed with terminal `Backend`, a live-run risk.
+The separate bounded
+[A13 source/test gate](../evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+prevents saved-context recovery from reviving a same-birth blocked GetMessage
+payload after its scheduler wait disappears, and fails a selected orphaned
+import before guest entry. The tested modal result path requires its exact live
+wait; missing-wait modal continuation fails closed. A13's final source passed
+release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored across
+18 groups each. Neither gate is a general nested-send or machine-owned
+Task/Frame migration. Third sender/timed/result-pointer/deeper/cross-process
+reciprocal forms, legacy numeric-only HWND ownership, post-wake MsgWait,
+`SMF_TIMEOUT` last-error semantics, broader modal behavior, completed Stage 3
+and live-iNavi behavior remain open. Ineligible blocked reciprocal sends fail
+closed with terminal `Backend`, a live-run risk; no app or mount run was made.
 
 ## A1. Machine authority
 

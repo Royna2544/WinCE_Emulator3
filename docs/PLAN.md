@@ -303,6 +303,17 @@ close only their named gates, not Stage 2 or live acceptance.
   timed/result-pointer, deeper pending-callback and cross-process forms are
   ineligible for this handoff and fail closed with terminal `Backend`. This
   is not general Task/continuation authority or a live-app result.
+- The separate bounded A13 blocked-GetMessage orphan
+  [source/test gate](../evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+  retains exact birth on native blocked payloads, prevents saved-context
+  resurrection after the scheduler wait is lost, and fails an orphan selected
+  for native entry before guest execution. The tested modal result path
+  requires its exact live wait; a missing modal wait fails closed before
+  result consumption. Focused saved-context 7/7, integrated orphan 1/1 and
+  modal 11/11 passed; the final 18-group suites passed release-feature
+  2,052/0/9 ignored and no-default 1,482/0/3 ignored. Broader modal and
+  continuation shapes, full Stage 3 and live-app behavior remain open; no
+  writable-mount or iNavi run was performed.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full
