@@ -261,13 +261,13 @@ Under A2/A3/A5, this fixture first captures S and T's exact
 `ThreadBirthKey`s, distinct native stacks, and the original S→T send/wait IDs.
 S remains blocked in its outgoing `SendMessage` when T's finite Sleep reaches
 its deadline. T enters the original S→T send's `GetMessageW`/SentMessage
-WNDPROC and calls `SendMessage` back to S from inside that callback. The incoming callback
-must execute on S's own native context and stack while S's outer send-wait
-continuation frame remains intact; the reverse result returns exactly once
-to T inside its already-active WNDPROC. T returns from that WNDPROC to complete
-outer send ID 1, then S's original API returns exactly once; there is no
-second Get/Peek retrieval. Record both directions' send/wait
-IDs, birth and frame provenance, PC/RA/SP and one-return counts at each step.
+WNDPROC and calls `SendMessage` back to S from inside that callback. The
+incoming callback must execute on S's own native context and stack while S's
+outer send-wait continuation frame remains intact; the reverse result returns
+exactly once to T inside its already-active WNDPROC. T then returns from that
+WNDPROC to complete outer send ID 1; S's original API returns exactly once.
+There is no second Get/Peek retrieval. Record both directions' send/wait IDs,
+birth and frame provenance, PC/RA/SP and one-return counts at each step.
 An absent native frame or stale sender/receiver birth must fail closed before
 borrowing another thread's context or consuming the other send. In A11b, the
 first lease leaves exact send IDs 1/2 and scheduler/native waits 2/3 intact.
