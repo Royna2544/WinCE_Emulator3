@@ -206,6 +206,11 @@ pub struct UnicornMips {
     /// Per-blob jr/jalr site scan results for scoped code hooks, keyed by
     /// (base, byte length, sealed load generation). Derivable state; reset on park.
     fast_start_site_cache: HashMap<(u32, usize, u64), Vec<u32>>,
+    /// Filtered exit-call sites keyed by mapped-blob slot and backing identity.
+    /// A newly synthesized callsite within an already loaded writable image
+    /// is deliberately unsupported until reload: no hook is installed, and
+    /// the stopped-exit witness gate fails closed.
+    decoded_exit_site_cache: HashMap<(usize, u32, usize, u64, usize), Vec<u32>>,
     /// Cached result of the all-origins-are-direct-jumps check, keyed by the
     /// trampoline jump count it was computed for. Derivable; reset on park.
     hookless_origins_direct_cache: Option<(usize, bool)>,
@@ -2197,6 +2202,7 @@ impl UnicornMips {
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
             fast_start_site_cache: HashMap::new(),
+            decoded_exit_site_cache: HashMap::new(),
             hookless_origins_direct_cache: None,
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
@@ -7841,6 +7847,7 @@ impl UnicornMips {
                 visible_callout_push_generation: self.visible_callout_push_generation,
                 slice_end_rotation_pending: false,
                 fast_start_site_cache: HashMap::new(),
+                decoded_exit_site_cache: HashMap::new(),
                 hookless_origins_direct_cache: None,
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
@@ -8119,6 +8126,7 @@ impl UnicornMips {
         self.stack_top = Some(result.stack_top);
         self.import_traps.merge(result.import_traps);
         self.fast_start_site_cache.clear();
+        self.decoded_exit_site_cache.clear();
         self.mapped_blobs.extend(result.mapped_blobs);
         self.loaded_modules = result.loaded_modules;
         self.resource_strings.extend(result.resource_strings);
@@ -9073,31 +9081,17 @@ impl UnicornMips {
             trampoline_origins_all_direct,
         );
         let hookless_trampolines_enabled = code_hook_mode == UnicornCodeHookMode::Hookless;
+        let pending_decoded_exit_call = Rc::new(RefCell::new(None::<DecodedExitCallWitness>));
         let decoded_exit_call_witness = Rc::new(RefCell::new(None::<DecodedExitCallWitness>));
-        // The indirect-site scan is cached per sealed blob generation. Only
-        // static canonical exit-call candidates receive exact-address hooks;
-        // each callback still rechecks live native bytes and the source GPR.
-        let direct_exit_candidate_sites = if native_owner_birth.is_some() {
-            let sites = cached_fast_start_indirect_transfer_sites(
-                &mut self.fast_start_site_cache,
-                &self.mapped_blobs,
-            );
-            sites
-                .into_iter()
-                .filter(|&call_pc| {
-                    let Some((source_register, target)) = call_pc
-                        .checked_sub(4)
-                        .and_then(|load_pc| self.read_mapped_u32(load_pc))
-                        .and_then(decode_addiu_zero)
-                    else {
-                        return false;
-                    };
-                    self.read_mapped_u32(call_pc)
-                        .and_then(canonical_ra_jalr_register)
-                        == Some(source_register)
-                        && decode_old_mips_kernel_call(target) == Some((2, 2))
-                })
-                .collect::<Vec<_>>()
+        // Exact hooks are needed only for static canonical exit-call sites.
+        // The narrow site list is cached by load identity. New callsites
+        // synthesized within a writable image or a newly appended DLL during
+        // this slice have no hook and fail closed. Existing cached candidates
+        // are revalidated against live native bytes in the hook.
+        let direct_exit_candidate_sites = if native_owner_birth.is_some()
+            && code_hook_mode != UnicornCodeHookMode::Global
+        {
+            cached_direct_decoded_exit_sites(&mut self.decoded_exit_site_cache, &self.mapped_blobs)
         } else {
             Vec::new()
         };
@@ -9110,9 +9104,29 @@ impl UnicornMips {
         } else if code_hook_mode == UnicornCodeHookMode::Global {
             let native_hook_stop_reason_code_hook = Rc::clone(&native_hook_stop_reason);
             let native_hook_control_error_code_hook = Rc::clone(&native_hook_control_error);
+            let pending_decoded_exit_call_global = Rc::clone(&pending_decoded_exit_call);
             let decoded_exit_call_witness_global = Rc::clone(&decoded_exit_call_witness);
             pre_run_state_try!(uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
+            // A completed call cannot authorize a later unrelated PC-zero
+            // stop. The next code callback after its delay slot clears it.
+            decoded_exit_call_witness_global.borrow_mut().take();
+            let expected_delay_pc = pending_decoded_exit_call_global
+                .borrow()
+                .as_ref()
+                .and_then(|call| call.call_pc.checked_add(4));
+            if expected_delay_pc == Some(pc) {
+                promote_decoded_exit_call_witness(
+                    uc,
+                    pc,
+                    &current_thread_id_code_hook,
+                    native_owner_birth,
+                    &pending_decoded_exit_call_global,
+                    &decoded_exit_call_witness_global,
+                );
+            } else if pending_decoded_exit_call_global.borrow().is_some() {
+                pending_decoded_exit_call_global.borrow_mut().take();
+            }
             if pc != 0 && stop_pc == Some(pc) {
                 let instruction = read_unicorn_code_u32(uc, &mapped_code, pc);
                 *last_code_probe_hook.borrow_mut() = Some((pc, instruction));
@@ -9500,14 +9514,17 @@ impl UnicornMips {
             let Some(instruction) = instruction else {
                 return;
             };
-            latch_decoded_exit_call_witness(
-                uc,
-                pc,
-                &current_thread_id_code_hook,
-                native_owner_birth,
-                false,
-                &decoded_exit_call_witness_global,
-            );
+            if canonical_ra_jalr_register(instruction).is_some() {
+                stage_decoded_exit_call_witness(
+                    uc,
+                    pc,
+                    &current_thread_id_code_hook,
+                    native_owner_birth,
+                    false,
+                    &pending_decoded_exit_call_global,
+                    &decoded_exit_call_witness_global,
+                );
+            }
             let Some(register) = decode_indirect_call_register(instruction) else {
                 return;
             };
@@ -9809,24 +9826,53 @@ impl UnicornMips {
         // only this attempt-local callback may supply direct-call authority.
         for call_pc in direct_exit_candidate_sites {
             let current_thread_id_exit_hook = Rc::clone(&current_thread_id);
+            let pending_decoded_exit_call_hook = Rc::clone(&pending_decoded_exit_call);
             let decoded_exit_call_witness_hook = Rc::clone(&decoded_exit_call_witness);
-            pre_run_state_try!(uc.add_code_hook(
-                u64::from(call_pc),
-                u64::from(call_pc),
-                move |uc, address, _size| {
-                    latch_decoded_exit_call_witness(
-                        uc,
-                        address as u32,
-                        &current_thread_id_exit_hook,
-                        native_owner_birth,
-                        true,
-                        &decoded_exit_call_witness_hook,
-                    );
-                },
-            )
-            .map_err(|err| Error::Backend(format!(
-                "install decoded-exit callsite hook 0x{call_pc:08x}: {err:?}"
-            ))));
+            pre_run_state_try!(
+                uc.add_code_hook(
+                    u64::from(call_pc),
+                    u64::from(call_pc),
+                    move |uc, address, _size| {
+                        stage_decoded_exit_call_witness(
+                            uc,
+                            address as u32,
+                            &current_thread_id_exit_hook,
+                            native_owner_birth,
+                            true,
+                            &pending_decoded_exit_call_hook,
+                            &decoded_exit_call_witness_hook,
+                        );
+                    },
+                )
+                .map_err(|err| Error::Backend(format!(
+                    "install decoded-exit callsite hook 0x{call_pc:08x}: {err:?}"
+                )))
+            );
+            let Some(delay_pc) = call_pc.checked_add(4) else {
+                continue;
+            };
+            let current_thread_id_delay_hook = Rc::clone(&current_thread_id);
+            let pending_decoded_exit_call_delay_hook = Rc::clone(&pending_decoded_exit_call);
+            let decoded_exit_call_witness_delay_hook = Rc::clone(&decoded_exit_call_witness);
+            pre_run_state_try!(
+                uc.add_code_hook(
+                    u64::from(delay_pc),
+                    u64::from(delay_pc),
+                    move |uc, address, _size| {
+                        promote_decoded_exit_call_witness(
+                            uc,
+                            address as u32,
+                            &current_thread_id_delay_hook,
+                            native_owner_birth,
+                            &pending_decoded_exit_call_delay_hook,
+                            &decoded_exit_call_witness_delay_hook,
+                        );
+                    },
+                )
+                .map_err(|err| Error::Backend(format!(
+                    "install decoded-exit delay-slot hook 0x{delay_pc:08x}: {err:?}"
+                )))
+            );
         }
 
         // ── Block trace hook (full_trace only) ───────────────────────────────────
@@ -14318,30 +14364,31 @@ impl UnicornMips {
                     && snapshot.a0 == exit.process
                     && snapshot.a1 == exit.exit_code
             });
-            let observed_executed_call = decoded_exit_call_witness
-                .borrow_mut()
-                .take()
-                .is_some_and(|witness| {
-                    let indirect_probe_matches = code_hook_mode == UnicornCodeHookMode::Global
-                        && self.last_debug.as_ref().is_some_and(|snapshot| {
-                            snapshot.indirect_call_probe.as_ref().is_some_and(|probe| {
-                                probe.pc == witness.call_pc
-                                    && probe.sp == witness.sp
-                                    && probe.register == witness.source_register
-                                    && probe.target == witness.target
-                                    && canonical_ra_jalr_register(probe.instruction)
-                                        == Some(witness.source_register)
+            let observed_executed_call =
+                decoded_exit_call_witness
+                    .borrow_mut()
+                    .take()
+                    .is_some_and(|witness| {
+                        let indirect_probe_matches = code_hook_mode == UnicornCodeHookMode::Global
+                            && self.last_debug.as_ref().is_some_and(|snapshot| {
+                                snapshot.indirect_call_probe.as_ref().is_some_and(|probe| {
+                                    probe.pc == witness.call_pc
+                                        && probe.sp == witness.sp
+                                        && probe.register == witness.source_register
+                                        && probe.target == witness.target
+                                        && canonical_ra_jalr_register(probe.instruction)
+                                            == Some(witness.source_register)
+                                })
+                            });
+                        witness.call_pc == exit.caller
+                            && witness.target == exit.target
+                            && self.last_debug.as_ref().is_some_and(|snapshot| {
+                                witness.sp == snapshot.sp
+                                    && witness.call_pc.checked_add(8) == Some(snapshot.ra)
                             })
-                        });
-                    witness.call_pc == exit.caller
-                        && witness.target == exit.target
-                        && self.last_debug.as_ref().is_some_and(|snapshot| {
-                            witness.sp == snapshot.sp
-                                && witness.call_pc.checked_add(8) == Some(snapshot.ra)
-                        })
-                        && caller_owner == Some((witness.caller, witness.owner))
-                        && (witness.direct_load_verified || indirect_probe_matches)
-                });
+                            && caller_owner == Some((witness.caller, witness.owner))
+                            && (witness.direct_load_verified || indirect_probe_matches)
+                    });
             let stopped_on_call = matches!(report.raw_stop_pc, AttemptObservation::Value(0))
                 && staged_saved_context
                     .as_ref()
@@ -15036,6 +15083,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
             fast_start_site_cache: HashMap::new(),
+            decoded_exit_site_cache: HashMap::new(),
             hookless_origins_direct_cache: None,
             parked_child_processes: VecDeque::new(),
             current_thread_id: MAIN_GUEST_THREAD_ID,
@@ -15633,6 +15681,112 @@ fn cached_fast_start_indirect_transfer_sites(
     sites.sort_unstable();
     sites.dedup();
     sites
+}
+
+#[cfg(feature = "unicorn")]
+fn direct_decoded_exit_sites_in_blob(blob: &MappedBlob) -> Vec<u32> {
+    let mut sites = Vec::new();
+    let word_count = blob.bytes.chunks_exact(4).len();
+    let mut previous = None;
+    for (index, bytes) in blob.bytes.chunks_exact(4).enumerate() {
+        let instruction = u32::from_le_bytes(bytes.try_into().unwrap());
+        if let Some(load) = previous
+            && index + 1 < word_count
+            && let Some((register, target)) = decode_addiu_zero(load)
+            && canonical_ra_jalr_register(instruction) == Some(register)
+            && decode_old_mips_kernel_call(target) == Some((2, 2))
+            && let Some(address) = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_mul(4))
+                .and_then(|offset| blob.base.checked_add(offset))
+        {
+            sites.push(address);
+        }
+        previous = Some(instruction);
+    }
+    sites
+}
+
+/// Keep the filtered site list across slices without rescanning large images.
+/// An image reload clears this cache. Runtime DLLs append a new mapped-blob
+/// slot, while a changed backing pointer/length/generation gets a new key.
+/// A new in-place guest callsite or same-slice DLL has no hook in the current
+/// native lease and remains fail-closed; live bytes gate every cached site.
+#[cfg(feature = "unicorn")]
+fn cached_direct_decoded_exit_sites(
+    cache: &mut HashMap<(usize, u32, usize, u64, usize), Vec<u32>>,
+    blobs: &[MappedBlob],
+) -> Vec<u32> {
+    let mut sites = Vec::new();
+    for (slot, blob) in blobs.iter().enumerate() {
+        if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
+            continue;
+        }
+        let (generation, identity) = blob.bytes.sealed_pin().map_or_else(
+            || (0, blob.bytes.as_ptr() as usize),
+            |backing| (backing.generation(), Rc::as_ptr(&backing) as usize),
+        );
+        let key = (slot, blob.base, blob.bytes.len(), generation, identity);
+        sites.extend_from_slice(
+            cache
+                .entry(key)
+                .or_insert_with(|| direct_decoded_exit_sites_in_blob(blob)),
+        );
+    }
+    sites.sort_unstable();
+    sites.dedup();
+    sites
+}
+
+#[cfg(all(test, feature = "unicorn"))]
+#[test]
+fn decoded_exit_site_cache_keys_backing_identity_and_omits_new_in_place_sites() {
+    fn blob(name: &str, base: u32, second_site: bool) -> MappedBlob {
+        let mut bytes = vec![0; 0x20];
+        bytes[0..4].copy_from_slice(&0x2408_f3fa_u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&0x0100_f809_u32.to_le_bytes());
+        if second_site {
+            bytes[8..12].copy_from_slice(&0x2408_f3fa_u32.to_le_bytes());
+            bytes[12..16].copy_from_slice(&0x0100_f809_u32.to_le_bytes());
+        }
+        MappedBlob {
+            name: name.to_owned(),
+            base,
+            bytes: bytes.into(),
+        }
+    }
+
+    let mut blobs = vec![blob("image:main", 0x0040_1000, false)];
+    let mut cache = HashMap::new();
+    assert_eq!(
+        cached_direct_decoded_exit_sites(&mut cache, &blobs),
+        vec![0x0040_1004]
+    );
+    let bytes = blobs[0].bytes.as_mut_owned().expect("owned fixture");
+    bytes[8..12].copy_from_slice(&0x2408_f3fa_u32.to_le_bytes());
+    bytes[12..16].copy_from_slice(&0x0100_f809_u32.to_le_bytes());
+    // Newly synthesized sites have no hook in this load and fail closed.
+    assert_eq!(
+        cached_direct_decoded_exit_sites(&mut cache, &blobs),
+        vec![0x0040_1004]
+    );
+
+    blobs.push(blob("dll:new", 0x0050_1000, false));
+    assert_eq!(
+        cached_direct_decoded_exit_sites(&mut cache, &blobs),
+        vec![0x0040_1004, 0x0050_1004]
+    );
+    // Keep the old allocation alive so the replacement cannot reuse its
+    // backing identity even though base, slot and byte length match.
+    let old_backing = std::mem::replace(
+        &mut blobs[0].bytes,
+        blob("image:replacement", 0x0040_1000, true).bytes,
+    );
+    assert_eq!(
+        cached_direct_decoded_exit_sites(&mut cache, &blobs),
+        vec![0x0040_1004, 0x0040_100c, 0x0050_1004]
+    );
+    drop(old_backing);
 }
 
 #[cfg(feature = "unicorn")]
@@ -20552,31 +20706,38 @@ fn canonical_ra_jalr_register(instruction: u32) -> Option<u32> {
     (instruction & !(0x1f << 21) == 0x0000_f809).then_some((instruction >> 21) & 0x1f)
 }
 
+#[cfg(all(test, feature = "unicorn"))]
+#[test]
+fn decoded_exit_jalr_requires_canonical_ra_write_and_reserved_zero_bits() {
+    assert_eq!(canonical_ra_jalr_register(0x0100_f809), Some(8));
+    assert_eq!(canonical_ra_jalr_register(0x0100_0009), None); // rd != ra
+    assert_eq!(canonical_ra_jalr_register(0x0101_f809), None); // rt != zero
+    assert_eq!(canonical_ra_jalr_register(0x0100_f849), None); // shamt != zero
+    assert_eq!(canonical_ra_jalr_register(0x0500_f809), None); // opcode != SPECIAL
+}
+
 #[cfg(feature = "unicorn")]
-fn latch_decoded_exit_call_witness<D>(
+fn stage_decoded_exit_call_witness<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     call_pc: u32,
     current_thread: &NativeCurrentThread,
     owner: Option<crate::ce::object::ProcessBirthKey>,
     direct_load_required: bool,
-    witness: &RefCell<Option<DecodedExitCallWitness>>,
+    pending: &RefCell<Option<DecodedExitCallWitness>>,
+    completed: &RefCell<Option<DecodedExitCallWitness>>,
 ) {
     // Read the executing native bytes, not MappedCodeIndex's preferred static
     // snapshot: guest-modified code may no longer be the candidate we scanned.
     let live_instruction = read_unicorn_u32(uc, call_pc);
-    let Some(source_register) = live_instruction.and_then(canonical_ra_jalr_register)
-    else {
-        if witness
-            .borrow()
-            .as_ref()
-            .is_some_and(|previous| previous.call_pc == call_pc)
-        {
-            witness.borrow_mut().take();
-        }
+    let Some(source_register) = live_instruction.and_then(canonical_ra_jalr_register) else {
+        pending.borrow_mut().take();
+        completed.borrow_mut().take();
         return;
     };
-    // A later canonical JALR cannot reuse authority from an earlier call.
-    witness.borrow_mut().take();
+    // A later candidate cannot reuse authority from an earlier call, whether
+    // it validates or not. Promotion occurs only at this call's delay slot.
+    pending.borrow_mut().take();
+    completed.borrow_mut().take();
     let Some(target) = read_mips_gpr(uc, source_register) else {
         return;
     };
@@ -20598,7 +20759,7 @@ fn latch_decoded_exit_call_witness<D>(
     if caller.thread_id() != thread_id {
         return;
     }
-    *witness.borrow_mut() = Some(DecodedExitCallWitness {
+    *pending.borrow_mut() = Some(DecodedExitCallWitness {
         call_pc,
         sp: read_mips_reg(uc, RegisterMIPS::SP),
         source_register,
@@ -20607,6 +20768,35 @@ fn latch_decoded_exit_call_witness<D>(
         owner,
         direct_load_verified,
     });
+}
+
+#[cfg(feature = "unicorn")]
+fn promote_decoded_exit_call_witness<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    delay_pc: u32,
+    current_thread: &NativeCurrentThread,
+    owner: Option<crate::ce::object::ProcessBirthKey>,
+    pending: &RefCell<Option<DecodedExitCallWitness>>,
+    completed: &RefCell<Option<DecodedExitCallWitness>>,
+) {
+    let Some(call) = pending.borrow_mut().take() else {
+        return;
+    };
+    let expected_ra = call.call_pc.checked_add(8);
+    if call.call_pc.checked_add(4) != Some(delay_pc)
+        || expected_ra.is_none()
+        || uc
+            .reg_read(RegisterMIPS::RA)
+            .ok()
+            .and_then(|ra| u32::try_from(ra).ok())
+            != expected_ra
+        || read_mips_reg(uc, RegisterMIPS::SP) != call.sp
+        || current_thread.get() != (call.caller.thread_id(), Some(call.caller))
+        || owner != Some(call.owner)
+    {
+        return;
+    }
+    *completed.borrow_mut() = Some(call);
 }
 
 /// Exception-only, bounded observations. This does not capture hidden native
@@ -80798,6 +80988,40 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn decoded_pseudo_exit_sparse_mode_retires_child() -> crate::Result<()> {
+        if !run_sparse_test_in_isolated_process("decoded_pseudo_exit_sparse_mode_retires_child") {
+            return Ok(());
+        }
+        let (mut kernel, mut cpu, launch, _worker_handle, _heap_ptr) =
+            decoded_child_pseudo_exit_cpu("decoded-child-sparse.exe")?;
+        let entry = cpu.entry.expect("sparse fixture entry");
+        cpu.trampoline_jumps.push(super::MipsTrampolineJump {
+            origin: entry + 0x100,
+            stub: entry + 0x104,
+            byte_len: 0x10,
+        });
+        assert!(!cpu.trampoline_origins_all_direct());
+        assert_eq!(
+            super::select_unicorn_code_hook_mode(false, false, true, false),
+            super::UnicornCodeHookMode::Sparse
+        );
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        cpu.run_until_import_trap_with_framebuffer_limits(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        )?;
+        assert!(cpu.active_process_execution_completed());
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(3));
+        Ok(())
+    }
+
+    #[test]
     fn decoded_pseudo_exit_refuses_unrestorable_backing_before_exit_effects() -> crate::Result<()> {
         let (mut kernel, mut cpu, launch, worker_handle, heap_ptr) =
             decoded_child_pseudo_exit_cpu("decoded-child-backing.exe")?;
@@ -80866,7 +81090,8 @@ mod unicorn_tests {
     #[test]
     fn decoded_forged_ra_branch_to_zero_cannot_complete_child_exit() -> crate::Result<()> {
         let mut kernel = phase1_kernel("decoded-forged-ra.exe")?;
-        let launch = kernel.queue_process_launch(Some("\\Test\\decoded-forged-ra.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\decoded-forged-ra.exe".to_owned()), None);
         let birth = launch.process_birth.expect("child birth");
         let _ = kernel.take_pending_process_launches();
         kernel.set_current_process_id(launch.process_id);
@@ -80877,7 +81102,7 @@ mod unicorn_tests {
         for (index, word) in [
             0x2405_0003,                        // addiu a1,zero,3
             0x2404_0042,                        // addiu a0,zero,66
-            0x3c1f_0000 | (return_pc >> 16),   // forge RA high
+            0x3c1f_0000 | (return_pc >> 16),    // forge RA high
             0x37ff_0000 | (return_pc & 0xffff), // forge RA low
             0x0000_0008,                        // jr zero, never reach JALR below
             0,
@@ -80927,7 +81152,119 @@ mod unicorn_tests {
             super::ChildProcessRunOutcome::Parked
         ));
         assert!(kernel.handles.process_execution_live_by_birth(birth));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decoded_static_exit_site_with_different_live_target_cannot_exit() -> crate::Result<()> {
+        let (mut kernel, mut cpu, launch, _worker_handle, _heap_ptr) =
+            decoded_child_pseudo_exit_cpu("decoded-stale-target.exe")?;
+        let birth = launch.process_birth.expect("child birth");
+        let entry = cpu.entry.expect("fixture entry");
+        let saved = cpu.saved_context.as_mut().expect("fixture context");
+        // Start at the static exit-shaped JALR without executing its preceding
+        // ADDIU. The mapped words and eventual RA still look like an exit,
+        // but the live source GPR points to zero, not the encoded method.
+        saved.pc = entry + 8;
+        saved.regs.regs[8] = 0;
+        saved.regs.regs[4] = crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE;
+        saved.regs.regs[5] = 3;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        assert!(
+            attempt.result.is_err(),
+            "live target mismatch must reject exit"
+        );
+        assert!(!cpu.active_process_execution_completed());
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_child_forged_ra_branch_to_zero_cannot_report_exit() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        let child_path = test_root.join("child.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        let entry = 0x0040_1000_u32;
+        let return_pc = entry + 0x24;
+        let mut child_bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x2405_0003,                        // addiu a1,zero,3
+            0x2404_0042,                        // addiu a0,zero,66
+            0x3c1f_0000 | (return_pc >> 16),    // forge RA high
+            0x37ff_0000 | (return_pc & 0xffff), // forge RA low
+            0x0000_0008,                        // jr zero, never reach JALR
+            0,
+            0x2408_f3fa, // exit-shaped addiu t0,zero,-3078
+            0x0100_f809, // exit-shaped jalr t0, never executed
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut child_bytes, 0x200 + index * 4, word);
+        }
+        std::fs::write(&child_path, child_bytes).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("child birth");
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let error = super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        )
+        .expect_err("forged child exit must fail closed");
+        assert!(matches!(
+            error,
+            Error::HostExitAuthorityRecoveryRequired { .. }
+        ));
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessChildReturned"
+                && record.process_id == Some(launch.process_id)
+        }));
         Ok(())
     }
 
