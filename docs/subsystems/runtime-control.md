@@ -11,6 +11,9 @@ commands/checkpoints. The CPU facade owns both execution glue and much of the
 current scheduling/parked-process logic. Pre-run maintenance and slice-end
 rotation can change owners; a debug snapshot is not necessarily live state.
 The installed BED2 fallback differs from the failed 650 experimental source.
+`DesktopRuntime` (its enum, methods and desktop selection) lives in
+`src/main.rs`; the Windows host input and presenter it composes live in
+`src/ce/win32_desktop.rs`, not under `src/emulator/`.
 
 ## Target owner and interfaces
 
