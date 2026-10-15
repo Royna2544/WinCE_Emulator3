@@ -228,8 +228,14 @@ close only their named gates, not Stage 2 or live acceptance.
   freezes creation ownership, preflights native ordinals 246/688/690, and
   birth-gates explicit HWND post and typed-payload retirement. Five pre-fix
   reds and the failed first broad attempt remain preserved; corrected release
-  passed 1,967/0/9 and no-feature 1,427/0/3. W-B1b remote input/host teardown,
-  broadcast, HWND timers, hotkeys, sent/paint/modal producers, native continuation
+  passed 1,967/0/9 and no-feature 1,427/0/3. W-B1b remote touch/key input
+  remains a separate test-first gate: an explicit host HWND is not a guest
+  Get/Peek retrieval filter, coordinate touch retains live capture/hit-test,
+  blocked-wait/modal HWNDs are fallback hints only, and keys use live focus or
+  active ownership. Stale-capture DOWN versus MOVE/UP needs bounded controls;
+  full capture retirement, implicit gesture ownership and owner-filtered host
+  teardown are separate open gates. Broadcast, HWND timers, hotkeys,
+  sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
   remain unpinned, while synchronous finite inline timeout paths are outside

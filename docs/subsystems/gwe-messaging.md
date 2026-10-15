@@ -43,7 +43,24 @@ W-B1a preflights the captured native caller birth for `CreateWindowExW`, `Create
 Verified explicit HWND posts enter the existing FIFO as Birth-owned work, committing status, ready time, trace, and exact-birth wake together; stale ordinary HWNDs publish nothing, while desktop/legacy compatibility stays explicit.
 Typed-payload recipient and native CreateWindow callback ownership use the frozen process birth, never a current numeric PID lookup; CE6 return/LastError parity remains unverified where local GWES source is silent.
 Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible; it must not recursively destroy a B-owned descendant or sweep by numeric TID.
-W-B1b later validates remote touch/key target birth before focus or input mutation, explicitly drops stale input without rerouting, and adds owner-filtered host teardown.
+W-B1b remote touch/key ownership is still test-first and open. An explicitly
+host-targeted HWND has a frozen recipient: if it is stale or destroyed, consume
+and drop that input before focus, state, queue/status, timestamp, post trace or
+wake publication; never reroute it to a later same-TID window. A guest
+`GetMessage`/`PeekMessage` HWND is only a retrieval filter, never external-input
+destination or drop authority. Coordinate-only touch instead selects a live
+capture window or delivery-time desktop hit-test; a blocked-wait/modal HWND is
+only a fallback hint after those checks. Keys select a live focus/active owner,
+not mouse capture.
+
+For this bounded input gate, stale capture must not authorize a recycled
+recipient: a fresh DOWN can use a live coordinate hit-test, while MOVE/UP tied
+to the stale gesture are dropped rather than reassigned. Full capture
+retirement on exit, implicit gesture ownership and owner-filtered host teardown
+remain separate gates. These are source-test policies, not established CE6
+implementation parity. The CE-family [GetMessage retrieval-filter description](https://learn.microsoft.com/en-us/previous-versions/ms960724%28v%3Dmsdn.10%29)
+and [SetCapture mouse/stylus description](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms924858%28v%3Dmsdn.10%29)
+inform the boundary but do not verify this emulator's CE6 behavior.
 Broadcast, HWND timers, hotkeys, sent/paint/modal producers, full GWES, and live iNavi acceptance remain open.
 Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
 

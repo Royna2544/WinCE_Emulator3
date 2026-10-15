@@ -218,6 +218,15 @@ acceptance only; guest delivery/consumption requires separate evidence. Host
 adapters cannot force a WNDPROC, signal an app-specific completion event or
 raise priority because a window is visible.
 
+For external input, a guest `GetMessage`/`PeekMessage` HWND is a retrieval
+filter, not authority to choose or reject the input destination. Coordinate
+touch resolves against live capture and delivery-time hit-testing; a blocked-
+wait or modal HWND can only be a fallback hint after those checks. An explicit
+host-targeted HWND is different: its frozen owner must still be live, or that
+event is consumed and dropped without rerouting. Keys follow a live focus or
+active owner, not mouse capture. Source gates must test these distinct routes
+without treating CE-family API documentation as proof of CE6 internals.
+
 ## A6. Failure, resource and evidence policy
 
 Every owner has explicit release/cancellation rules and bounded transient
