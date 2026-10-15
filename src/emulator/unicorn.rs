@@ -75942,6 +75942,164 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red: finite Sleep must defer an active sent-message callout until its receiver wakes"]
+    fn native_finite_sleep_defers_active_sent_callout_for_same_receiver() -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::ORD_SLEEP;
+        use crate::emulator::imports::{ImportModuleKind, ImportTrap};
+
+        let trap = super::IMPORT_TRAP_BASE + 0x400;
+        let mut image_bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x3c19_0000 | (trap >> 16),
+            0x3739_0000 | (trap & 0xffff),
+            0x0320_f809, // jalr t9: real MIPS call into the Sleep import
+            0,
+            0x1000_ffff, // displaced peer spins until the bounded count stop
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut image_bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("sleep-sent-callout.exe", &image_bytes)?;
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let receiver_thread = super::MAIN_GUEST_THREAD_ID;
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_by_id(receiver_thread)
+            .expect("boot receiver birth");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(receiver_thread);
+        cpu.import_traps.insert(ImportTrap {
+            address: trap,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(ORD_SLEEP),
+            name: Some("Sleep".to_owned()),
+            iat_va: 0,
+        });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let entry = cpu.entry.expect("fixture entry");
+        let sleep_return_pc = entry + 16;
+        let receiver_sp = cpu.stack_top.expect("fixture stack") - 0x100;
+        let mut receiver_regs = super::MipsGuestContext::zero();
+        receiver_regs.regs[4] = 10_000;
+        receiver_regs.regs[16] = 0xa1a1_0010;
+        receiver_regs.regs[29] = receiver_sp;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: entry,
+            regs: receiver_regs,
+        });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.running_guest_thread = Some((
+            receiver_thread,
+            crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        ));
+
+        // A ready displaced peer prevents the implementation's inline Sleep
+        // shortcut and gives the native attempt a real context to run next.
+        let (peer_handle, peer_thread) = kernel.create_guest_thread(sleep_return_pc, 0, false);
+        let peer_birth = kernel
+            .handles
+            .thread_birth_key_by_id(peer_thread)
+            .expect("live peer birth");
+        let mut peer_regs = super::MipsGuestContext::zero();
+        peer_regs.regs[29] = receiver_sp - 0x100;
+        cpu.suspended_guest_thread = Some(super::SuspendedGuestThread {
+            thread_id: peer_thread,
+            thread_birth: Some(peer_birth),
+            thread_handle: Some(peer_handle),
+            regs: peer_regs,
+            pc: sleep_return_pc,
+        });
+
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread,
+            "FINITE_SLEEP_RECEIVER",
+            "",
+            None,
+            0,
+            0,
+            0,
+        );
+        let wndproc = entry + 0x40;
+        assert!(kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc).is_some());
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        attempt.result?;
+        assert!(attempt.report.attempt_id().is_some(), "native MIPS attempt did not start");
+        let sleep = cpu
+            .blocked_wait_threads
+            .iter()
+            .find(|wait| {
+                wait.thread_id == receiver_thread && matches!(wait.kind, super::BlockedWaitKind::Sleep)
+            })
+            .cloned()
+            .expect("real MIPS Sleep must retain a native wait payload");
+        assert_eq!(sleep.return_pc, sleep_return_pc);
+        assert_eq!(sleep.regs.regs[16], 0xa1a1_0010);
+        assert_eq!(sleep.regs.regs[29], receiver_sp);
+        assert_eq!(sleep.timeout_ms, 10_001);
+        let scheduler_wait = kernel
+            .blocked_waiter(sleep.wait_id)
+            .expect("Sleep must retain its exact scheduler wait");
+        assert_eq!(scheduler_wait.owner_birth, Some(receiver_birth));
+        assert_eq!(cpu.current_thread_id, peer_thread);
+
+        // This is the kernel/GWE transaction produced by a no-timeout
+        // cross-process SendMessageW. The sender import itself is not run by
+        // this receiver-side fixture; the active main-loop selector is.
+        let launch = kernel.queue_process_launch(Some("\\Test\\sleep-sender.exe".to_owned()), None);
+        let _ = kernel.take_pending_process_launches();
+        let receiver_process = kernel.current_process_id();
+        kernel.set_current_process_id(launch.process_id);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                launch.thread_id,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0x71,
+                0x55,
+                0,
+                None,
+            )
+            .expect("cross-process no-timeout send queued");
+        kernel.set_current_process_id(receiver_process);
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert!(cpu.tracked_thread_ids().contains(&receiver_thread));
+
+        let entered = cpu.prepare_active_sent_message_callout(&mut kernel);
+        assert!(
+            !entered,
+            "active sent-callout selector entered WNDPROC for finite-Sleep receiver: wait={} send={} active_send={:?}",
+            sleep.wait_id,
+            send_id,
+            kernel.gwe.active_sent_message_id(receiver_thread),
+        );
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert!(kernel.blocked_waiter(sleep.wait_id).is_some());
+        assert_eq!(cpu.blocked_wait_threads.len(), 1);
+        assert_eq!(cpu.blocked_wait_threads[0].wait_id, sleep.wait_id);
+        assert_eq!(cpu.blocked_wait_threads[0].regs, sleep.regs);
+        assert_eq!(cpu.blocked_wait_threads[0].return_pc, sleep.return_pc);
+        assert_eq!(cpu.current_thread_id, peer_thread);
+        Ok(())
+    }
+
+    #[test]
     fn active_saved_context_enters_pending_sent_message_callout() -> crate::Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
