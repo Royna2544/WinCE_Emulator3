@@ -4,21 +4,39 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-15 Live-run preparation (no app run)
+## 2026-10-15 Live-run preparation and aborted backup (no app run)
 
-The current D: source has a [final source/build seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-over 21 required files and a preserved, clean-built release EXE/PDB pair with
-matching RSDS. The pre-run Rust telemetry seal passed 1,996/0/9 release and
-1,456/0/3 no-default tests across 18 result blocks each, plus Unicorn-only
-and desktop-without-trace checks. The narrow live guest stable-page budget and
-per-server debug-summary publication stamp are source-tested, not guest-memory
-or cross-endpoint snapshot acceptance. The separate offline safety gate passed
-97 preflight, 40 runner, 14 backup and 9 observer controls. The package-scoped
-clean build removed 9.6 GiB of disposable output after retaining evidence;
-the new binary and symbols are preserved outside `target/`. See the
-[ledger](docs/evidence/ledger.md) for hashes and limitations. No iNavi guest,
-writable mount, real ZIP backup or live observer was run for this gate. A fresh,
-distinct one-run approval remains pending.
+The current D: source has a [22-file script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+(SHA-256 `1DC1537217C621EBD1B8C2D5E682C50B9CFA6FA131D22CC3202F54C7C5651F97`)
+and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
+(SHA-256 `A3746E1729186997CC684030E5E5BA772A1A3038132F49E5BAE9A04C6A21D580`).
+The W-B1c-scoped patch is SHA-256
+`8CF8CA60072D4F0ECDA8B21D5400A6B00F25344671D8082E374145F19CDAD18C`.
+The [offline script gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-offline-gate.raw.txt)
+passed 123 preflight, 40 runner, 14 backup, 9 observer and atomic JSON overwrite
+controls. Rust/Cargo and `.gitattributes` are unchanged from the prior clean
+build; its preserved EXE/PDB pair and matching RSDS are carried forward, **not
+rebuilt**. The interim a01 seal is superseded and not live-usable; the earlier
+[21-file seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
+and its 97/40/14/9 offline gate remain historical evidence. The pre-run Rust
+telemetry gate passed 1,996/0/9 release and 1,456/0/3 no-default tests, plus
+two alternate feature checks. The narrow guest stable-page budget and
+per-server summary stamp remain source-tested, not live acceptance.
+
+Approval `call_9b35e9d31fdf402ea082a3eb6a40ae16` started an adjacent ZIP
+backup, but the old `File.Replace` helper failed after verifying only the SD
+archive. The [aborted-backup disposition](evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)
+records its 5,973,898,396 bytes and SHA-256
+`6032F822551CFB5F28ED079CB5B41CB02B1585F8AFF16EA303B54A74B0C2C949`;
+no ResidentFlash or EmulatorRoot ZIP, completed triplet, runner or guest launch
+followed. The incomplete SD ZIP remains adjacent and cannot be reused. The
+approval was withdrawn/void; a deny-only `withdrawn` row brought both
+byte-identical ledgers to seven rows (SHA-256
+`53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`).
+See the [ledger](docs/evidence/ledger.md) for the evidence chain and limits.
+A new, distinct approval is required before any further backup or launch.
+No fresh Claude review of the a02 seal was available because that session
+reached its limit; this source gate is not an approval or live acceptance.
 
 ## 2026-10-15 Stage 3 source gates
 

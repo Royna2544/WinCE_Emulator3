@@ -57,15 +57,25 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   any/all mode of the TID 10 wait; wait id 833 needs a boot-forward trace. Each
   writable-mount live run needs fresh user approval and a verified backup
   (`scripts/backup_rw_mounts.ps1`).
-- The current combined source, release EXE/PDB and parameterized bounded runner
-  have passed the separate [source/build seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-  and offline safety gates; the narrow live guest stable-page budget scalar is
-  source-tested. No new iNavi, writable-mount or real backup run followed.
-  Before the next mounted observation, obtain one fresh, distinct approval and
-  independently check its chat citation; create and SHA-verify new adjacent
-  ZIPs of SD, ResidentFlash and EmulatorRoot after that approval. Keep the
-  writable folders quiescent, validate the post-backup inventory and current
-  mount content, then use only the preserved sealed EXE/PDB in one bounded run.
+- The [22-file script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+  and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
+  supersede the historical 21-file gate for current scripts; the clean-built
+  EXE/PDB pair is unchanged, not rebuilt. The interim a01 seal is not
+  live-usable. The a02 offline gate passed 123
+  preflight, 40 runner, 14 backup, 9 observer and atomic overwrite controls.
+  The attempted adjacent backup under approval
+  `call_9b35e9d31fdf402ea082a3eb6a40ae16` failed after one verified SD ZIP;
+  no ResidentFlash/EmulatorRoot ZIP, runner or guest launch followed. The
+  approval is withdrawn and the SD ZIP is barred from reuse
+  ([disposition](evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)).
+  Preserve the incomplete archive pending the user's disposal choice. Before
+  **any further backup or launch**, obtain a fresh, distinct approval and
+  independently check its chat citation; make and SHA-verify a new complete
+  adjacent triplet after that approval. Keep the writable folders quiescent,
+  validate the post-backup inventory and current mount content, then use only
+  the preserved sealed EXE/PDB in one bounded run.
+  A fresh Claude review of a02 was unavailable because the session reached
+  its limit; do not treat this source gate as supervisory approval.
   Note the required `192.168.0.39:8765` LAN endpoint exposure. Report input
   ACK, drain/post, guest WNDPROC and frame separately, with phase-aligned busy-
   slice MIPS, per-slice setup cost, host RSS/private memory and the narrow guest
