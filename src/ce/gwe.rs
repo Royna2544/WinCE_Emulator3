@@ -3392,6 +3392,12 @@ impl Gwe {
             .map(|window| window.hwnd)
     }
 
+    /// The explicitly stored active window, without GetActiveWindow's
+    /// compatibility fallback to focus or an arbitrary top-level window.
+    pub fn get_stored_active_window(&self) -> Option<u32> {
+        self.active_window
+    }
+
     pub fn active_window_is_within(&self, hwnd: u32) -> bool {
         self.active_window
             .is_some_and(|active| active == hwnd || self.is_child(hwnd, active))
