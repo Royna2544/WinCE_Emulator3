@@ -72883,6 +72883,152 @@ mod unicorn_tests {
         u32::from_le_bytes(bytes.try_into().unwrap())
     }
 
+    fn phase1_terminate_import_cpu(
+        kernel: &CeKernel,
+        launch: &crate::ce::kernel::PendingProcessLaunch,
+        handle: u32,
+        stamp_birth: bool,
+        name: &str,
+    ) -> crate::Result<(super::UnicornMips, u32)> {
+        let trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+        let mut bytes = tiny_mips_spinner_pe();
+        let words = [
+            0x3c19_0000 | (trap >> 16),    // lui t9, TerminateProcess trap high
+            0x3739_0000 | (trap & 0xffff), // ori t9, t9, trap low
+            0x0320_f809,                   // jalr t9
+            0,                             // delay slot
+            0x2610_0001,                   // observable next guest instruction
+            0x1000_ffff,                   // bounded safety spinner
+            0,
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.owned_process_launch = Some(launch.clone());
+        cpu.set_initial_thread_id(launch.thread_id);
+        cpu.import_traps
+            .insert(crate::emulator::imports::ImportTrap {
+                address: trap,
+                module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(crate::ce::coredll_ordinals::ORD_TERMINATE_PROCESS),
+                name: Some("TerminateProcess".to_owned()),
+                iat_va: 0,
+            });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let entry = cpu.entry.expect("fixture entry");
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[4] = handle;
+        regs.regs[5] = 0x4a;
+        regs.regs[29] = cpu.stack_top.expect("fixture stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        if stamp_birth {
+            stamp_synthetic_saved_context(&mut cpu, kernel);
+        }
+        cpu.running_guest_thread = Some((launch.thread_id, launch.thread_handle));
+        Ok((cpu, entry))
+    }
+
+    #[test]
+    fn native_pseudo_terminate_import_accepts_verified_caller() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("native-pseudo-terminate.exe")?;
+        let launch = kernel
+            .queue_process_launch(Some("\\Test\\native-pseudo-terminate.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("child birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+        let (mut cpu, entry) = phase1_terminate_import_cpu(
+            &kernel,
+            &launch,
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            true,
+            "native-pseudo-terminate.exe",
+        )?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 16),
+                live_pump: false,
+            },
+        );
+        attempt.result?;
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(birth.process_id()),
+            Some(true)
+        );
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x4a));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn native_missing_birth_terminate_attempt_fails_before_kernel_effects() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("native-missing-birth-terminate.exe")?;
+        let launch = kernel.queue_process_launch(
+            Some("\\Test\\native-missing-birth-terminate.exe".to_owned()),
+            None,
+        );
+        let birth = launch.process_birth.expect("child birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel.create_window_ex_w(
+            launch.thread_id,
+            "NATIVE_MISSING_BIRTH",
+            "survivor",
+            None,
+            0,
+            0,
+            0,
+        );
+        assert!(kernel.gwe.is_window(hwnd));
+        kernel.threads.set_last_error(launch.thread_id, 0x7171_1234);
+        let (mut cpu, entry) = phase1_terminate_import_cpu(
+            &kernel,
+            &launch,
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            false,
+            "native-missing-birth-terminate.exe",
+        )?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 16),
+                live_pump: false,
+            },
+        );
+        // A missing saved-context birth is refused before native entry, so
+        // this integration control cannot reach the later import hook.
+        match attempt.result {
+            Err(crate::Error::Backend(message)) => assert!(
+                message.contains("saved worker CPU context belongs to a retired thread birth"),
+                "{message}"
+            ),
+            other => panic!("missing birth did not fail at native preflight: {other:?}"),
+        }
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(kernel.threads.get_last_error(launch.thread_id), 0x7171_1234);
+        Ok(())
+    }
+
     #[test]
     fn self_real_handle_terminate_import_stops_before_next_guest_instruction() -> crate::Result<()>
     {
@@ -78952,6 +79098,127 @@ mod unicorn_tests {
         ));
         assert_eq!(kernel.current_process_state().exit_code, 3);
         assert!(kernel.current_process_state().signaled);
+    }
+
+    #[test]
+    fn decoded_self_pid_collision_exits_caller_not_foreign_handle_target() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let foreign_process_id = 0x4000;
+        let foreign_handle = kernel.handles.create_process(foreign_process_id);
+        assert_eq!(kernel.process_id(foreign_handle), Some(foreign_process_id));
+        assert_ne!(foreign_handle, foreign_process_id);
+        assert_ne!(
+            foreign_handle,
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
+        );
+
+        // The caller's numeric PID is also a valid public handle for another
+        // process. The decoded self-exit must classify the PID before lookup.
+        let caller_handle = kernel.handles.create_process(foreign_handle);
+        let caller_process = kernel
+            .handles
+            .process_birth_key_for_handle(caller_handle)
+            .expect("caller process birth");
+        kernel
+            .handles
+            .register_boot_thread(0x4001, caller_process)
+            .expect("caller thread birth");
+        let caller_birth = kernel
+            .live_thread_birth_key_by_id(0x4001)
+            .expect("live caller birth");
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: foreign_handle,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        assert_eq!(kernel.current_process_birth_key(), Some(caller_process));
+        let exit = super::EncodedKernelExit {
+            target: 0xffff_f3fa,
+            api_set: 2,
+            method: 2,
+            process: foreign_handle,
+            exit_code: 0x77,
+            caller: 0x0048_fa90,
+        };
+
+        assert!(super::UnicornMips::terminate_decoded_kernel_process(
+            &mut kernel,
+            &exit,
+            Some(caller_birth),
+            Some(caller_process),
+        ));
+        assert_eq!(kernel.current_process_state().exit_code, 0x77);
+        assert!(kernel.current_process_state().signaled);
+        assert_eq!(
+            kernel.process_exit_code_for_handle(caller_handle),
+            Some(0x77)
+        );
+        assert_eq!(
+            kernel.process_exit_code_for_handle(foreign_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(foreign_handle, 1), Some(false));
+    }
+
+    #[test]
+    fn decoded_foreign_or_stale_caller_cannot_exit_selected_process() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let foreign_caller = kernel.live_thread_birth_key_by_id(1).expect("boot caller");
+        let selected_handle = kernel.handles.create_process(67);
+        let selected_birth = kernel
+            .handles
+            .process_birth_key_for_handle(selected_handle)
+            .expect("selected process birth");
+        kernel
+            .handles
+            .register_boot_thread(67, selected_birth)
+            .expect("selected caller birth");
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let selected_before = kernel.current_process_state();
+        let exit = super::EncodedKernelExit {
+            target: 0xffff_f3fa,
+            api_set: 2,
+            method: 2,
+            process: crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            exit_code: 0x77,
+            caller: 0x0048_fa90,
+        };
+
+        // A is still live but does not own B's native CPU lease.
+        assert!(kernel.is_live_thread_birth(foreign_caller));
+        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
+            &mut kernel,
+            &exit,
+            Some(foreign_caller),
+            Some(selected_birth),
+        ));
+        assert_eq!(kernel.current_process_state(), selected_before);
+        assert_eq!(
+            kernel.process_exit_code_for_handle(selected_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        // Retirement also invalidates a captured A birth while B stays selected.
+        assert!(kernel.mark_guest_thread_exited_by_id(1, 0x11));
+        assert!(!kernel.is_live_thread_birth(foreign_caller));
+        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
+            &mut kernel,
+            &exit,
+            Some(foreign_caller),
+            Some(selected_birth),
+        ));
+        assert_eq!(kernel.current_process_state(), selected_before);
+        assert_eq!(
+            kernel.process_exit_code_for_handle(selected_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(selected_handle, 67), Some(false));
     }
 
     #[test]
