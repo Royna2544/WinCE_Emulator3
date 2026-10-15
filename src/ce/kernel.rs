@@ -6964,6 +6964,11 @@ impl CeKernel {
             // Retire only input published to this incarnation. Numeric TID
             // cleanup would also destroy a replacement task's queue.
             self.gwe.retire_thread_birth(key);
+            for send_id in self.gwe.terminate_sent_messages_to_birth(key) {
+                self.queue_send_reply_wake_candidates(send_id);
+            }
+            // Explicit legacy HWND fixtures have no frozen window birth, but
+            // their finite-Sleep send still carries an exact frame owner.
             for send_id in self.gwe.terminate_deferred_sent_messages_to_birth(key) {
                 self.queue_send_reply_wake_candidates(send_id);
             }
@@ -8271,7 +8276,10 @@ impl CeKernel {
     }
 
     pub fn thread_has_pending_sent_message(&self, thread_id: u32) -> bool {
-        self.gwe.has_pending_sent_message_for_thread(thread_id)
+        match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self.gwe.has_pending_sent_message_for_birth(birth),
+            None => self.gwe.has_pending_sent_message_for_thread(thread_id),
+        }
     }
 
     pub fn select_ready_blocked_waiter(
@@ -9310,9 +9318,14 @@ impl CeKernel {
         self.peek_ready_sent_message_w_filtered_with_sleep_frame(
             thread_id, hwnd, min_msg, max_msg,
         )?;
-        let message = self
-            .gwe
-            .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        let message = match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self
+                .gwe
+                .take_sent_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
+            None => self
+                .gwe
+                .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg),
+        }?;
         self.gwe
             .record_thread_dispatched(thread_id, self.timers.tick_count());
         self.record_message_op(
@@ -9344,9 +9357,16 @@ impl CeKernel {
         max_msg: u32,
     ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
         self.expire_timed_out_send_messages();
-        let candidate = self
-            .gwe
-            .peek_sent_message_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg)?;
+        let candidate = match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self
+                .gwe
+                .peek_sent_message_filtered_with_sleep_frame_for_birth(
+                    birth, hwnd, min_msg, max_msg,
+                ),
+            None => self
+                .gwe
+                .peek_sent_message_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg),
+        }?;
         if let Some(frame) = candidate.2
             && self.live_thread_birth_key_by_id(thread_id) != Some(frame.key().owner_birth())
         {
@@ -9379,9 +9399,14 @@ impl CeKernel {
         {
             return None;
         }
-        let message = self
-            .gwe
-            .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        let message = match self.live_thread_birth_key_by_id(thread_id) {
+            Some(birth) => self
+                .gwe
+                .take_sent_message_filtered_for_birth(birth, hwnd, min_msg, max_msg),
+            None => self
+                .gwe
+                .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg),
+        }?;
         self.gwe
             .record_thread_dispatched(thread_id, self.timers.tick_count());
         self.record_message_op(
@@ -10027,7 +10052,7 @@ impl CeKernel {
         }
         self.gwe.begin_send_message(target_thread);
         let result = self.gwe.send_message(hwnd, msg, wparam, lparam);
-        self.gwe.end_send_message(target_thread);
+        self.gwe.end_direct_send_message(target_thread);
         if msg == crate::ce::gwe::WM_ACTIVATE && wparam != crate::ce::gwe::WA_INACTIVE {
             let _ = self.set_focus(Some(hwnd));
         }
@@ -10129,15 +10154,61 @@ impl CeKernel {
     }
 
     pub fn complete_active_sent_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
-        let was_ready = self
+        let active_id = self.gwe.active_sent_message_id(thread_id)?;
+        if let Some(receiver_birth) = self
             .gwe
-            .active_sent_message_id(thread_id)
-            .is_some_and(|send_id| self.gwe.sent_message_result_ready(send_id));
+            .active_sent_message_receiver_birth(thread_id, active_id)?
+            && self.live_thread_birth_key_by_id(thread_id) != Some(receiver_birth)
+        {
+            return None;
+        }
+        let was_ready = self.gwe.sent_message_reply_recorded(active_id);
         let send_id = self.gwe.complete_active_sent_message(thread_id, result)?;
         if !was_ready {
             self.queue_send_reply_wake_candidates(send_id);
         }
         Some(send_id)
+    }
+
+    /// Complete only the callback belonging to this live receiver birth and
+    /// exact send ID; a nested ancestor or reused numeric TID is not a match.
+    pub fn complete_sent_message_for_birth(
+        &mut self,
+        birth: ThreadBirthKey,
+        send_id: u64,
+        result: u32,
+    ) -> Option<u64> {
+        if !self.is_live_thread_birth(birth) {
+            return None;
+        }
+        let was_ready = self.gwe.sent_message_reply_recorded(send_id);
+        let completed = self
+            .gwe
+            .complete_active_sent_message_for_birth_and_id(birth, send_id, result)?;
+        if !was_ready {
+            self.queue_send_reply_wake_candidates(completed);
+        }
+        Some(completed)
+    }
+
+    /// Complete an exact queued callback for an explicitly numeric legacy
+    /// HWND. Birth-owned callbacks must use `complete_sent_message_for_birth`.
+    pub fn complete_legacy_sent_message_for_id(
+        &mut self,
+        receiver_thread_id: u32,
+        send_id: u64,
+        result: u32,
+    ) -> Option<u64> {
+        let was_ready = self.gwe.sent_message_reply_recorded(send_id);
+        let completed = self.gwe.complete_active_legacy_sent_message_for_id(
+            receiver_thread_id,
+            send_id,
+            result,
+        )?;
+        if !was_ready {
+            self.queue_send_reply_wake_candidates(completed);
+        }
+        Some(completed)
     }
 
     pub fn reply_message(&mut self, thread_id: u32, result: u32) -> bool {
@@ -17338,7 +17409,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: ordinary queued send survives receiver exit and TID reuse"]
     fn ordinary_queued_send_fails_once_on_receiver_exit_before_tid_reuse() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
@@ -17377,10 +17447,16 @@ mod tests {
             None,
             "this is not the finite-Sleep deferred-send case"
         );
+        assert_eq!(
+            kernel.gwe.sent_message(send_id).unwrap().receiver_birth,
+            Some(receiver_birth),
+            "the ordinary send freezes B's HWND birth when queued"
+        );
         assert!(kernel.thread_has_pending_sent_message(receiver_tid));
         assert!(!kernel.sent_message_result_ready(send_id));
 
         assert!(kernel.mark_guest_thread_exited_by_birth(receiver_birth, 0));
+        assert!(!kernel.thread_has_pending_sent_message(receiver_tid));
         assert!(kernel.close_handle(receiver_handle)?);
         assert!(!kernel.handles.contains_thread_birth(receiver_birth));
         let replacement_process = kernel.queue_process_launch(None, None);
@@ -17406,6 +17482,7 @@ mod tests {
             Some(replacement_birth),
             "B-prime really occupies B's numeric TID"
         );
+        assert!(!kernel.thread_has_pending_sent_message(receiver_tid));
 
         let result_ready_after_exit = kernel.sent_message_result_ready(send_id);
         let replacement_delivery = kernel
@@ -17413,9 +17490,7 @@ mod tests {
             .map(|message| (message.hwnd, message.msg));
         let sender_result = kernel.take_completed_send_message_result(send_id);
         assert!(
-            replacement_delivery.is_none()
-                && result_ready_after_exit
-                && sender_result == Some(0),
+            replacement_delivery.is_none() && result_ready_after_exit && sender_result == Some(0),
             "B-prime GetMessage={replacement_delivery:?}; A result-ready after B exit={result_ready_after_exit}; A one failure result={sender_result:?}"
         );
         assert_eq!(
@@ -17423,6 +17498,334 @@ mod tests {
             None,
             "A must not receive the failure result twice"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_birth_send_completion_rejects_ancestor_id_while_inner_active() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .expect("receiver birth");
+        let (_, sender_a) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let (_, sender_b) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "EXACT_SEND_COMPLETION",
+                "receiver",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("receiver HWND");
+        let outer_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_a,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0x9c,
+                0,
+                0,
+                None,
+            )
+            .expect("outer send");
+        let inner_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_b,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0x9d,
+                0,
+                0,
+                None,
+            )
+            .expect("inner send");
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver_birth(receiver_birth, outer_id)
+        );
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver_birth(receiver_birth, inner_id)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(inner_id)
+        );
+        let completed_before = kernel.gwe.stats().send_transaction_completed_count;
+        assert_eq!(
+            kernel.complete_sent_message_for_birth(receiver_birth, outer_id, 0x1111),
+            None,
+            "an older send ID cannot complete the active inner callback"
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(inner_id)
+        );
+        assert_eq!(
+            kernel.gwe.stats().send_transaction_completed_count,
+            completed_before
+        );
+        assert!(!kernel.sent_message_result_ready(outer_id));
+        assert!(!kernel.sent_message_result_ready(inner_id));
+        assert_eq!(
+            kernel.complete_sent_message_for_birth(receiver_birth, inner_id, 0x2222),
+            Some(inner_id)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(outer_id)
+        );
+        assert_eq!(
+            kernel.complete_sent_message_for_birth(receiver_birth, outer_id, 0x1111),
+            Some(outer_id)
+        );
+        assert_eq!(
+            kernel.take_completed_send_message_result(inner_id),
+            Some(0x2222)
+        );
+        assert_eq!(
+            kernel.take_completed_send_message_result(outer_id),
+            Some(0x1111)
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), None);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_exact_send_completion_preserves_nested_direct_and_outer_callbacks() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (_, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_tid)
+            .expect("receiver birth");
+        let (_, sender_a) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let (_, sender_b) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_tid, "LEGACY_EXACT_SEND", "B");
+        let outer_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_a,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0xa1,
+                0,
+                0,
+                None,
+            )
+            .expect("outer legacy send");
+        let inner_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_b,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0xa2,
+                0,
+                0,
+                None,
+            )
+            .expect("inner legacy send");
+        assert_eq!(
+            kernel.gwe.sent_message(outer_id).unwrap().receiver_birth,
+            None
+        );
+        assert_eq!(
+            kernel.gwe.sent_message(inner_id).unwrap().receiver_birth,
+            None
+        );
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_tid, outer_id)
+        );
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_tid, inner_id)
+        );
+        assert!(kernel.reply_message(receiver_tid, 0x2222));
+        assert_eq!(
+            kernel.take_completed_send_message_result(inner_id),
+            Some(0x2222)
+        );
+
+        kernel.gwe.begin_send_message(receiver_tid);
+        assert_eq!(
+            kernel.complete_legacy_sent_message_for_id(receiver_tid, outer_id, 0xbad0),
+            None,
+            "the active inner callback cannot complete an outer send ID"
+        );
+        kernel.gwe.end_direct_send_message(receiver_tid);
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(inner_id)
+        );
+        assert_eq!(
+            kernel.complete_legacy_sent_message_for_id(receiver_tid, inner_id, 0xbad1),
+            Some(inner_id)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(outer_id)
+        );
+        assert!(kernel.gwe.in_send_message(receiver_tid));
+        assert_eq!(
+            kernel.complete_legacy_sent_message_for_id(receiver_tid, inner_id, 0xbad2),
+            None,
+            "a duplicate inner return cannot pop the outer callback"
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(outer_id)
+        );
+        assert_eq!(
+            kernel.complete_sent_message_for_birth(receiver_birth, outer_id, 0xbad3),
+            None,
+            "birth-owned completion cannot claim an explicit legacy HWND"
+        );
+        assert_eq!(
+            kernel.complete_legacy_sent_message_for_id(receiver_tid, outer_id, 0x1111),
+            Some(outer_id)
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), None);
+        assert_eq!(kernel.take_completed_send_message_result(inner_id), None);
+        assert_eq!(
+            kernel.take_completed_send_message_result(outer_id),
+            Some(0x1111)
+        );
+        Ok(())
+    }
+
+    fn consumed_reply_with_active_birth_callback()
+    -> Result<(CeKernel, u32, ThreadBirthKey, u32, u64)> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .expect("receiver birth");
+        let (_, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "EARLY_REPLY_RECEIVER",
+                "B",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("birth-owned HWND");
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0x9e,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send");
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver_birth(receiver_birth, send_id)
+        );
+        assert!(kernel.reply_message(receiver_tid, 0x55aa));
+        assert_eq!(
+            kernel.take_completed_send_message_result(send_id),
+            Some(0x55aa)
+        );
+        assert_eq!(kernel.take_completed_send_message_result(send_id), None);
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(send_id)
+        );
+        assert!(!kernel.gwe.in_send_message(receiver_tid));
+        Ok((
+            kernel,
+            receiver_handle,
+            receiver_birth,
+            receiver_tid,
+            send_id,
+        ))
+    }
+
+    #[test]
+    fn consumed_reply_keeps_exact_birth_callback_completion() -> Result<()> {
+        let (mut kernel, _, receiver_birth, receiver_tid, send_id) =
+            consumed_reply_with_active_birth_callback()?;
+        let completed_before = kernel.gwe.stats().send_transaction_completed_count;
+        assert_eq!(
+            kernel.complete_sent_message_for_birth(receiver_birth, send_id, 0x7788),
+            Some(send_id),
+            "phase=callback-return: consumed ReplyMessage result must not erase active send identity"
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), None);
+        assert_eq!(
+            kernel.gwe.stats().send_transaction_completed_count,
+            completed_before,
+            "callback return cannot issue a second reply"
+        );
+        assert_eq!(kernel.take_completed_send_message_result(send_id), None);
+        Ok(())
+    }
+
+    #[test]
+    fn consumed_reply_receiver_exit_cleans_active_id_before_tid_reuse() -> Result<()> {
+        let (mut kernel, receiver_handle, receiver_birth, receiver_tid, send_id) =
+            consumed_reply_with_active_birth_callback()?;
+        let terminated_before = kernel
+            .gwe
+            .stats()
+            .send_transaction_receiver_terminated_count;
+        assert!(kernel.mark_guest_thread_exited_by_birth(receiver_birth, 0));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            None,
+            "phase=receiver-exit: consumed ReplyMessage result left an orphan active send ID"
+        );
+        assert!(!kernel.gwe.in_send_message(receiver_tid));
+        assert_eq!(
+            kernel
+                .gwe
+                .stats()
+                .send_transaction_receiver_terminated_count,
+            terminated_before,
+            "an already consumed reply needs no failure result"
+        );
+        assert!(kernel.close_handle(receiver_handle)?);
+        let replacement_process = kernel.queue_process_launch(None, None);
+        let replacement_owner = kernel
+            .handles
+            .process_birth_key(replacement_process.process_id)
+            .expect("replacement process birth");
+        let replacement_handle = kernel.handles.try_create_thread_in_birth(
+            replacement_owner,
+            receiver_tid,
+            0x0040_3000,
+            0,
+            false,
+        )?;
+        let replacement_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(replacement_handle)
+            .expect("replacement birth");
+        assert_ne!(receiver_birth, replacement_birth);
+        assert_eq!(
+            kernel.live_thread_birth_key_by_id(receiver_tid),
+            Some(replacement_birth)
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), None);
+        assert!(!kernel.gwe.in_send_message(receiver_tid));
+        assert_eq!(kernel.take_completed_send_message_result(send_id), None);
         Ok(())
     }
 }
