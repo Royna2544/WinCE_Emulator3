@@ -79115,6 +79115,197 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "A13 expected red: a same-birth GetMessage payload must not revive without its wait"]
+    fn saved_context_does_not_resurrect_same_birth_orphaned_get_message_payload()
+    -> crate::Result<()> {
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let sender_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let sender_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread_id)
+            .expect("boot sender birth");
+        let (receiver_handle, receiver_thread_id) =
+            kernel.create_guest_thread(0x0040_3000, 0, false);
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread_id)
+            .expect("live receiver birth");
+        assert_eq!(
+            kernel.handles.thread_birth_key_for_handle(receiver_handle),
+            Some(receiver_birth)
+        );
+        // This is an ordinary live window, not the temporary wait gap while a
+        // modal dialog is being dismissed.
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "ORPHANED_GET_MESSAGE_RECEIVER",
+                "",
+                None,
+                None,
+                0,
+                0,
+                0,
+                crate::ce::gwe::Rect::default(),
+            )
+            .expect("birth-owned live receiver HWND");
+        let started_ms = kernel.timers.tick_count();
+        let get_wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                receiver_birth,
+                receiver_handle,
+                Vec::new(),
+                crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                    hwnd: Some(hwnd),
+                    min_msg: 0,
+                    max_msg: 0,
+                },
+                started_ms,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact receiver GetMessage wait");
+        let mut receiver_regs = super::MipsGuestContext::zero();
+        receiver_regs.regs[16] = 0xb0b0_0011;
+        receiver_regs.regs[29] = 0x3000_0800;
+        receiver_regs.regs[31] = 0x0040_3008;
+        receiver_regs.hi = 0xb0b0_0022;
+        receiver_regs.lo = 0xb0b0_0033;
+        receiver_regs.fprs[0] = 0x0000_0000_b0b0_0044;
+        let blocked = super::BlockedGuestThread {
+            wait_id: get_wait_id,
+            thread_id: receiver_thread_id,
+            thread_handle: receiver_handle,
+            regs: receiver_regs,
+            import_pc: super::IMPORT_TRAP_BASE + 0x700,
+            return_pc: 0x0040_3008,
+            msg_ptr: 0x3000_0400,
+            hwnd: Some(hwnd),
+            min_msg: 0,
+            max_msg: 0,
+        };
+        let blocked_before = blocked.clone();
+        assert_eq!(
+            super::verified_get_message_wait_birth(
+                &kernel,
+                get_wait_id,
+                receiver_thread_id,
+                receiver_handle,
+            ),
+            Some(receiver_birth)
+        );
+
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread_id,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0x7a,
+                0x55,
+                0x66,
+                None,
+            )
+            .expect("one ordinary birth-owned queued send");
+        let sender_wait_kind = super::BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id,
+            result_ptr: None,
+            previous_running_thread: Some((sender_thread_id, sender_handle)),
+        };
+        let sender_wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                sender_birth,
+                sender_handle,
+                Vec::new(),
+                super::scheduler_blocked_wait_kind(sender_wait_kind),
+                started_ms,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact sender SendMessage wait");
+        let sender_native_wait = super::BlockedWaitThread {
+            frame_ref: None,
+            wait_id: sender_wait_id,
+            thread_id: sender_thread_id,
+            thread_handle: sender_handle,
+            wait_handles: Vec::new(),
+            kind: sender_wait_kind,
+            wait_started_ms: started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0x0040_2008,
+        };
+        assert_eq!(
+            super::verified_native_send_wait_birth(&kernel, &sender_native_wait),
+            Some(sender_birth)
+        );
+
+        // Fault-inject only the scheduler index. B's exact birth, HWND and
+        // captured native GetMessage payload still exist; A's send stays pending.
+        assert!(kernel.remove_blocked_waiter(get_wait_id).is_some());
+        assert!(kernel.blocked_waiter(get_wait_id).is_none());
+        assert_eq!(
+            super::verified_get_message_wait_birth(
+                &kernel,
+                get_wait_id,
+                receiver_thread_id,
+                receiver_handle,
+            ),
+            None
+        );
+        let mut running_thread = None;
+        let recovered = super::recover_running_guest_thread_for_saved_context(
+            &kernel,
+            true,
+            receiver_thread_id,
+            Some(receiver_birth),
+            std::slice::from_ref(&sender_native_wait),
+            Some(&blocked),
+            &[],
+            &mut running_thread,
+        );
+
+        assert_eq!(blocked, blocked_before);
+        assert_eq!(
+            kernel.live_thread_birth_key_by_id(receiver_thread_id),
+            Some(receiver_birth)
+        );
+        assert_eq!(
+            kernel.handles.thread_birth_key_for_handle(receiver_handle),
+            Some(receiver_birth)
+        );
+        assert!(
+            kernel
+                .gwe
+                .window(hwnd)
+                .is_some_and(|window| !window.destroyed)
+        );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![send_id]
+        );
+        let send = kernel
+            .gwe
+            .sent_message(send_id)
+            .expect("A send remains queued");
+        assert_eq!(send.receiver_birth, Some(receiver_birth));
+        assert_eq!(send.result, None);
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread_id), None);
+        assert_eq!(
+            kernel
+                .blocked_waiter(sender_wait_id)
+                .and_then(|wait| wait.owner_birth),
+            Some(sender_birth)
+        );
+        assert_eq!(
+            super::verified_native_send_wait_birth(&kernel, &sender_native_wait),
+            Some(sender_birth)
+        );
+        assert!(
+            !recovered,
+            "missing exact B wait must not revive B from saved GetMessage payload"
+        );
+        assert_eq!(running_thread, None);
+        Ok(())
+    }
+
+    #[test]
     fn saved_context_recovery_does_not_borrow_reused_tid_or_stale_wait() -> crate::Result<()> {
         let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
         let owner = kernel
