@@ -104,6 +104,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
   - SendMessageTimeout global expiry can read as ready/success; receiver-side
     `DestroyWindow` result writes, delivery and the broader GWE send lifecycle
     are ungated.
+  - **UNTESTED / inferred risk (not a reproduced bug):** after a finite-Sleep
+    receiver T wakes, it could call `SendMessage` to sender S while S remains
+    blocked in its outgoing `SendMessage` to T. No reciprocal cross-Send native
+    fixture covers this cycle. CE can process incoming sent messages while a
+    thread waits in an outgoing send, so continuation provenance and native
+    stack handling here remain source-inferred; deadlock is possible but has
+    not been observed. The bounded one-way Get/Peek/NoWait controls do not
+    establish reciprocal delivery.
   - Live-run risk: a second concurrent cross-thread SendMessageTimeout now
     stops with an explicit backend error until task-owned SMT frames exist
     ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)).
