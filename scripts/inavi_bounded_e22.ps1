@@ -1189,7 +1189,7 @@ function Get-InaviUniqueLaunchCandidate(
         Where-Object {
             $null -ne $_.CommandLine -and
             [string]$_.CommandLine -like '*--framebuffer-dump*' -and
-            [string]$_.CommandLine -like "*$ppmPath*"
+            ([string]$_.CommandLine).Contains($ppmPath)
         })
     if ($matches.Count -gt 1) { throw 'Unique-run framebuffer path matched multiple processes.' }
     if ($matches.Count -eq 0) { return $null }

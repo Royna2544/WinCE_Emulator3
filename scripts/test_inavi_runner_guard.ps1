@@ -321,7 +321,8 @@ Assert-Guard ($watchdogDefinition.Count -eq 1 -and
 Assert-Guard ($watchdogDefinition[0].Extent.Text.Contains('Get-InaviWatchdogObservedApp') -and
     $watchdogDefinition[0].Extent.Text.Contains('Get-InaviWatchdogResourceViolation') -and
     $watchdogDefinition[0].Extent.Text.Contains("'independent-watchdog-worker-error'") -and
-    $source.Contains('-OperationTimeoutSec 3')) `
+    $source.Contains('-OperationTimeoutSec 3') -and
+    $source.Contains('([string]$_.CommandLine).Contains($ppmPath)')) `
     'watchdog samples resource caps and cleans up on its own I/O failure'
 Assert-Guard ($source.Contains('$rawLogBytes += (Get-Item -LiteralPath $streamPath).Length') -and
     $source.Contains('if ($rawLogBytes -gt 512MB)')) 'monitor caps combined raw-log bytes'
