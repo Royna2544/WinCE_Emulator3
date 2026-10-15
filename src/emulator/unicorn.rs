@@ -79569,13 +79569,11 @@ mod unicorn_tests {
         let outer_ids = kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]);
         assert_eq!(outer_ids.len(), 1, "S real outer Send must be queued once");
         let outer_id = outer_ids[0];
-        assert_eq!(
-            kernel
-                .gwe
-                .sent_message(outer_id)
-                .and_then(|send| send.receiver_birth),
-            Some(receiver_birth)
-        );
+        let outer_sent = kernel.gwe.sent_message(outer_id).expect("outer GWE send");
+        assert_eq!(outer_sent.sender_thread_id, Some(sender_thread));
+        assert_eq!(outer_sent.receiver_thread_id, receiver_thread);
+        assert_eq!(outer_sent.receiver_birth, Some(receiver_birth));
+        assert_eq!(outer_sent.result, None);
         let outer = cpu
             .blocked_wait_threads
             .iter()
@@ -79586,12 +79584,17 @@ mod unicorn_tests {
             .expect("S real outer Send native wait");
         let outer_wait_id = outer.wait_id;
         assert_eq!(outer.regs.regs[29], sender_sp);
+        assert_eq!(outer.thread_handle, sender_handle);
+        let outer_scheduler = kernel
+            .blocked_waiter(outer_wait_id)
+            .expect("exact outer scheduler wait");
+        assert_eq!(outer_scheduler.thread_id, outer.thread_id);
+        assert_eq!(outer_scheduler.thread_handle, outer.thread_handle);
         assert_eq!(
-            kernel
-                .blocked_waiter(outer_wait_id)
-                .and_then(|wait| wait.owner_birth),
-            Some(sender_birth)
+            outer_scheduler.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id: outer_id }
         );
+        assert_eq!(outer_scheduler.owner_birth, Some(sender_birth));
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
 
         kernel.timers.sleep_ms(10_001);
@@ -79662,6 +79665,13 @@ mod unicorn_tests {
                 .map(|parent| parent.import_pc),
             Some(get_trap)
         );
+        let parent = cpu.pending_wndproc_returns[0]
+            .resume_import
+            .as_ref()
+            .expect("T pending GetMessage parent");
+        assert_eq!(parent.thread_id, receiver_thread);
+        assert_eq!(parent.thread_birth, receiver_birth);
+        assert_eq!(parent.sent_message_id, Some(outer_id));
         assert!(kernel.blocked_waiter(outer_wait_id).is_some());
 
         let reverse = cpu.run_until_import_trap_with_framebuffer_limits_report(
@@ -79684,13 +79694,11 @@ mod unicorn_tests {
         );
         let inner_id = inner_ids[0];
         assert_ne!(outer_id, inner_id);
-        assert_eq!(
-            kernel
-                .gwe
-                .sent_message(inner_id)
-                .and_then(|send| send.receiver_birth),
-            Some(sender_birth)
-        );
+        let inner_sent = kernel.gwe.sent_message(inner_id).expect("inner GWE send");
+        assert_eq!(inner_sent.sender_thread_id, Some(receiver_thread));
+        assert_eq!(inner_sent.receiver_thread_id, sender_thread);
+        assert_eq!(inner_sent.receiver_birth, Some(sender_birth));
+        assert_eq!(inner_sent.result, None);
         let inner = cpu
             .blocked_wait_threads
             .iter()
@@ -79704,12 +79712,16 @@ mod unicorn_tests {
             inner.regs.regs[29],
             receiver_sp - super::WNDPROC_CALL_FRAME_BYTES - 0x20
         );
+        let inner_scheduler = kernel
+            .blocked_waiter(inner_wait_id)
+            .expect("exact inner scheduler wait");
+        assert_eq!(inner_scheduler.thread_id, inner.thread_id);
+        assert_eq!(inner_scheduler.thread_handle, inner.thread_handle);
         assert_eq!(
-            kernel
-                .blocked_waiter(inner_wait_id)
-                .and_then(|wait| wait.owner_birth),
-            Some(receiver_birth)
+            inner_scheduler.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id: inner_id }
         );
+        assert_eq!(inner_scheduler.owner_birth, Some(receiver_birth));
         assert!(
             kernel.blocked_waiter(outer_wait_id).is_some(),
             "outer S wait must survive reverse Send"
@@ -79763,6 +79775,27 @@ mod unicorn_tests {
             receiver_handoff.result,
             receiver_handoff.report
         );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]),
+            inner_ids,
+            "next lease replayed T's inner Send import before S's callback: native_waits={:?}, report={:?}",
+            cpu.blocked_wait_threads,
+            receiver_handoff.report,
+        );
+        assert_eq!(
+            cpu.blocked_wait_threads
+                .iter()
+                .filter(|wait| {
+                    wait.thread_id == receiver_thread
+                        && matches!(wait.kind, super::BlockedWaitKind::SendMessage { .. })
+                })
+                .map(|wait| wait.wait_id)
+                .collect::<Vec<_>>(),
+            vec![inner_wait_id],
+            "next lease duplicated T's exact native Send wait",
+        );
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert!(kernel.blocked_waiter(inner_wait_id).is_some());
         assert_eq!(
             cpu.saved_context_pc(),
             Some(sender_wndproc),
