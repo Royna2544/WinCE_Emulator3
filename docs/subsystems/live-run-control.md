@@ -7,11 +7,13 @@ backup or launch the runner/guest. The pre-watchdog scripts had a
 and [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json);
 the earlier [21-file preparation gate](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
 is historical, not the current script identity. A01, a02 and intermediate a03
-are superseded and not live-usable. The current [a04 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+are superseded and not live-usable. The historical [a04 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
 [full patch](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch),
 [script-only bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
 and [offline gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
-bind the independent watchdog candidate to the unchanged clean-built EXE/PDB.
+bind the independent watchdog candidate to the unchanged clean-built EXE/PDB
+from that checkpoint. Later scheduler and D-011 source gates supersede its Rust
+source/build identity; a04 is not launch authority for the current checkout.
 Claude's read-only and peer reviews found no concrete source blocker, but are
 not a live dead-driver integration test or run approval. Neither gate
 establishes full CE6 bring-up.

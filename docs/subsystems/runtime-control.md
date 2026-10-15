@@ -34,6 +34,14 @@ No frontend directly edits task priority, guest time or backend internals.
 Checkpoint restore is an explicit machine boundary with independent mutable
 kernel/VM/engine state; rewind is not valid performance/run evidence.
 
+The bounded [D-011 stopped-exit gate](../../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+propagates a typed recovery refusal from an un-restorable saved window image
+through tested active, parked and pending launch paths; a stopped boot CPU with
+a mismatched selected owner is refused too. The monitor holds
+further execution, tap input and new checkpoints after this refusal; only
+restoring an earlier checkpoint clears that hold. This source-tested boundary
+does not establish whole-exit atomicity after preflight or live-app recovery.
+
 ## Failure, lifetime and observation
 
 Startup publishes a runnable task only after actual image/entry preparation.
