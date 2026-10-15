@@ -318,6 +318,19 @@ release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored. This is
 not general modal continuation, Task/Frame migration or live-app acceptance;
 no mount or iNavi run was made.
 
+### Bounded native pseudo self-exit cut (final source gate pending)
+
+The current native COREDLL pseudo-handle import candidate captures the exact
+caller birth and process lease, stages a nonzero return PC, and stops before
+the next guest instruction. After the native owner closes, the stopped CPU's
+caller and child-launch or boot witness are rechecked; D-011 saved-window
+preflight precedes canonical child or boot Task/VM retirement. Completion
+seals that CPU against another native attempt. A refused framebuffer or modal
+backing retains the stopped owner and poisons re-entry rather than running a
+compatibility continuation. This bounded shape is not general Task/Frame
+authority, whole-exit atomicity after preflight, a conversion of the raw or
+decoded pseudo-exit paths, or live iNavi acceptance.
+
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval
 enters WNDPROC and returns the one blocked sender's result. A wake bit alone

@@ -107,6 +107,13 @@ propagates recovery through tested scheduler paths. It also fails closed when
 the stopped boot CPU's saved owner differs from the selected process. The
 monitor refuses a new checkpoint after recovery is required; only restoring
 an earlier checkpoint clears the hold.
+The current bounded native COREDLL pseudo self-exit candidate then stops the
+guest CPU, closes its native owner, validates the caller and launch/boot
+witness, and uses that preflight before exact child or boot Task/VM retirement.
+Its final source/test seal is pending. Raw/decoded pseudo paths remain
+synchronous compatibility behavior; modal backing refuses completion until
+it has a checked preflight.
+
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit
 atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
@@ -306,8 +313,12 @@ close only their named gates, not Stage 2 or live acceptance.
   checks saved-backing restore feasibility before stopped-exit effects and
   propagates a typed recovery refusal. A selected-owner mismatch on the
   stopped boot CPU likewise requires typed authority recovery. Post-preflight
-  whole-exit atomicity,
-  full exit-effect authority, live-app behavior and CE6 parity remain open.
+  whole-exit atomicity remains open. The bounded native pseudo self-exit
+  candidate adds stop-before-next-instruction and exact child/boot Task/VM
+  retirement after owner closure and preflight; its final source/test seal is
+  pending, and raw/decoded pseudo compatibility and modal restoration remain
+  separate gates. Full exit-effect authority, live-app behavior and CE6 parity
+  remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
