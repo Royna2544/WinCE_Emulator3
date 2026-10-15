@@ -3456,23 +3456,8 @@ impl CeKernel {
         true
     }
 
-    pub fn process_window_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
-        self.gwe
-            .windows_snapshot()
-            .into_iter()
-            .filter(|window| {
-                !window.destroyed
-                    && window.hwnd != crate::ce::gwe::DESKTOP_HWND
-                    && (window.process_id == process_id
-                        || (thread_id != 0 && window.thread_id == thread_id))
-            })
-            .map(|window| window.hwnd)
-            .collect()
-    }
-
     /// A host exit with a verified process birth must not claim a window from
-    /// an older incarnation of the same public PID. The numeric selector above
-    /// remains only for legacy callers without a process-birth witness.
+    /// an older incarnation of the same public PID.
     fn process_window_targets_for_birth(&self, owner: ProcessBirthKey) -> Vec<u32> {
         self.gwe
             .windows_snapshot()
@@ -3481,19 +3466,6 @@ impl CeKernel {
                 !window.destroyed
                     && window.hwnd != crate::ce::gwe::DESKTOP_HWND
                     && window.delivery_owner().process_birth() == Some(owner)
-            })
-            .map(|window| window.hwnd)
-            .collect()
-    }
-
-    fn process_window_backing_store_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
-        self.gwe
-            .windows_snapshot()
-            .into_iter()
-            .filter(|window| {
-                window.hwnd != crate::ce::gwe::DESKTOP_HWND
-                    && (window.process_id == process_id
-                        || (thread_id != 0 && window.thread_id == thread_id))
             })
             .map(|window| window.hwnd)
             .collect()
@@ -3516,11 +3488,6 @@ impl CeKernel {
     fn destroy_process_windows_for_birth(&mut self, owner: ProcessBirthKey, thread_id: u32) {
         let hwnds = self.process_window_targets_for_birth(owner);
         self.destroy_process_window_targets(owner.process_id(), thread_id, hwnds);
-    }
-
-    fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
-        let hwnds = self.process_window_targets(process_id, thread_id);
-        self.destroy_process_window_targets(process_id, thread_id, hwnds);
     }
 
     fn destroy_process_window_targets(&mut self, process_id: u32, thread_id: u32, hwnds: Vec<u32>) {
@@ -7201,14 +7168,12 @@ impl CeKernel {
 
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         if Self::is_current_process_pseudo_handle(handle) {
-            let process_key = self.current_process_birth_key();
-            if let Some(owner) = process_key {
-                self.destroy_process_windows_for_birth(owner, 0);
-            } else {
-                // Direct legacy fixtures can select an unregistered numeric
-                // process. They have no birth witness to filter against.
-                self.destroy_process_windows(self.current_process_id, 0);
-            }
+            // A stale mutable PID selector is not authority to mutate host
+            // windows or mark another process exited.
+            let Some(process_key) = self.current_process_birth_key() else {
+                return false;
+            };
+            self.destroy_process_windows_for_birth(process_key, 0);
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
             let was_signaled = self.handles.process_signaled_by_id(self.current_process_id);
@@ -7217,14 +7182,9 @@ impl CeKernel {
                 .signal_pseudo_process_exit_by_id(self.current_process_id, exit_code)
                 .is_some()
             {
-                if was_signaled == Some(false)
-                    && let Some(key) = process_key
-                {
-                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(key));
+                if was_signaled == Some(false) {
+                    self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(process_key));
                 }
-            }
-            if process_key.is_none() {
-                self.queue_object_wake_candidates(handle);
             }
             return true;
         }
@@ -14627,14 +14587,15 @@ mod tests {
         }
 
         assert!(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()));
+        let owner = launch.process_birth.expect("launch birth");
         assert!(
             !kernel
-                .process_window_targets(launch.process_id, launch.thread_id)
+                .process_window_targets_for_birth(owner)
                 .contains(&hwnd)
         );
         assert!(
             kernel
-                .process_window_backing_store_targets(launch.process_id, launch.thread_id)
+                .process_window_backing_store_targets_for_birth(owner)
                 .contains(&hwnd)
         );
 
@@ -17026,6 +16987,8 @@ mod tests {
     fn terminate_current_process_destroys_owned_windows() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
+        let _process_77 = kernel.handles.create_process(77);
+        let _process_88 = kernel.handles.create_process(88);
         kernel.set_current_process_id(77);
         let parent = kernel.create_window_ex_w(1, "PARENT", "", None, 0, 0, 0);
         let child = kernel.create_window_ex_w(1, "CHILD", "", Some(parent), 0, WS_CHILD, 0);
@@ -17043,6 +17006,20 @@ mod tests {
             kernel.process_exit_code_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
             Some(0x1234)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pseudo_process_exit_without_birth_fails_before_host_mutation() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        kernel.set_current_process_id(77);
+        let hwnd = kernel.create_window_ex_w(9, "UNKNOWN_PROCESS", "", None, 0, 0, 0);
+        assert_eq!(kernel.current_process_birth_key(), None);
+
+        assert!(!kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x1234));
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(kernel.current_process_exit_code, STILL_ACTIVE);
+        assert!(!kernel.current_process_signaled);
         Ok(())
     }
 
