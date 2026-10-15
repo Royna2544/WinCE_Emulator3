@@ -48,6 +48,21 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded host-exit independent-window PID-reuse source/test gate
+  ([receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
+  verified process-exit birth selects live windows and captured backing stores
+  by each window's frozen creation birth, not a recycled numeric PID. A
+  current-process pseudo-exit with no canonical birth now fails closed before
+  window teardown, exit signaling or waiter wakes. The prior-birth A window
+  and backing survive later-birth B's exit in the enabled normal control;
+  the synthetic decoded-exit and shell fixtures now register canonical
+  process births, while process-sweep creates birth-checked windows. Final
+  18-group broad suites passed release
+  **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**. The expected
+  red and superseded broad failures remain in the receipt. Recursive GWE
+  traversal of foreign parent/owner links and numeric sent-message sender
+  cleanup are not birth-filtered; this is not full host teardown, Stage 3,
+  CE6 parity or a live iNavi run.
 - A13 same-birth orphaned `GetMessageW` source/test gate
   ([receipt](evidence/scheduler-source-cut-a13/validation.final.receipt.md)):
   the test-only expected red is preserved; saved-context recovery now leaves a
