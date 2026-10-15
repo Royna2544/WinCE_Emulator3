@@ -17744,6 +17744,7 @@ fn map_adopted_writable_main_image_runs<D>(
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
     native_pins: &NativeMappingPins,
+    #[cfg(test)] induce_native_collision_at: Option<usize>,
 ) -> Result<()> {
     let adoption = cpu.checked_writable_main_image(kernel)?;
     if !mapped.writable_image_runs.is_empty() || native_pins.writable_image_len() != 0 {
@@ -17823,7 +17824,7 @@ fn map_adopted_writable_main_image_runs<D>(
         };
         planned.push((record, native_access));
     }
-    for (record, native_access) in planned {
+    for (_run_index, (record, native_access)) in planned.into_iter().enumerate() {
         if !native_pins.pin_writable_image(
             record.identity,
             record.host_address,
@@ -17838,6 +17839,18 @@ fn map_adopted_writable_main_image_runs<D>(
             return Err(Error::Backend(
                 "writable image native pin changed before map".to_owned(),
             ));
+        }
+        #[cfg(test)]
+        if induce_native_collision_at == Some(_run_index) {
+            // The planning pass saw no collision. Occupy this run only after
+            // its VM guard is pinned, so the subsequent real mem_map_ptr call
+            // fails at the native boundary rather than at preflight.
+            uc.mem_map(
+                u64::from(record.identity.run_base()),
+                u64::from(record.len),
+                unicorn_engine::Prot::READ,
+            )
+            .expect("test collision must be installed after image preflight");
         }
         // SAFETY: the exact VM run is page-aligned and the native-access
         // guard is already owned by this native lease's strong pin table.
@@ -92371,6 +92384,7 @@ mod unicorn_tests {
                 &kernel,
                 &mut clone_mapped,
                 &clone_pins,
+                None,
             )
             .is_err()
         );
@@ -92382,6 +92396,7 @@ mod unicorn_tests {
                 &cloned_kernel,
                 &mut clone_mapped,
                 &clone_pins,
+                None,
             )
             .is_err()
         );
@@ -92414,6 +92429,7 @@ mod unicorn_tests {
             &kernel,
             &mut first_mapped,
             &first_pins,
+            None,
         )?;
         let first_copy_bytes =
             super::sync_persisted_blobs_to_native(&mut first, &image_blobs, false, &guard)?;
@@ -92460,6 +92476,7 @@ mod unicorn_tests {
             &kernel,
             &mut fresh_mapped,
             &fresh_pins,
+            None,
         )?;
         let fresh_copy_bytes =
             super::sync_persisted_blobs_to_native(&mut fresh, &image_blobs, false, &guard)?;
@@ -92583,6 +92600,127 @@ mod unicorn_tests {
                 .collect::<Vec<_>>(),
             original_blobs,
         );
+        Ok(())
+    }
+
+    #[test]
+    fn writable_main_image_second_native_map_failure_keeps_vm_pinned_until_abort()
+    -> crate::Result<()> {
+        const BASE: u32 = 0x0040_0000;
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x1400, 0);
+        write_vec_u16(&mut bytes, 0x84 + 2, 2);
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000);
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x1000);
+        write_vec_u32(&mut bytes, 0x178 + 16, 0x1000);
+        let data_section = 0x1a0;
+        bytes[data_section..data_section + 8].copy_from_slice(b".data\0\0\0");
+        write_vec_u32(&mut bytes, data_section + 8, 0x1000);
+        write_vec_u32(&mut bytes, data_section + 12, 0x2000);
+        write_vec_u32(&mut bytes, data_section + 16, 0x200);
+        write_vec_u32(&mut bytes, data_section + 20, 0x1200);
+        write_vec_u32(&mut bytes, data_section + 36, 0xc000_0040);
+        bytes[0x1200..0x1400].fill(0x7b);
+        let image = crate::pe::PeImage::parse_bytes("two-native-runs.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut kernel = phase1_kernel("two-native-runs.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        cpu.adopt_writable_main_image_for_birth(&mut kernel, owner)?;
+        let identities = &cpu
+            .writable_main_image
+            .as_ref()
+            .expect("adopted image")
+            .runs;
+        assert_eq!(
+            identities
+                .iter()
+                .map(|run| run.run_base())
+                .collect::<Vec<_>>(),
+            vec![BASE, BASE + 0x2000],
+        );
+        let vm_pins: Vec<_> = identities
+            .iter()
+            .map(|identity| {
+                kernel
+                    .memory
+                    .writable_image_run_pin(*identity)
+                    .expect("birth-owned image run")
+            })
+            .collect();
+        let original: Vec<_> = vm_pins
+            .iter()
+            .map(|pin| {
+                let mut bytes = [0; 4];
+                pin.read_bytes(0, &mut bytes).expect("unleased VM bytes");
+                bytes
+            })
+            .collect();
+
+        let slot: super::ProcessNativeEngine<u32, super::KernelMemoryMappings> =
+            super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
+        let mut attempt = slot.lease().expect("fresh native image owner");
+        let native_pins = attempt.mapping_pins();
+        let mut mapped = super::KernelMemoryMappings::new(&cpu.mapped_blobs);
+        let error = super::map_adopted_writable_main_image_runs(
+            &mut attempt,
+            &cpu,
+            &kernel,
+            &mut mapped,
+            &native_pins,
+            Some(1),
+        )
+        .expect_err("second real mem_map_ptr must refuse the injected native collision");
+        assert!(
+            format!("{error}").contains("pointer-map writable image run 0x00402000"),
+            "failure must come from the second pointer map: {error}",
+        );
+        assert_eq!(mapped.writable_image_runs.len(), 1);
+        assert_eq!(native_pins.writable_image_len(), 2);
+        assert_eq!(
+            attempt.mem_read_as_vec(u64::from(BASE), 4).unwrap(),
+            original[0],
+            "the first pointer map completed before the second failed",
+        );
+        for pin in &vm_pins {
+            let mut byte = [0];
+            assert!(pin.read_bytes(0, &mut byte).is_err());
+            assert!(pin.write_bytes(0, &[0xff]).is_err());
+        }
+        // Even an accidentally staged CPU continuation must not escape the
+        // failed setup. Closing the owner, not just dropping the map ledger,
+        // releases both native-access guards.
+        attempt
+            .capture(0x51a7)
+            .expect("stage test-only continuation");
+        attempt.set_metadata(mapped.clone());
+        let retained_pins = native_pins.clone();
+        drop(native_pins);
+        attempt.abort_close().expect("checked native abort-close");
+        assert_eq!(slot.identity(), None);
+        for pin in &vm_pins {
+            let mut byte = [0];
+            assert!(
+                pin.read_bytes(0, &mut byte).is_err(),
+                "an outstanding pin clone must still deny host reads",
+            );
+        }
+        drop(retained_pins);
+        for (pin, expected) in vm_pins.iter().zip(&original) {
+            let mut actual = [0; 4];
+            pin.read_bytes(0, &mut actual).expect("VM access restored");
+            assert_eq!(&actual, expected, "failed mapping changed VM bytes");
+        }
+        let mut replacement = slot.lease().expect("fresh replacement owner");
+        assert!(!replacement.reused());
+        assert!(replacement.take_metadata().is_none());
+        assert!(!replacement.restore_if_exact(&0x51a7).unwrap());
+        replacement.abort_close().expect("close replacement owner");
+        assert_eq!(slot.identity(), None);
         Ok(())
     }
 
