@@ -42,7 +42,7 @@ One immutable Window owner is exact `(ThreadBirthKey, creation ProcessBirthKey)`
 W-B1a preflights the captured native caller birth for `CreateWindowExW`, `CreateDialogIndirectParamW`, and `DialogBoxIndirectParamW` before any GWES/LastError effect; absent birth is a fixture-only compatibility path.
 Verified explicit HWND posts enter the existing FIFO as Birth-owned work, committing status, ready time, trace, and exact-birth wake together; stale ordinary HWNDs publish nothing, while desktop/legacy compatibility stays explicit.
 Typed-payload recipient and native CreateWindow callback ownership use the frozen process birth, never a current numeric PID lookup; CE6 return/LastError parity remains unverified where local GWES source is silent.
-Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible; it must not recursively destroy a B-owned descendant or sweep by numeric TID.
+Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible without a numeric-TID sweep. CE-family [DestroyWindow](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa452942%28v%3Dmsdn.10%29) recursively destroys child and owned windows, while [SetParent](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa453645%28v%3Dmsdn.10%29) requires the child and new parent to belong to the same application. Cross-birth parent links are not established valid CE6 topology; recovery from foreign parent/owner links is unproved, not an accepted B-descendant-survival rule.
 W-B1b remote touch/key ownership passed its bounded
 [source gate](../../evidence/stage3-window-input-birth-20261015/validation.receipt.md).
 For a Birth-owned window, an explicitly host-targeted HWND has a frozen recipient: if it is stale or destroyed, consume
@@ -79,6 +79,18 @@ cross-thread WNDPROC execution order or live tap delivery. See
 hotkeys, sent/paint/modal and other input producers, full GWES, and live iNavi
 acceptance remain open.
 Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
+
+### Bounded host-exit selection (independent windows; receipt pending)
+
+The bounded PID-reuse gate selects independent live windows and captured
+backing stores, including already-destroyed windows, by the verified exiting
+process birth and each window's frozen creation process birth rather than its
+numeric PID/TID. Its control requires a stale prior-birth A window and backing
+store to survive B's later exit after PID reuse
+([validation receipt pending](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
+This does not birth-filter `destroy_window`'s recursive parent/owner traversal
+or numeric sent-message process cleanup. Foreign-link recovery, full host
+teardown, exit capture retirement and live-app/CE6 acceptance remain open.
 
 ## Failure and lifetime rules
 
