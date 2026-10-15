@@ -59,6 +59,15 @@ pub struct MemorySystem {
     // reuse even if its token is dropped after a native mapping side effect.
     pending_private_holes: BTreeMap<(ProcessBirthKey, u32), u32>,
     stable_private_pages: BTreeMap<PrivatePageIdentity, Rc<StablePrivatePage>>,
+    // Writable PE bytes have one authority per process birth and module load.
+    // This foundation is not yet connected to loader/native publication.
+    writable_image_generation: u64,
+    writable_image_runs: BTreeMap<WritableImageRunIdentity, Rc<StableWritableImageRun>>,
+    writable_image_modules: BTreeMap<(ProcessBirthKey, u32), WritableImageModuleState>,
+    retired_writable_image_owners: BTreeSet<ProcessBirthKey>,
+    // An exact-module retire may precede native unmap. Weak records prevent
+    // a new generation reusing overlapping VA while an old pin survives.
+    retired_writable_image_pins: Vec<(WritableImageRunIdentity, Weak<StableWritableImageRun>)>,
     // A weak conflict fence for still-detached fixed-page proposals. It is
     // not a second byte owner: only page pins carry bytes and budget. A new
     // proposal for an occupied offset fails instead of aliasing that offset
@@ -73,6 +82,7 @@ pub struct MemorySystem {
     // A native pin can outlive a released VM record. Keep the checkpoint
     // unsupported flag set for this MemorySystem lineage even after release.
     stable_private_slabs_seen: bool,
+    stable_writable_image_runs_seen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +225,74 @@ pub struct PrivatePageIdentity {
     allocation_base: u32,
     allocation_incarnation: u64,
     page_base: u32,
+}
+
+/// Exact writable main-image/DLL run within one VM lineage. The caller must
+/// validate `owner` against its canonical process-birth directory first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WritableImageRunIdentity {
+    owner: ProcessBirthKey,
+    module_base: u32,
+    load_generation: u64,
+    run_base: u32,
+}
+
+impl WritableImageRunIdentity {
+    pub fn new(
+        owner: ProcessBirthKey,
+        module_base: u32,
+        load_generation: u64,
+        run_base: u32,
+    ) -> Option<Self> {
+        if load_generation == 0
+            || module_base & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0
+            || run_base & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0
+            || run_base < module_base
+        {
+            return None;
+        }
+        Some(Self {
+            owner,
+            module_base,
+            load_generation,
+            run_base,
+        })
+    }
+
+    pub fn owner(self) -> ProcessBirthKey {
+        self.owner
+    }
+
+    pub fn module_base(self) -> u32 {
+        self.module_base
+    }
+
+    pub fn load_generation(self) -> u64 {
+        self.load_generation
+    }
+
+    pub fn run_base(self) -> u32 {
+        self.run_base
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritableImageRunAccessError {
+    OutOfRange,
+    NativeExecutionActive,
+}
+
+/// O-M3 has not classified these image pages as boot-counted RAM, new RAM,
+/// or ROM/XIP. No guest physical charge is made by this foundation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritableImagePhysicalStatus {
+    Unclassified,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WritableImageModuleState {
+    load_generation: u64,
+    active: bool,
 }
 
 impl PrivatePageIdentity {
@@ -695,6 +773,222 @@ impl Drop for StablePrivatePageExecutionGuard {
     }
 }
 
+/// Stable, page-aligned host storage for one fixed-size writable PE run.
+/// This is deliberately separate from StablePrivatePage: O-M3 has not yet
+/// determined whether its physical pages need an incremental guest charge.
+struct StableWritableImageRun {
+    bytes: NonNull<u8>,
+    len: usize,
+    native_execution_guards: Cell<u32>,
+}
+
+impl fmt::Debug for StableWritableImageRun {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StableWritableImageRun")
+            .field("len", &self.len)
+            .field(
+                "native_execution_guards",
+                &self.native_execution_guards.get(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl StableWritableImageRun {
+    fn zeroed(len: usize) -> Option<Self> {
+        if len == 0 || len % STABLE_PRIVATE_PAGE_SIZE != 0 {
+            return None;
+        }
+        let layout = Layout::from_size_align(len, STABLE_PRIVATE_PAGE_SIZE).ok()?;
+        // SAFETY: the layout is nonzero, fixed for this run's lifetime and
+        // page-aligned for native mem_map_ptr.
+        let bytes = NonNull::new(unsafe { alloc_zeroed(layout) })?;
+        Some(Self {
+            bytes,
+            len,
+            native_execution_guards: Cell::new(0),
+        })
+    }
+
+    fn from_initial_bytes(initial_bytes: &[u8]) -> Option<Self> {
+        let run = Self::zeroed(initial_bytes.len())?;
+        // SAFETY: this new allocation is private to the unpublished token.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                initial_bytes.as_ptr(),
+                run.bytes.as_ptr(),
+                initial_bytes.len(),
+            );
+        }
+        Some(run)
+    }
+
+    fn deep_copy(&self) -> Self {
+        // Clone is not a machine checkpoint. Even so, never copy while a
+        // native engine could be writing through this run's raw pointer.
+        assert_eq!(
+            self.native_execution_guards.get(),
+            0,
+            "cannot clone writable image bytes during native execution"
+        );
+        let copy = Self::zeroed(self.len).expect("cannot clone writable image run");
+        // SAFETY: both fixed-size allocations are pinned; the guard above
+        // excludes native writes and no host byte reference escapes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.bytes.as_ptr(), copy.bytes.as_ptr(), self.len);
+        }
+        copy
+    }
+}
+
+impl Drop for StableWritableImageRun {
+    fn drop(&mut self) {
+        let layout = Layout::from_size_align(self.len, STABLE_PRIVATE_PAGE_SIZE)
+            .expect("fixed writable image run layout");
+        // SAFETY: every native mapping must retain a pin through checked
+        // unmap/owner close; the last strong pin owns this allocation.
+        unsafe { dealloc(self.bytes.as_ptr(), layout) };
+    }
+}
+
+/// Strong native-owner pin. Only copied, bounds-checked host access is
+/// exposed; no Rust slice can alias bytes while guest/native code executes.
+#[derive(Debug, Clone)]
+pub struct StableWritableImageRunPin {
+    identity: WritableImageRunIdentity,
+    run: Rc<StableWritableImageRun>,
+}
+
+impl StableWritableImageRunPin {
+    pub fn identity(&self) -> WritableImageRunIdentity {
+        self.identity
+    }
+
+    pub fn len(&self) -> usize {
+        self.run.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
+    }
+
+    pub fn physical_status(&self) -> WritableImagePhysicalStatus {
+        WritableImagePhysicalStatus::Unclassified
+    }
+
+    pub fn read_bytes(
+        &self,
+        offset: usize,
+        out: &mut [u8],
+    ) -> std::result::Result<(), WritableImageRunAccessError> {
+        self.check_access(offset, out.len())?;
+        // SAFETY: the guard excludes native execution, the pin keeps the
+        // allocation alive, and the copied output owns its bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                self.run.bytes.as_ptr().add(offset),
+                out.as_mut_ptr(),
+                out.len(),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn write_bytes(
+        &self,
+        offset: usize,
+        bytes: &[u8],
+    ) -> std::result::Result<(), WritableImageRunAccessError> {
+        self.check_access(offset, bytes.len())?;
+        // SAFETY: the guard excludes native execution and this bounded copy
+        // creates no reference to the canonical backing.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.run.bytes.as_ptr().add(offset),
+                bytes.len(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Hold this lease from pointer mapping through checked unmap/owner close,
+    /// including idle mapped time, uc_mem_write/read and emu_start. A failed
+    /// unmap must quarantine the lease and pin until owner close succeeds.
+    /// Host copied access is refused for the entire lease, not just emu_start.
+    pub fn begin_native_access(
+        &self,
+    ) -> std::result::Result<StableWritableImageRunNativeAccessGuard, WritableImageRunAccessError>
+    {
+        if self.run.native_execution_guards.get() != 0 {
+            return Err(WritableImageRunAccessError::NativeExecutionActive);
+        }
+        self.run.native_execution_guards.set(1);
+        Ok(StableWritableImageRunNativeAccessGuard {
+            run: Rc::clone(&self.run),
+        })
+    }
+
+    fn check_access(
+        &self,
+        offset: usize,
+        len: usize,
+    ) -> std::result::Result<(), WritableImageRunAccessError> {
+        if self.run.native_execution_guards.get() != 0 {
+            return Err(WritableImageRunAccessError::NativeExecutionActive);
+        }
+        if offset.checked_add(len).is_none_or(|end| end > self.run.len) {
+            return Err(WritableImageRunAccessError::OutOfRange);
+        }
+        Ok(())
+    }
+}
+
+/// This lease, not the pin alone, grants a native owner the raw pointer.
+/// Its lifetime must include every mapped/native access to these bytes.
+pub struct StableWritableImageRunNativeAccessGuard {
+    run: Rc<StableWritableImageRun>,
+}
+
+impl StableWritableImageRunNativeAccessGuard {
+    pub fn native_ptr(&self) -> *mut c_void {
+        self.run.bytes.as_ptr().cast::<c_void>()
+    }
+}
+
+impl Drop for StableWritableImageRunNativeAccessGuard {
+    fn drop(&mut self) {
+        self.run.native_execution_guards.set(
+            self.run
+                .native_execution_guards
+                .get()
+                .checked_sub(1)
+                .expect("writable image execution guard underflow"),
+        );
+    }
+}
+
+/// Detached bytes are not guest-visible until their exact VM lineage and
+/// image-directory generation have both been rechecked at publication.
+#[derive(Debug)]
+#[must_use = "prepared writable image runs must be published or dropped"]
+pub struct PreparedWritableImageRun {
+    instance: Rc<()>,
+    expected_generation: u64,
+    identity: WritableImageRunIdentity,
+    run: Rc<StableWritableImageRun>,
+}
+
+impl PreparedWritableImageRun {
+    pub fn identity(&self) -> WritableImageRunIdentity {
+        self.identity
+    }
+
+    pub fn len(&self) -> usize {
+        self.run.len
+    }
+}
+
 impl VirtualAllocationSource {
     fn is_private(self) -> bool {
         matches!(self, Self::Private | Self::PrivateExCompatibility)
@@ -875,6 +1169,17 @@ impl Clone for MemorySystem {
                     )
                 })
                 .collect(),
+            writable_image_generation: self.writable_image_generation,
+            writable_image_runs: self
+                .writable_image_runs
+                .iter()
+                .map(|(identity, run)| (*identity, Rc::new(run.deep_copy())))
+                .collect(),
+            writable_image_modules: self.writable_image_modules.clone(),
+            retired_writable_image_owners: self.retired_writable_image_owners.clone(),
+            // Pins from the source VM/native owner cannot cross a clone's
+            // new lineage. Checkpoint remains explicitly unsupported.
+            retired_writable_image_pins: Vec::new(),
             pending_fixed_blocks: RefCell::new(BTreeMap::new()),
             stable_shared_pages: self
                 .stable_shared_pages
@@ -889,6 +1194,7 @@ impl Clone for MemorySystem {
             shared_view_bindings: self.shared_view_bindings.clone(),
             private_page_budget,
             stable_private_slabs_seen: self.stable_private_slabs_seen,
+            stable_writable_image_runs_seen: self.stable_writable_image_runs_seen,
         }
     }
 }
@@ -923,6 +1229,11 @@ impl Default for MemorySystem {
             virtual_allocations: BTreeMap::new(),
             pending_private_holes: BTreeMap::new(),
             stable_private_pages: BTreeMap::new(),
+            writable_image_generation: 0,
+            writable_image_runs: BTreeMap::new(),
+            writable_image_modules: BTreeMap::new(),
+            retired_writable_image_owners: BTreeSet::new(),
+            retired_writable_image_pins: Vec::new(),
             pending_fixed_blocks: RefCell::new(BTreeMap::new()),
             stable_shared_pages: BTreeMap::new(),
             shared_view_bindings: BTreeMap::new(),
@@ -931,6 +1242,7 @@ impl Default for MemorySystem {
                 0,
             )),
             stable_private_slabs_seen: false,
+            stable_writable_image_runs_seen: false,
         }
     }
 }
@@ -2809,6 +3121,197 @@ impl MemorySystem {
         self.stable_private_slabs_seen
     }
 
+    /// Machine checkpoint/relineage is unsupported after any writable image
+    /// run was published, even when all VM records have since been retired.
+    /// A cloned MemorySystem has independent bytes but is not a machine clone.
+    pub fn has_stable_writable_image_runs(&self) -> bool {
+        self.stable_writable_image_runs_seen
+    }
+
+    /// Stage 2 VM foundation: copy final loader bytes into a stable run before
+    /// publication. The caller verifies the process birth in HandleTable and
+    /// must arrange native unmap/owner close before dropping its strong pin.
+    pub fn prepare_writable_image_run(
+        &self,
+        identity: WritableImageRunIdentity,
+        initial_bytes: &[u8],
+    ) -> Option<PreparedWritableImageRun> {
+        self.can_publish_writable_image_run(identity, initial_bytes.len())?;
+        let run = Rc::new(StableWritableImageRun::from_initial_bytes(initial_bytes)?);
+        Some(PreparedWritableImageRun {
+            instance: Rc::clone(&self.instance),
+            expected_generation: self.writable_image_generation,
+            identity,
+            run,
+        })
+    }
+
+    /// Recheck the exact VM lineage, generation, module load and range before
+    /// changing any canonical image record. A rejected token is just dropped.
+    pub fn commit_prepared_writable_image_run(
+        &mut self,
+        prepared: PreparedWritableImageRun,
+    ) -> Option<StableWritableImageRunPin> {
+        if !Rc::ptr_eq(&prepared.instance, &self.instance)
+            || prepared.expected_generation != self.writable_image_generation
+        {
+            return None;
+        }
+        self.can_publish_writable_image_run(prepared.identity, prepared.run.len)?;
+        let next_generation = self.writable_image_generation.checked_add(1)?;
+        let pin = StableWritableImageRunPin {
+            identity: prepared.identity,
+            run: Rc::clone(&prepared.run),
+        };
+        self.writable_image_runs
+            .insert(prepared.identity, prepared.run);
+        self.writable_image_modules.insert(
+            (prepared.identity.owner, prepared.identity.module_base),
+            WritableImageModuleState {
+                load_generation: prepared.identity.load_generation,
+                active: true,
+            },
+        );
+        self.writable_image_generation = next_generation;
+        self.stable_writable_image_runs_seen = true;
+        Some(pin)
+    }
+
+    pub fn writable_image_run_pin(
+        &self,
+        identity: WritableImageRunIdentity,
+    ) -> Option<StableWritableImageRunPin> {
+        let run = Rc::clone(self.writable_image_runs.get(&identity)?);
+        Some(StableWritableImageRunPin { identity, run })
+    }
+
+    /// Copied keys alone are not enough: a native owner must hold the exact
+    /// canonical backing pin from this VM lineage.
+    pub fn contains_writable_image_run_pin(&self, pin: &StableWritableImageRunPin) -> bool {
+        self.writable_image_runs
+            .get(&pin.identity)
+            .is_some_and(|run| Rc::ptr_eq(run, &pin.run))
+    }
+
+    /// Retire one exact module load. Wrong or stale generations do nothing.
+    /// Retired backing stays alive while a native owner still holds a pin;
+    /// that pin also fences overlapping same-birth VA reuse.
+    pub fn retire_writable_image_module(
+        &mut self,
+        owner: ProcessBirthKey,
+        module_base: u32,
+        load_generation: u64,
+    ) -> Option<usize> {
+        let state = self.writable_image_modules.get(&(owner, module_base))?;
+        if !state.active || state.load_generation != load_generation {
+            return None;
+        }
+        let identities: Vec<_> = self
+            .writable_image_runs
+            .keys()
+            .filter(|identity| {
+                identity.owner == owner
+                    && identity.module_base == module_base
+                    && identity.load_generation == load_generation
+            })
+            .copied()
+            .collect();
+        for identity in &identities {
+            let run = self
+                .writable_image_runs
+                .remove(identity)
+                .expect("selected writable image run exists");
+            self.retired_writable_image_pins
+                .push((*identity, Rc::downgrade(&run)));
+        }
+        self.writable_image_modules
+            .get_mut(&(owner, module_base))
+            .expect("checked writable image module")
+            .active = false;
+        self.writable_image_generation = self.writable_image_generation.saturating_add(1);
+        Some(identities.len())
+    }
+
+    /// Exit fence for this exact process birth. A later PID incarnation is a
+    /// different key and may reuse the same VA; this birth cannot republish.
+    pub fn retire_writable_image_runs_for_owner(&mut self, owner: ProcessBirthKey) -> usize {
+        let identities: Vec<_> = self
+            .writable_image_runs
+            .keys()
+            .filter(|identity| identity.owner == owner)
+            .copied()
+            .collect();
+        for identity in &identities {
+            let run = self
+                .writable_image_runs
+                .remove(identity)
+                .expect("selected writable image run exists");
+            self.retired_writable_image_pins
+                .push((*identity, Rc::downgrade(&run)));
+        }
+        for ((module_owner, _), state) in &mut self.writable_image_modules {
+            if *module_owner == owner {
+                state.active = false;
+            }
+        }
+        let newly_retired = self.retired_writable_image_owners.insert(owner);
+        if newly_retired || !identities.is_empty() {
+            self.writable_image_generation = self.writable_image_generation.saturating_add(1);
+        }
+        identities.len()
+    }
+
+    fn can_publish_writable_image_run(
+        &self,
+        identity: WritableImageRunIdentity,
+        len: usize,
+    ) -> Option<()> {
+        if self.retired_writable_image_owners.contains(&identity.owner)
+            || len == 0
+            || len % STABLE_PRIVATE_PAGE_SIZE != 0
+            || identity.load_generation == 0
+            || identity.module_base & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0
+            || identity.run_base & (STABLE_PRIVATE_PAGE_SIZE as u32 - 1) != 0
+            || identity.run_base < identity.module_base
+            || self.writable_image_runs.contains_key(&identity)
+        {
+            return None;
+        }
+        let run_end = identity.run_base.checked_add(u32::try_from(len).ok()?)?;
+        if let Some(state) = self
+            .writable_image_modules
+            .get(&(identity.owner, identity.module_base))
+        {
+            if (state.active && state.load_generation != identity.load_generation)
+                || (!state.active && state.load_generation >= identity.load_generation)
+            {
+                return None;
+            }
+        }
+        for (other, run) in &self.writable_image_runs {
+            let other_end = other.run_base.checked_add(u32::try_from(run.len).ok()?)?;
+            if other.owner == identity.owner
+                && identity.run_base < other_end
+                && other.run_base < run_end
+            {
+                return None;
+            }
+        }
+        for (other, weak_run) in &self.retired_writable_image_pins {
+            if other.owner != identity.owner {
+                continue;
+            }
+            let Some(run) = weak_run.upgrade() else {
+                continue;
+            };
+            let other_end = other.run_base.checked_add(u32::try_from(run.len).ok()?)?;
+            if identity.run_base < other_end && other.run_base < run_end {
+                return None;
+            }
+        }
+        Some(())
+    }
+
     pub fn stable_page_pin(
         &self,
         owner: ProcessBirthKey,
@@ -3278,6 +3781,194 @@ mod tests {
         let _child_handle = handles.create_process(2);
         let child = handles.process_birth_key(2).expect("child birth");
         (parent, child)
+    }
+
+    fn writable_image_identity(
+        owner: ProcessBirthKey,
+        module_base: u32,
+        load_generation: u64,
+        run_base: u32,
+    ) -> WritableImageRunIdentity {
+        WritableImageRunIdentity::new(owner, module_base, load_generation, run_base)
+            .expect("aligned writable image identity")
+    }
+
+    #[test]
+    fn writable_image_run_publishes_stable_bytes_without_guest_budget_claim() {
+        let owner = boot_owner();
+        let mut memory = MemorySystem::default();
+        let identity = writable_image_identity(owner, 0x6000_0000, 1, 0x6000_1000);
+        let mut initial = vec![0u8; 2 * STABLE_PRIVATE_PAGE_SIZE];
+        initial[STABLE_PRIVATE_PAGE_SIZE + 4..STABLE_PRIVATE_PAGE_SIZE + 8]
+            .copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        let first = memory
+            .prepare_writable_image_run(identity, &initial)
+            .expect("prepare image run");
+        let stale = memory
+            .prepare_writable_image_run(identity, &initial)
+            .expect("prepare competing detached run");
+        let pin = memory
+            .commit_prepared_writable_image_run(first)
+            .expect("publish image run");
+        assert!(memory.commit_prepared_writable_image_run(stale).is_none());
+        assert!(memory.contains_writable_image_run_pin(&pin));
+        assert_eq!(pin.len(), initial.len());
+        assert_eq!(
+            pin.physical_status(),
+            WritableImagePhysicalStatus::Unclassified
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+        assert!(memory.has_stable_writable_image_runs());
+        let mut readback = [0u8; 4];
+        pin.read_bytes(STABLE_PRIVATE_PAGE_SIZE + 4, &mut readback)
+            .expect("read initial bytes");
+        assert_eq!(u32::from_le_bytes(readback), 0x1234_5678);
+        let native_lease = pin.begin_native_access().expect("native lease");
+        assert_eq!(
+            native_lease.native_ptr() as usize % STABLE_PRIVATE_PAGE_SIZE,
+            0
+        );
+        assert_eq!(
+            pin.read_bytes(0, &mut readback),
+            Err(WritableImageRunAccessError::NativeExecutionActive)
+        );
+        assert_eq!(
+            pin.write_bytes(0, &[1, 2, 3, 4]),
+            Err(WritableImageRunAccessError::NativeExecutionActive)
+        );
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::NativeExecutionActive)
+        );
+        drop(native_lease);
+        pin.write_bytes(0, &[0xaa, 0xbb, 0xcc, 0xdd])
+            .expect("write after native close");
+        pin.read_bytes(0, &mut readback)
+            .expect("read written bytes");
+        assert_eq!(readback, [0xaa, 0xbb, 0xcc, 0xdd]);
+        assert_eq!(
+            pin.read_bytes(initial.len() - 2, &mut readback),
+            Err(WritableImageRunAccessError::OutOfRange)
+        );
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+    }
+
+    #[test]
+    fn writable_image_run_exact_retire_fences_pinned_overlap_and_stale_generations() {
+        let (owner, other_birth) = two_owners();
+        let mut memory = MemorySystem::default();
+        let identity = writable_image_identity(owner, 0x6100_0000, 1, 0x6100_1000);
+        let bytes = vec![0x5au8; 2 * STABLE_PRIVATE_PAGE_SIZE];
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare first generation"),
+            )
+            .expect("publish first generation");
+        let other = writable_image_identity(other_birth, 0x6100_0000, 1, 0x6100_1000);
+        assert!(memory.prepare_writable_image_run(other, &bytes).is_some());
+        let overlap = writable_image_identity(owner, 0x60ff_f000, 1, 0x6100_2000);
+        assert!(
+            memory
+                .prepare_writable_image_run(overlap, &bytes[..STABLE_PRIVATE_PAGE_SIZE])
+                .is_none()
+        );
+        let second_generation = writable_image_identity(owner, 0x6100_0000, 2, 0x6100_4000);
+        assert!(
+            memory
+                .prepare_writable_image_run(second_generation, &bytes)
+                .is_none()
+        );
+        assert_eq!(
+            memory.retire_writable_image_module(owner, 0x6100_0000, 2),
+            None
+        );
+        assert!(memory.contains_writable_image_run_pin(&pin));
+        assert_eq!(
+            memory.retire_writable_image_module(owner, 0x6100_0000, 1),
+            Some(1)
+        );
+        assert!(!memory.contains_writable_image_run_pin(&pin));
+        assert_eq!(
+            memory.retire_writable_image_module(owner, 0x6100_0000, 1),
+            None
+        );
+        assert!(
+            memory
+                .prepare_writable_image_run(identity, &bytes)
+                .is_none()
+        );
+        let reused_va = writable_image_identity(owner, 0x6100_0000, 2, 0x6100_1000);
+        assert!(
+            memory
+                .prepare_writable_image_run(reused_va, &bytes)
+                .is_none()
+        );
+        let mut old_bytes = [0; 4];
+        pin.read_bytes(0, &mut old_bytes)
+            .expect("retained native pin keeps old bytes alive");
+        assert_eq!(old_bytes, [0x5a; 4]);
+        drop(pin);
+        let next = memory
+            .prepare_writable_image_run(reused_va, &bytes)
+            .expect("reuse after old pin closes");
+        let next_pin = memory
+            .commit_prepared_writable_image_run(next)
+            .expect("publish next generation");
+        assert_eq!(memory.retire_writable_image_runs_for_owner(owner), 1);
+        assert!(!memory.contains_writable_image_run_pin(&next_pin));
+        drop(next_pin);
+        assert!(
+            memory
+                .prepare_writable_image_run(reused_va, &bytes)
+                .is_none()
+        );
+        assert!(memory.prepare_writable_image_run(other, &bytes).is_some());
+        assert_eq!(memory.private_commit_used_bytes(), 0);
+    }
+
+    #[test]
+    fn writable_image_run_clone_copies_bytes_but_rejects_foreign_pin_and_token() {
+        let owner = boot_owner();
+        let mut source = MemorySystem::default();
+        let identity = writable_image_identity(owner, 0x6200_0000, 1, 0x6200_0000);
+        let source_pin = source
+            .commit_prepared_writable_image_run(
+                source
+                    .prepare_writable_image_run(identity, &vec![0x11; STABLE_PRIVATE_PAGE_SIZE])
+                    .expect("prepare source run"),
+            )
+            .expect("publish source run");
+        source_pin.write_bytes(8, &[0x22]).expect("mutate source");
+        let pending_identity = writable_image_identity(owner, 0x6201_0000, 1, 0x6201_0000);
+        let pending = source
+            .prepare_writable_image_run(pending_identity, &vec![0; STABLE_PRIVATE_PAGE_SIZE])
+            .expect("prepare detached source token");
+        let mut copy = source.clone();
+        assert!(copy.has_stable_writable_image_runs());
+        assert!(!copy.contains_writable_image_run_pin(&source_pin));
+        assert!(copy.commit_prepared_writable_image_run(pending).is_none());
+        let copy_pin = copy
+            .writable_image_run_pin(identity)
+            .expect("cloned canonical run");
+        assert!(copy.contains_writable_image_run_pin(&copy_pin));
+        let source_lease = source_pin.begin_native_access().expect("source lease");
+        let copy_lease = copy_pin.begin_native_access().expect("copy lease");
+        assert_ne!(
+            copy_lease.native_ptr() as usize,
+            source_lease.native_ptr() as usize
+        );
+        drop(copy_lease);
+        drop(source_lease);
+        let mut value = [0u8; 1];
+        copy_pin.read_bytes(8, &mut value).expect("read copy");
+        assert_eq!(value, [0x22]);
+        copy_pin.write_bytes(8, &[0x33]).expect("mutate copy");
+        source_pin.read_bytes(8, &mut value).expect("read source");
+        assert_eq!(value, [0x22]);
+        assert_eq!(source.private_commit_used_bytes(), 0);
+        assert_eq!(copy.private_commit_used_bytes(), 0);
     }
 
     fn committed_private_slab(
