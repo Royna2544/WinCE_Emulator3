@@ -192,6 +192,12 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     MessageBox or production-reachable rendered popup without a whole-display
     preflight. The [modal D-011 design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-extension-design-record-not-implemented)
     scopes a fail-closed source gate; it is not yet an implementation.
+    A separate 2026-10-16 source audit found that successful natural parked
+    completion and initial-child `Exited` can drop nonmodal descendant CPU
+    queues, as can active exact-birth tree removal; requested parked and
+    initial-child `Completed` instead hoist descendants. This is an untested
+    ownership-loss path, not an attributed live failure, and a modal-presence
+    refusal alone does not repair it.
     Failures after preflight are not proven
     whole-exit atomic. CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin

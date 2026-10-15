@@ -77,8 +77,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    [VM allocation](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md));
    the normal app loader is still copy-backed. Next, fence other direct
    host-write/restore/rebind paths and exact module-retirement races with
-   synthetic controls. Then migrate preloaded and runtime DLLs
-   as separate exact-birth/module-generation cuts with failure/unload tests.
+   synthetic controls. The user chose to keep production images on this
+   copy-backed path until O-M3 accounting is known; only then migrate the
+   main EXE, preloaded DLLs and runtime DLLs as separate exact-birth/
+   module-generation cuts with failure/unload tests.
    Settle [O-M3](docs/DECISIONS.md) per-page physical provenance and
    `PrivatePageBudget` timing before guest-budget or live acceptance; do not
    treat the synthetic `Unclassified`/zero-charge path as that decision.
@@ -118,6 +120,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      then add checked modal-backing restore preparation and handle failures
      after successful preflight without claiming whole-exit
      atomicity, and settle foreign-link topology under O-G4.
+     Separately prove ownership of nonmodal descendant CPU queues on successful
+     natural parked, initial-child `Exited` and active exact-birth completion;
+     either hoist/extract them or fail closed before a destructive drop.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their
