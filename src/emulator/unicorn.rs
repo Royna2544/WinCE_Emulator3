@@ -334,17 +334,45 @@ struct SavedCpuContext {
 #[cfg(feature = "unicorn")]
 struct NativeCurrentThread {
     state: std::cell::Cell<(u32, Option<crate::ce::object::ThreadBirthKey>)>,
+    /// Run-owned terminal latch, shared with the native attempt result path.
+    /// Tests constructed outside an attempt receive their own inspectable
+    /// latch; a canonical frame failure never depends on private-VM mapping.
+    terminal_error: std::rc::Rc<std::cell::RefCell<Option<Error>>>,
 }
 
 #[cfg(feature = "unicorn")]
 impl NativeCurrentThread {
     fn new(thread_id: u32, birth: Option<crate::ce::object::ThreadBirthKey>) -> Self {
+        Self::with_terminal_error(
+            thread_id,
+            birth,
+            std::rc::Rc::new(std::cell::RefCell::new(None)),
+        )
+    }
+
+    fn with_terminal_error(
+        thread_id: u32,
+        birth: Option<crate::ce::object::ThreadBirthKey>,
+        terminal_error: std::rc::Rc<std::cell::RefCell<Option<Error>>>,
+    ) -> Self {
         Self {
             state: std::cell::Cell::new((
                 thread_id,
                 birth.filter(|birth| birth.thread_id() == thread_id),
             )),
+            terminal_error,
         }
+    }
+
+    fn fail_backend(&self, thread_id: u32, reason: impl Into<String>) {
+        let reason = reason.into();
+        tracing::error!(target: "ce.scheduler", thread_id, reason, "native frame failed");
+        let mut failure = self.terminal_error.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(Error::Backend(reason));
+        }
+        drop(failure);
+        self.set_unverified(thread_id);
     }
 
     fn get(&self) -> (u32, Option<crate::ce::object::ThreadBirthKey>) {
@@ -482,6 +510,37 @@ fn try_publish_native_opaque_wait<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_publish_native_finite_sleep<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    current_thread: &NativeCurrentThread,
+    terminal_error: &std::cell::RefCell<Option<Error>>,
+    owner_birth: crate::ce::object::ThreadBirthKey,
+    thread_handle: u32,
+    wait_started_ms: u32,
+    timeout_ms: u32,
+) -> Option<crate::ce::object::TaskFrameRef> {
+    match kernel.try_publish_finite_sleep_wait_for_birth(
+        owner_birth,
+        thread_handle,
+        wait_started_ms,
+        timeout_ms,
+    ) {
+        Ok(frame) => Some(frame),
+        Err(error) => {
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread,
+                terminal_error,
+                owner_birth.thread_id(),
+                format!("finite Sleep frame publication rejected: {error:?}"),
+            );
+            None
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn retire_exact_opaque_send(
     kernel: &mut CeKernel,
     send_id: u64,
@@ -562,6 +621,7 @@ fn verified_sleep_wait_birth(
     thread_handle: u32,
 ) -> Option<crate::ce::object::ThreadBirthKey> {
     let wait = kernel.blocked_waiter(wait_id)?;
+    let frame = wait.frame_ref?;
     if wait.id != wait_id
         || wait.thread_id != thread_id
         || wait.thread_handle != thread_handle
@@ -570,11 +630,14 @@ fn verified_sleep_wait_birth(
             crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
         )
         || !wait.wait_handles.is_empty()
+        || !kernel.is_blocked_finite_sleep_frame(frame)
     {
         return None;
     }
     wait.owner_birth.filter(|birth| {
         birth.thread_id() == thread_id
+            && frame.key().owner_birth() == *birth
+            && frame.wait_id() == wait_id
             && kernel.handles.thread_birth_key_by_id(thread_id) == Some(*birth)
             && kernel.handles.thread_execution_live_by_id(thread_id)
     })
@@ -1489,6 +1552,8 @@ enum BlockedWaitKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockedWaitThread {
     wait_id: u64,
+    /// Immutable locator only; mutable frame phase lives in HandleTable.
+    frame_ref: Option<crate::ce::object::TaskFrameRef>,
     thread_id: u32,
     thread_handle: u32,
     wait_handles: Vec<u32>,
@@ -3101,13 +3166,21 @@ impl UnicornMips {
         let Some(saved) = self.saved_context.as_ref().cloned() else {
             return false;
         };
-        let Some(thread_id) = self
-            .tracked_thread_ids()
-            .into_iter()
-            .find(|thread_id| kernel.thread_has_pending_sent_message(*thread_id))
-        else {
+        // The saved CPU image belongs to exactly one birth. Looking through
+        // every tracked numeric TID can dequeue a send for a sleeping peer
+        // and run its WNDPROC on another thread's registers.
+        let Some(saved_birth) = self.saved_context_thread_birth else {
             return false;
         };
+        let thread_id = saved_birth.thread_id();
+        if thread_id != self.current_thread_id
+            || !kernel.is_live_thread_birth(saved_birth)
+            || self.thread_has_non_send_blocked_scheduler_context(thread_id)
+            || kernel.handles.active_finite_sleep_frame(saved_birth).is_some()
+            || !kernel.thread_has_pending_sent_message(thread_id)
+        {
+            return false;
+        }
         let Some(message) = kernel.take_ready_sent_message_w_filtered(thread_id, None, 0, 0) else {
             return false;
         };
@@ -8213,9 +8286,10 @@ impl UnicornMips {
         let code_hook_previous_pc = Rc::new(Cell::new(None::<u32>));
         let code_hook_previous_pc_hook = Rc::clone(&code_hook_previous_pc);
         let live_trampoline_state_wall_clock_hook = Rc::clone(&live_trampoline_state);
-        let current_thread_id = Rc::new(NativeCurrentThread::new(
+        let current_thread_id = Rc::new(NativeCurrentThread::with_terminal_error(
             self.current_thread_id,
             slice_entry_thread_birth,
+            Rc::clone(&immediate_process_sync_error),
         ));
         let current_thread_id_hook = Rc::clone(&current_thread_id);
         let current_thread_id_code_hook = Rc::clone(&current_thread_id);
@@ -22688,6 +22762,7 @@ fn try_block_message_queue_io<D>(
         };
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -22775,6 +22850,7 @@ fn try_block_message_queue_io<D>(
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -22896,6 +22972,7 @@ fn try_block_message_queue_io<D>(
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -23238,6 +23315,7 @@ fn try_block_wait_for_single_object<D>(
             blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: wait_thread_id,
             thread_handle: callout.thread_handle,
@@ -23363,6 +23441,7 @@ fn try_block_wait_for_single_object<D>(
             blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: wait_thread_id,
             thread_handle,
@@ -23519,6 +23598,7 @@ fn try_block_wait_for_single_object<D>(
             blocked_waits,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -24008,11 +24088,24 @@ fn try_block_sleep<D>(
         );
         return true;
     }
-    kernel.record_blocked_thread_sleep(timeout);
+    // A blocked frame cannot safely be reconstructed from zero-filled native
+    // registers. Capture the complete MIPS state before any wait publication
+    // or task-owned frame transition.
+    let regs = match capture_mips_context_checked(uc) {
+        Ok(regs) => regs,
+        Err(error) => {
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread_id,
+                terminal_error,
+                thread_id,
+                format!("finite Sleep register capture failed: {error:?}"),
+            );
+            return true;
+        }
+    };
+    let return_pc = regs.regs[31];
     let wait_started_ms = kernel.timers.tick_count();
-    remove_stale_blocked_get_message_for_thread(kernel, blocked_get_message, thread_id);
-    let regs = capture_mips_gprs(uc);
-    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     let kind = BlockedWaitKind::Sleep;
     annotate_blocking_sleep_import(
         last_imports,
@@ -24030,20 +24123,19 @@ fn try_block_sleep<D>(
         .rfind(|pending| pending.worker_thread_id == thread_id)
         .cloned();
     if let Some(pending_callout) = pending_callout {
-        let Some(wait_id) = try_publish_native_opaque_wait(
+        let Some(frame) = try_publish_native_finite_sleep(
             kernel,
             uc,
             current_thread_id,
             terminal_error,
             captured_native_birth,
             pending_callout.thread_handle,
-            Vec::new(),
-            scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
         ) else {
             return true;
         };
+        let wait_id = frame.wait_id();
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, pending_callout.thread_handle)
             != Some(captured_native_birth)
         {
@@ -24062,8 +24154,9 @@ fn try_block_sleep<D>(
             let _ = uc.emu_stop();
             return true;
         };
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        kernel.record_blocked_thread_sleep(timeout);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: Some(frame),
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -24115,20 +24208,19 @@ fn try_block_sleep<D>(
                 kernel, uc, thread_id, timeout, return_pc, live_pump,
             );
         }
-        let Some(wait_id) = try_publish_native_opaque_wait(
+        let Some(frame) = try_publish_native_finite_sleep(
             kernel,
             uc,
             current_thread_id,
             terminal_error,
             captured_native_birth,
             thread_handle,
-            Vec::new(),
-            scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
         ) else {
             return true;
         };
+        let wait_id = frame.wait_id();
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -24138,8 +24230,9 @@ fn try_block_sleep<D>(
             let _ = uc.emu_stop();
             return true;
         }
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        kernel.record_blocked_thread_sleep(timeout);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: Some(frame),
             wait_id,
             thread_id,
             thread_handle,
@@ -24232,20 +24325,19 @@ fn try_block_sleep<D>(
             );
         }
         let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
-        let Some(wait_id) = try_publish_native_opaque_wait(
+        let Some(frame) = try_publish_native_finite_sleep(
             kernel,
             uc,
             current_thread_id,
             terminal_error,
             captured_native_birth,
             thread_handle,
-            Vec::new(),
-            scheduler_blocked_wait_kind(kind),
             wait_started_ms,
             timeout,
         ) else {
             return true;
         };
+        let wait_id = frame.wait_id();
         if verified_sleep_wait_birth(kernel, wait_id, thread_id, thread_handle)
             != Some(captured_native_birth)
         {
@@ -24255,8 +24347,9 @@ fn try_block_sleep<D>(
             let _ = uc.emu_stop();
             return true;
         }
-        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        kernel.record_blocked_thread_sleep(timeout);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: Some(frame),
             wait_id,
             thread_id,
             thread_handle,
@@ -24878,6 +24971,7 @@ fn try_block_wait_for_multiple_objects<D>(
             ),
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -24973,6 +25067,7 @@ fn try_block_wait_for_multiple_objects<D>(
             ),
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -25289,6 +25384,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             }
         };
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -25369,6 +25465,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             }
         };
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -25885,6 +25982,7 @@ fn block_serial_read_file<D>(
         };
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -25949,6 +26047,7 @@ fn block_serial_read_file<D>(
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -26170,6 +26269,7 @@ fn block_wait_comm_event<D>(
         };
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -26234,6 +26334,7 @@ fn block_wait_comm_event<D>(
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -26774,6 +26875,7 @@ fn block_winsock_read<D>(
         };
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
@@ -26838,6 +26940,7 @@ fn block_winsock_read<D>(
         }
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -26932,6 +27035,14 @@ fn verified_native_blocked_wait_birth(
     let wait = kernel.blocked_waiter(candidate.wait_id)?;
     let birth = wait.owner_birth?;
     (wait.id == candidate.wait_id
+        && wait.frame_ref == candidate.frame_ref
+        && candidate
+            .frame_ref
+            .is_none_or(|frame| {
+                frame.wait_id() == candidate.wait_id
+                    && wait.owner_birth == Some(frame.key().owner_birth())
+                    && kernel.is_blocked_finite_sleep_frame(frame)
+            })
         && wait.thread_id == candidate.thread_id
         && wait.thread_handle == candidate.thread_handle
         && wait.wait_handles == candidate.wait_handles
@@ -27019,6 +27130,24 @@ fn verified_scheduler_send_wait_owner(
 }
 
 #[cfg(feature = "unicorn")]
+fn abort_native_finite_sleep_resume<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    current_thread: &NativeCurrentThread,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    frame: crate::ce::object::TaskFrameRef,
+    reason: impl Into<String>,
+) -> bool {
+    blocked_waits
+        .borrow_mut()
+        .retain(|blocked| blocked.frame_ref != Some(frame));
+    let _ = kernel.remove_blocked_waiter(frame.wait_id());
+    current_thread.fail_backend(frame.key().owner_birth().thread_id(), reason);
+    let _ = uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_resume_blocked_wait_with_active_pc<D>(
     kernel: &mut CeKernel,
@@ -27049,23 +27178,36 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     let rejected_preselection_wait = {
         let waits = blocked_waits.borrow();
         waits.iter().enumerate().find_map(|(index, blocked)| {
-            (matches!(
-                blocked.kind,
-                BlockedWaitKind::MsgWait { .. }
-                    | BlockedWaitKind::SendMessage { .. }
-                    | BlockedWaitKind::SerialRead { .. }
-                    | BlockedWaitKind::SerialCommEvent { .. }
-                    | BlockedWaitKind::MessageQueueIo { .. }
-                    | BlockedWaitKind::WinsockRead { .. }
-            ) && if matches!(blocked.kind, BlockedWaitKind::SendMessage { .. }) {
+            let check_birth = (matches!(blocked.kind, BlockedWaitKind::Sleep)
+                && blocked.frame_ref.is_some())
+                || matches!(
+                    blocked.kind,
+                    BlockedWaitKind::MsgWait { .. }
+                        | BlockedWaitKind::SendMessage { .. }
+                        | BlockedWaitKind::SerialRead { .. }
+                        | BlockedWaitKind::SerialCommEvent { .. }
+                        | BlockedWaitKind::MessageQueueIo { .. }
+                        | BlockedWaitKind::WinsockRead { .. }
+                );
+            let stale = if matches!(blocked.kind, BlockedWaitKind::SendMessage { .. }) {
                 verified_native_send_wait_birth(kernel, blocked).is_none()
             } else {
                 verified_native_blocked_wait_birth(kernel, blocked).is_none()
-            })
-            .then(|| (index, blocked.clone()))
+            };
+            (check_birth && stale).then(|| (index, blocked.clone()))
         })
     };
     if let Some((index, rejected)) = rejected_preselection_wait {
+        if let Some(frame) = rejected.frame_ref {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                format!("finite Sleep frame {:?} is stale before readiness probe", frame),
+            );
+        }
         blocked_waits.borrow_mut().remove(index);
         let _ = kernel.remove_blocked_waiter(rejected.wait_id);
         tracing::error!(
@@ -27150,6 +27292,16 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         None
     };
     if birth_checked_wait && resumed_birth.is_none() {
+        if let Some(frame) = candidate.frame_ref {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                format!("finite Sleep frame {:?} lost its native owner", frame),
+            );
+        }
         let rejected_owner_birth = kernel
             .blocked_waiter(ready_wait_id)
             .and_then(|wait| wait.owner_birth);
@@ -27199,6 +27351,153 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         && suspended_queue.is_none()
     {
         return false;
+    }
+    if let (BlockedWaitKind::Sleep, Some(frame)) = (candidate.kind, candidate.frame_ref) {
+        // Finite Sleep is the first migrated Task/Frame continuation. Keep
+        // both native payload and scheduler subscription intact until the
+        // complete CPU restore has succeeded. The legacy None-frame Sleep
+        // fixture path below remains a separate compatibility lane.
+        if resumed_birth != Some(frame.key().owner_birth())
+            || !kernel.is_blocked_finite_sleep_frame(frame)
+        {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                format!("finite Sleep {:?} lost its exact owner before resume", frame),
+            );
+        }
+        if !blocked_wait_timed_out(&candidate, kernel.timers.tick_count()) {
+            return false;
+        }
+        let active_to_park = if save_active_context {
+            let regs = match capture_mips_context_checked(uc) {
+                Ok(regs) => regs,
+                Err(error) => {
+                    return abort_native_finite_sleep_resume(
+                        kernel,
+                        uc,
+                        current_thread_id,
+                        blocked_waits,
+                        frame,
+                        format!("finite Sleep active-context capture failed: {error:?}"),
+                    );
+                }
+            };
+            let pc = match active_pc {
+                Some(pc) => pc,
+                None => match uc.reg_read(RegisterMIPS::PC) {
+                    Ok(pc) => pc as u32,
+                    Err(error) => {
+                        return abort_native_finite_sleep_resume(
+                            kernel,
+                            uc,
+                            current_thread_id,
+                            blocked_waits,
+                            frame,
+                            format!("finite Sleep active-PC capture failed: {error:?}"),
+                        );
+                    }
+                },
+            };
+            let Some(birth) = active_context_birth else {
+                return abort_native_finite_sleep_resume(
+                    kernel,
+                    uc,
+                    current_thread_id,
+                    blocked_waits,
+                    frame,
+                    "finite Sleep active context has no verified birth",
+                );
+            };
+            Some(SuspendedGuestThread {
+                thread_id: active_thread_id,
+                thread_birth: Some(birth),
+                thread_handle: running_thread
+                    .borrow()
+                    .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+                regs,
+                pc,
+            })
+        } else {
+            None
+        };
+        if !kernel.begin_finite_sleep_completion(frame) {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                "finite Sleep frame was selected twice or lost its blocked phase",
+            );
+        }
+        if let Some(active) = active_to_park
+            && !push_suspended_guest_thread(suspended_thread, suspended_queue, active)
+        {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                "finite Sleep could not park the displaced active context",
+            );
+        }
+        let mut regs = candidate.regs.clone();
+        regs.set_v0(0);
+        let restored = (|| -> Result<()> {
+            restore_mips_context_checked(uc, &regs)
+                .map_err(|error| Error::Backend(format!("finite Sleep MIPS restore: {error:?}")))?;
+            uc.reg_write(RegisterMIPS::PC, u64::from(candidate.return_pc))
+                .map_err(|error| Error::Backend(format!("finite Sleep PC restore: {error:?}")))?;
+            uc.reg_write(RegisterMIPS::RA, u64::from(candidate.return_pc))
+                .map_err(|error| Error::Backend(format!("finite Sleep RA restore: {error:?}")))?;
+            update_user_kdata_current_ids(uc, candidate.thread_id, kernel.current_process_id())?;
+            Ok(())
+        })();
+        if let Err(error) = restored {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                format!("finite Sleep partial restore is terminal: {error}"),
+            );
+        }
+        if !kernel.retire_finite_sleep_completion(frame) {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                "finite Sleep restored registers but could not retire exact frame",
+            );
+        }
+        blocked_waits.borrow_mut().remove(index);
+        remove_suspended_guest_threads_for_thread(
+            suspended_thread,
+            suspended_queue,
+            candidate.thread_id,
+            resumed_birth,
+        );
+        kernel.record_wait_event_trace(
+            "ResumeBlockedWait",
+            None,
+            Some(true),
+            format!(
+                "id={}/thread={}/kind=Sleep/frame={:?}/return_pc=0x{:08x}/wait_result=0x00000000",
+                frame.wait_id(), candidate.thread_id, frame.key(), candidate.return_pc
+            ),
+        );
+        kernel.record_resumed_thread_sleep();
+        current_thread_id.set_verified(frame.key().owner_birth());
+        *running_thread.borrow_mut() = Some((candidate.thread_id, candidate.thread_handle));
+        return true;
     }
     let pulsed_handle = kernel.pulsed_wait_handle(ready_wait_id);
     let blocked = blocked_waits.borrow_mut().remove(index);
@@ -28458,6 +28757,7 @@ mod wait_scheduler_tests {
 
     fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
         BlockedWaitThread {
+            frame_ref: None,
             wait_id: 1,
             thread_id: 1,
             thread_handle: 0x100,
@@ -28472,6 +28772,7 @@ mod wait_scheduler_tests {
 
     fn blocked_wait_for_thread(thread_id: u32, wait_handle: u32) -> BlockedWaitThread {
         BlockedWaitThread {
+            frame_ref: None,
             wait_id: u64::from(thread_id),
             thread_id,
             thread_handle: 0x100 + thread_id,
@@ -28933,6 +29234,7 @@ mod wait_scheduler_tests {
         let mut old_regs = super::MipsGuestContext::zero();
         old_regs.regs[16] = 0xaaaa_1111;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -29056,6 +29358,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         let mut parked_cpu = super::UnicornMips::new()?;
         parked_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -29146,6 +29449,7 @@ mod wait_scheduler_tests {
         let mut parked_cpu = super::UnicornMips::new()?;
         parked_cpu.run_slice_generation = 1;
         parked_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -29259,6 +29563,7 @@ mod wait_scheduler_tests {
                 1,
             );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -29299,6 +29604,7 @@ mod wait_scheduler_tests {
             1,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: live_wait_id,
             thread_id,
             thread_handle: new_handle,
@@ -29370,6 +29676,7 @@ mod wait_scheduler_tests {
             );
         let mut scheduler = super::UnicornMips::new()?;
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -29406,6 +29713,7 @@ mod wait_scheduler_tests {
         owner: crate::ce::object::ProcessBirthKey,
     ) -> BlockedWaitThread {
         BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: 51,
             thread_handle: 0x351,
@@ -29676,6 +29984,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         old_regs.regs[29] = base + 0x8000;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -30684,6 +30993,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         old_regs.regs[29] = base + 0x8000;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -33388,6 +33698,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         old_regs.regs[29] = base + 0x8000;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -33528,6 +33839,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         old_regs.regs[29] = base + 0x8000;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -33654,6 +33966,7 @@ mod wait_scheduler_tests {
                 1,
             );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -33687,6 +34000,7 @@ mod wait_scheduler_tests {
             1,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: live_wait_id,
             thread_id,
             thread_handle: new_handle,
@@ -34170,6 +34484,7 @@ mod wait_scheduler_tests {
             INFINITE,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: stale_wait_id,
             thread_id,
             thread_handle,
@@ -34274,6 +34589,7 @@ mod wait_scheduler_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x9090_0001;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -34488,6 +34804,7 @@ mod wait_scheduler_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x7070_0001;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -35003,6 +35320,7 @@ mod wait_scheduler_tests {
             INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: old_wait_id,
             thread_id,
             thread_handle,
@@ -35095,6 +35413,7 @@ mod wait_scheduler_tests {
             INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: old_wait_id,
             thread_id,
             thread_handle,
@@ -35273,6 +35592,7 @@ mod wait_scheduler_tests {
             INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: old_wait_id,
             thread_id,
             thread_handle,
@@ -35544,6 +35864,7 @@ mod wait_scheduler_tests {
             INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -35812,6 +36133,7 @@ mod wait_scheduler_tests {
             crate::ce::timer::INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: ready_thread_id,
             thread_handle: ready_thread_handle,
@@ -36012,6 +36334,7 @@ mod wait_scheduler_tests {
             101,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -36500,6 +36823,7 @@ mod wait_scheduler_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x5555_1001;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -36622,6 +36946,7 @@ mod wait_scheduler_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x5555_2001;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -36732,6 +37057,7 @@ mod wait_scheduler_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x5555_3001;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -36831,6 +37157,7 @@ mod wait_scheduler_tests {
             crate::ce::timer::INFINITE,
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: ready_thread_id,
             thread_handle: ready_thread_handle,
@@ -36929,6 +37256,7 @@ mod wait_scheduler_tests {
         )
         .unwrap();
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: ready_thread_id,
             thread_handle: ready_thread_handle,
@@ -37016,6 +37344,7 @@ mod wait_scheduler_tests {
         ready_regs.hi = ready_hi;
         ready_regs.lo = ready_lo;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: ready_thread_id,
             thread_handle: ready_thread_handle,
@@ -39750,6 +40079,7 @@ mod wait_scheduler_tests {
         );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![
             BlockedWaitThread {
+                frame_ref: None,
                 wait_id: wait_a,
                 thread_id,
                 thread_handle: 0x107,
@@ -39761,6 +40091,7 @@ mod wait_scheduler_tests {
                 return_pc: 0,
             },
             BlockedWaitThread {
+                frame_ref: None,
                 wait_id: wait_b,
                 thread_id: 8,
                 thread_handle: 0x108,
@@ -39859,6 +40190,7 @@ mod wait_scheduler_tests {
         });
         scheduler.blocked_wait_threads = vec![
             BlockedWaitThread {
+                frame_ref: None,
                 wait_id: wait_a,
                 thread_id,
                 thread_handle,
@@ -39870,6 +40202,7 @@ mod wait_scheduler_tests {
                 return_pc: 0,
             },
             BlockedWaitThread {
+                frame_ref: None,
                 wait_id: wait_c,
                 thread_id: other_thread_id,
                 thread_handle: 0x108,
@@ -40306,6 +40639,7 @@ mod wait_scheduler_tests {
                 crate::ce::timer::INFINITE,
             );
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: stale_wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -40652,6 +40986,7 @@ mod wait_scheduler_tests {
         old_regs.regs[16] = 0xaaaa_1111;
         old_regs.regs[29] = 0x3000_0a00;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: stale_wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -40793,6 +41128,7 @@ mod wait_scheduler_tests {
         let mut old_regs = super::MipsGuestContext::zero();
         old_regs.regs[16] = 0xaaaa_1111;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id: stale_wait_id,
             thread_id,
             thread_handle: old_handle,
@@ -40901,6 +41237,7 @@ mod wait_scheduler_tests {
         regs.regs[29] = 0x3000_0a00;
         let return_pc = 0x0040_3004_u32;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle: worker_handle,
@@ -41187,6 +41524,7 @@ mod wait_scheduler_tests {
         regs.regs[29] = 0x3000_0d00;
         let return_pc = 0x0040_3004_u32;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: boot_thread_id,
             thread_handle: boot_pseudo_handle,
@@ -41361,6 +41699,7 @@ mod wait_scheduler_tests {
         let mut regs = super::MipsGuestContext::zero();
         regs.regs[16] = 0x1357_0009;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: blocked_thread_id,
             thread_handle: blocked_thread_handle,
@@ -41505,6 +41844,7 @@ mod wait_scheduler_tests {
 
         let now = kernel.timers.tick_count();
         let mut blocked = super::BlockedWaitThread {
+            frame_ref: None,
             wait_id: 1,
             thread_id: ui_thread_id,
             thread_handle: 0x107,
@@ -45945,6 +46285,7 @@ mod guest_thread_stack_tests {
         sleeping_parent
             .blocked_wait_threads
             .push(BlockedWaitThread {
+                frame_ref: None,
                 wait_id,
                 thread_id: sleeping_thread,
                 thread_handle: sleeping_handle,
@@ -46278,6 +46619,7 @@ mod guest_thread_stack_tests {
         );
         let mut sender_cpu = UnicornMips::new()?;
         sender_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -46412,6 +46754,7 @@ mod guest_thread_stack_tests {
         );
         let mut sender_cpu = UnicornMips::new()?;
         sender_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -46506,6 +46849,7 @@ mod guest_thread_stack_tests {
             crate::ce::timer::INFINITE,
         );
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -47066,6 +47410,7 @@ mod guest_thread_stack_tests {
         scheduler.set_initial_thread_id(thread_id);
         scheduler.current_thread_id = thread_id;
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: 1,
             thread_id,
             thread_handle,
@@ -47784,6 +48129,7 @@ mod guest_thread_stack_tests {
         stopped_cpu.run_slice_generation = 1;
         stopped_cpu.entry = Some(0x0040_1000);
         stopped_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: 4,
             thread_handle: 0,
@@ -47906,6 +48252,7 @@ mod guest_thread_stack_tests {
         );
         let mut parent_cpu = UnicornMips::new()?;
         parent_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: MAIN_GUEST_THREAD_ID,
             thread_handle: 0,
@@ -48160,6 +48507,7 @@ mod guest_thread_stack_tests {
         child_cpu.run_slice_generation = 1;
         child_cpu.entry = Some(0x0040_1000);
         child_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: child_launch.thread_id,
             thread_handle: child_launch.thread_handle,
@@ -49142,6 +49490,7 @@ mod guest_thread_stack_tests {
         parked_cpu.set_initial_thread_id(parked_thread);
         parked_cpu.current_thread_id = parked_thread;
         parked_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: parked_wait_id,
             thread_id: parked_thread,
             thread_handle: parked_handle,
@@ -50966,6 +51315,7 @@ mod guest_thread_stack_tests {
             ..Default::default()
         });
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id: 8,
             thread_id: 8,
             thread_handle: 0x1008,
@@ -51050,6 +51400,7 @@ mod guest_thread_stack_tests {
         );
         let mut sender_cpu = UnicornMips::new()?;
         sender_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -51367,6 +51718,7 @@ mod guest_thread_stack_tests {
         scheduler.set_initial_thread_id(sender_thread);
         scheduler.current_thread_id = sender_thread;
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -51589,6 +51941,7 @@ mod guest_thread_stack_tests {
         scheduler.set_initial_thread_id(sender_thread);
         scheduler.current_thread_id = sender_thread;
         scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -51647,6 +52000,7 @@ mod guest_thread_stack_tests {
         child_cpu.current_thread_id = child_thread;
         child_cpu.running_guest_thread = None;
         child_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: child_thread,
             thread_handle: child_handle,
@@ -55277,6 +55631,7 @@ fn try_enter_send_message_callout<D>(
                 return true;
             };
             let blocked = BlockedWaitThread {
+                frame_ref: None,
                 wait_id,
                 thread_id: active_thread_id,
                 thread_handle,
@@ -55404,6 +55759,154 @@ fn try_enter_send_message_callout<D>(
         return true;
     }
 
+    // A same-process receiver in finite Sleep is not eligible for the
+    // immediate receiver-context WNDPROC shortcut. Queue the send and park
+    // its exact-birth sender; the Sleep timeout must restore T before any
+    // message retrieval can activate this send. GetMessage remains on its
+    // distinct sent-callout bridge.
+    let sleeping_receiver = should_receiver_context
+        .then(|| {
+            kernel
+                .live_thread_birth_key_by_id(target_thread_id)
+                .and_then(|birth| kernel.handles.active_finite_sleep_frame(birth))
+        })
+        .flatten();
+    if let Some(receiver_frame) = sleeping_receiver {
+        if !kernel.is_blocked_finite_sleep_frame(receiver_frame) {
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread_id,
+                terminal_error,
+                active_thread_id,
+                format!("SendMessage receiver Sleep frame {receiver_frame:?} is not blocked"),
+            );
+            return true;
+        }
+        let sender_birth = verified_native_register_birth(
+            kernel,
+            current_thread_id,
+            active_thread_id,
+        )
+        .filter(|_| {
+            kernel.handles.thread_creation_owner_by_id(active_thread_id)
+                == kernel.current_process_birth_key()
+        });
+        let Some(sender_birth) = sender_birth else {
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread_id,
+                terminal_error,
+                active_thread_id,
+                "sleeping-receiver SendMessage has stale sender birth",
+            );
+            return true;
+        };
+        let sender_regs = match capture_mips_context_checked(uc) {
+            Ok(regs) => regs,
+            Err(error) => {
+                stop_native_opaque_wait_error(
+                    uc,
+                    current_thread_id,
+                    terminal_error,
+                    active_thread_id,
+                    format!("sleeping-receiver SendMessage capture failed: {error:?}"),
+                );
+                return true;
+            }
+        };
+        let sender_return_pc =
+            import_callout_return_pc(sender_regs.regs[31], trampoline_jumps);
+        let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
+        let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+            active_thread_id,
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            timeout_ms,
+        ) else {
+            return false;
+        };
+        let previous_running_thread = running_thread.borrow().map(|(thread_id, handle)| {
+            let handle = if handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+                || kernel.handles.thread_birth_key_for_handle(handle) == Some(sender_birth)
+            {
+                handle
+            } else {
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+            };
+            (thread_id, handle)
+        });
+        let thread_handle = guest_thread_handle_for_running_context(
+            kernel,
+            previous_running_thread,
+            active_thread_id,
+        );
+        let wait_started_ms = kernel.timers.tick_count();
+        let timeout_for_wait = timeout_ms.unwrap_or(crate::ce::timer::INFINITE);
+        let kind = BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id: target_thread_id,
+            result_ptr,
+            previous_running_thread,
+        };
+        let Some(wait_id) = try_publish_native_opaque_wait(
+            kernel,
+            uc,
+            current_thread_id,
+            terminal_error,
+            sender_birth,
+            thread_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout_for_wait,
+        ) else {
+            retire_exact_opaque_send(kernel, send_id, None);
+            return true;
+        };
+        let blocked = BlockedWaitThread {
+            frame_ref: None,
+            wait_id,
+            thread_id: active_thread_id,
+            thread_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: timeout_for_wait,
+            regs: sender_regs,
+            return_pc: sender_return_pc,
+        };
+        if verified_native_send_wait_birth(kernel, &blocked) != Some(sender_birth)
+            || !kernel.is_blocked_finite_sleep_frame(receiver_frame)
+        {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            retire_exact_opaque_send(kernel, send_id, None);
+            stop_native_opaque_wait_error(
+                uc,
+                current_thread_id,
+                terminal_error,
+                active_thread_id,
+                format!("sleeping-receiver SendMessage {send_id} lost exact sender or receiver frame"),
+            );
+            return true;
+        }
+        blocked_waits.borrow_mut().push(blocked);
+        *running_thread.borrow_mut() = None;
+        tracing::debug!(
+            target: "ce.gwe",
+            source,
+            sender_thread_id = active_thread_id,
+            receiver_thread_id = target_thread_id,
+            send_id,
+            wait_id,
+            ?receiver_frame,
+            "queued same-process SendMessage while receiver Sleep remains blocked"
+        );
+        let _ = uc.emu_stop();
+        return true;
+    }
+
     tracing::debug!(
         target: "ce.gwe",
         source,
@@ -55491,6 +55994,7 @@ fn try_enter_send_message_callout<D>(
             return true;
         };
         let blocked = BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: active_thread_id,
             thread_handle,
@@ -64360,6 +64864,7 @@ mod unicorn_tests {
         peer_regs.regs[8] = 0x5678;
         peer_regs.regs[29] = peer.stack_top.unwrap() - 0x200;
         peer.blocked_wait_threads.push(super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: launch.thread_id,
             thread_handle: launch.thread_handle,
@@ -73711,6 +74216,7 @@ mod unicorn_tests {
         let mut regs = super::MipsGuestContext::zero();
         regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x100;
         cpu.blocked_wait_threads.push(super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id,
             thread_handle,
@@ -74130,6 +74636,7 @@ mod unicorn_tests {
         regs.regs[16] = 0x1357_2468;
         regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x200;
         cpu.blocked_wait_threads.push(super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_handle,
@@ -74230,6 +74737,7 @@ mod unicorn_tests {
         regs.regs[9] = 0x1000;
         regs.regs[29] = cpu.stack_top.expect("loaded guest stack") - 0x200;
         cpu.blocked_wait_threads.push(super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_handle,
@@ -75942,7 +76450,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: finite Sleep must defer an active sent-message callout until its receiver wakes"]
     fn native_finite_sleep_defers_active_sent_callout_for_same_receiver() -> crate::Result<()> {
         use crate::ce::coredll_ordinals::ORD_SLEEP;
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
@@ -76102,7 +76609,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: native same-process SendMessageW must not enter a receiver in finite Sleep"]
     fn native_same_process_send_defers_wndproc_during_receiver_sleep() -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_SEND_MESSAGE_W, ORD_SLEEP};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
@@ -76283,9 +76789,14 @@ mod unicorn_tests {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new()?;
-        let receiver_process = 67;
-        let receiver_thread = 3;
-        let worker_thread = 5;
+        let receiver_launch =
+            kernel.queue_process_launch(Some("\\Test\\pending-receiver.exe".to_owned()), None);
+        let _ = kernel.take_pending_process_launches();
+        let receiver_process = receiver_launch.process_id;
+        let receiver_thread = receiver_launch.thread_id;
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("registered receiver birth");
         let sender_thread = 1;
         let wndproc = 0x0001_2570;
         let return_pc = 0x7fff_ffe0;
@@ -76308,7 +76819,7 @@ mod unicorn_tests {
             .expect("queued send");
 
         scheduler.set_initial_thread_id(receiver_thread);
-        scheduler.current_thread_id = worker_thread;
+        scheduler.current_thread_id = receiver_thread;
         let mut regs = super::MipsGuestContext::zero();
         regs.regs[29] = 0x7ffc_0000;
         regs.regs[31] = return_pc;
@@ -76316,6 +76827,7 @@ mod unicorn_tests {
             pc: return_pc,
             regs,
         });
+        scheduler.saved_context_thread_birth = Some(receiver_birth);
 
         assert!(scheduler.prepare_active_sent_message_callout(&mut kernel));
         assert_eq!(scheduler.current_thread_id, receiver_thread);
@@ -78757,6 +79269,7 @@ mod unicorn_tests {
             Some(sender_birth)
         );
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -80244,6 +80757,7 @@ mod unicorn_tests {
             Some(sender_birth)
         );
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
+            frame_ref: None,
             wait_id,
             thread_id: sender_thread,
             thread_handle: sender_handle,
@@ -80315,6 +80829,7 @@ mod unicorn_tests {
             101,
         );
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
+            frame_ref: None,
             wait_id: stale_wait_id,
             thread_id,
             thread_handle,
@@ -80577,6 +81092,7 @@ mod unicorn_tests {
         let mut worker_regs = super::MipsGuestContext::zero();
         worker_regs.regs[16] = 0x5555_0001;
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
+            frame_ref: None,
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
             thread_handle: worker_thread_handle,
@@ -82883,6 +83399,7 @@ mod unicorn_tests {
         };
         device.enqueue_rx(NMEA);
         let blocked = super::BlockedWaitThread {
+            frame_ref: None,
             wait_id: 1,
             thread_id: 1,
             thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
@@ -83081,6 +83598,7 @@ mod unicorn_tests {
         };
         device.enqueue_rx(NMEA);
         let blocked = super::BlockedWaitThread {
+            frame_ref: None,
             wait_id: 11,
             thread_id: 1,
             thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
