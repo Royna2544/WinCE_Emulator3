@@ -906,9 +906,15 @@ struct CreateWindowReturn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SendMessageRestoreContext {
     sender_thread_id: u32,
+    sender_birth: crate::ce::object::ThreadBirthKey,
     receiver_thread_id: u32,
+    receiver_birth: crate::ce::object::ThreadBirthKey,
     send_id: u64,
     wait_id: u64,
+    outer_send_id: u64,
+    outer_wait_id: u64,
+    receiver_return_sp: u32,
+    receiver_wait_regs: MipsGuestContext,
 }
 
 #[cfg(feature = "unicorn")]
@@ -966,6 +972,85 @@ fn complete_recorded_sent_callout(
         kernel.gwe.end_direct_send_message(thread_id);
     }
     Ok(None)
+}
+
+#[cfg(feature = "unicorn")]
+fn preflight_reciprocal_sent_return(
+    kernel: &CeKernel,
+    callout: &PendingWndProcReturn,
+    call_sp: u32,
+    current_thread: (u32, Option<crate::ce::object::ThreadBirthKey>),
+    waits: &[BlockedWaitThread],
+    pending: &[PendingWndProcReturn],
+) -> std::result::Result<(), String> {
+    use crate::ce::gwe::SMF_RESULT_READY;
+
+    let token = callout
+        .send_restore
+        .as_ref()
+        .ok_or_else(|| "reciprocal return has no exact token".to_owned())?;
+    if callout.source != "BlockedSendMessage/SentMessage"
+        || callout.send_thread_id.is_some()
+        || callout.resume_import.is_some()
+        || callout.continuation.is_some()
+        || callout.return_sp != token.receiver_return_sp
+        || callout.return_sp.checked_sub(WNDPROC_CALL_FRAME_BYTES) != Some(call_sp)
+        || current_thread != (token.receiver_thread_id, Some(token.receiver_birth))
+        || !kernel.is_live_thread_birth(token.receiver_birth)
+        || !kernel.is_live_thread_birth(token.sender_birth)
+        || pending.len() != 2
+        || pending.last().and_then(|top| top.send_restore.as_ref()) != Some(token)
+    {
+        return Err("reciprocal return lost its exact receiver frame or birth".to_owned());
+    }
+    let outer = waits
+        .iter()
+        .find(|wait| wait.wait_id == token.outer_wait_id)
+        .ok_or_else(|| "reciprocal return lost S outer native wait".to_owned())?;
+    let inner = waits
+        .iter()
+        .find(|wait| wait.wait_id == token.wait_id)
+        .ok_or_else(|| "reciprocal return lost T inner native wait".to_owned())?;
+    if outer.thread_id != token.receiver_thread_id
+        || outer.regs.regs[29] != token.receiver_return_sp
+        || outer.regs != token.receiver_wait_regs
+        || outer.timeout_ms != crate::ce::timer::INFINITE
+        || !matches!(outer.kind, BlockedWaitKind::SendMessage { send_id, receiver_thread_id, result_ptr: None, .. }
+            if send_id == token.outer_send_id && receiver_thread_id == token.sender_thread_id)
+        || verified_native_send_wait_birth(kernel, outer) != Some(token.receiver_birth)
+        || inner.thread_id != token.sender_thread_id
+        || inner.timeout_ms != crate::ce::timer::INFINITE
+        || !matches!(inner.kind, BlockedWaitKind::SendMessage { send_id, receiver_thread_id, result_ptr: None, .. }
+            if send_id == token.send_id && receiver_thread_id == token.receiver_thread_id)
+        || verified_native_send_wait_birth(kernel, inner) != Some(token.sender_birth)
+        || kernel.gwe.active_sent_message_id(token.sender_thread_id) != Some(token.outer_send_id)
+        || kernel
+            .gwe
+            .active_sent_message_receiver_birth(token.receiver_thread_id, token.send_id)
+            != Some(Some(token.receiver_birth))
+        || !pending[0].resume_import.as_ref().is_some_and(|parent| {
+            parent.thread_id == token.sender_thread_id
+                && parent.thread_birth == token.sender_birth
+                && parent.sent_message_id == Some(token.outer_send_id)
+        })
+    {
+        return Err("reciprocal return lost exact nested Send ownership".to_owned());
+    }
+    let sent = kernel
+        .gwe
+        .sent_message(token.send_id)
+        .ok_or_else(|| "reciprocal return lost inner GWE send".to_owned())?;
+    if sent.sender_thread_id != Some(token.sender_thread_id)
+        || sent.receiver_thread_id != token.receiver_thread_id
+        || sent.receiver_birth != Some(token.receiver_birth)
+        || sent.message.hwnd != callout.hwnd
+        || sent.timeout_ms.is_some()
+        || sent.result.is_some()
+        || sent.flags & SMF_RESULT_READY != 0
+    {
+        return Err("reciprocal return inner GWE send changed".to_owned());
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -10276,6 +10361,44 @@ impl UnicornMips {
                 }
                 if address == WNDPROC_RETURN_STUB_ADDR {
                     let call_sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    // The reverse callback must be authenticated while its
+                    // token is still on the stack. A failed check may not pop
+                    // the callout or complete the inner send by numeric TID.
+                    let reciprocal_preflight = {
+                        let pending = pending_wndproc_returns_hook.borrow();
+                        pending
+                            .iter()
+                            .rposition(|callout| callout.send_restore.is_some())
+                            .and_then(|index| {
+                                let callout = &pending[index];
+                                (index + 1 == pending.len()
+                                    || callout.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES)
+                                        == call_sp)
+                                    .then(|| {
+                                        if index + 1 != pending.len() {
+                                            Err("reciprocal return token is not the top callback"
+                                                .to_owned())
+                                        } else {
+                                            preflight_reciprocal_sent_return(
+                                                unsafe { &*kernel_ptr },
+                                                callout,
+                                                call_sp,
+                                                current_thread_id_hook.get(),
+                                                &blocked_wait_threads_hook.borrow(),
+                                                &pending,
+                                            )
+                                        }
+                                    })
+                            })
+                    };
+                    if let Some(Err(error)) = reciprocal_preflight {
+                        current_thread_id_hook.fail_backend(
+                            current_thread_id_hook.get().0,
+                            format!("reciprocal WNDPROC return: {error}"),
+                        );
+                        let _ = uc.emu_stop();
+                        return;
+                    }
                     let Some(callout) =
                         pop_pending_wndproc_return_for_call_sp(&pending_wndproc_returns_hook, call_sp)
                     else {
@@ -10300,6 +10423,68 @@ impl UnicornMips {
                         return;
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
+                    if let Some(token) = callout.send_restore.as_ref() {
+                        if unsafe { &mut *kernel_ptr }.complete_sent_message_for_birth(
+                            token.receiver_birth,
+                            token.send_id,
+                            result,
+                        ) != Some(token.send_id)
+                        {
+                            current_thread_id_hook.fail_backend(
+                                token.receiver_thread_id,
+                                format!(
+                                    "reciprocal WNDPROC could not complete exact inner send {}",
+                                    token.send_id
+                                ),
+                            );
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                        if matches!(
+                            callout.msg,
+                            crate::ce::gwe::WM_DESTROY | crate::ce::gwe::WM_NCDESTROY
+                        ) {
+                            unsafe { &mut *kernel_ptr }
+                                .gwe
+                                .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
+                        }
+                        release_wndproc_typed_payload(unsafe { &mut *kernel_ptr }, &callout);
+                        let _ = finish_guest_paint_after_wndproc_return(
+                            unsafe { &mut *kernel_ptr },
+                            &callout,
+                        );
+                        record_wndproc_return(
+                            &last_wndproc_returns_hook,
+                            UnicornWndProcReturn {
+                                return_sp: None,
+                                caller_context: None,
+                                source: callout.source,
+                                hwnd: callout.hwnd,
+                                msg: callout.msg,
+                                wparam: callout.wparam,
+                                lparam: callout.lparam,
+                                wndproc: callout.wndproc,
+                                return_pc: callout.return_pc,
+                                return_pc_trampoline_origin: None,
+                                result,
+                                live_fp: Some(read_mips_reg(uc, RegisterMIPS::FP)),
+                                caller_fp: None,
+                                send_thread_id: callout.send_thread_id,
+                                class_name: callout.class_name.clone(),
+                            },
+                        );
+                        // S still owns its original blocked outer Send and
+                        // saved registers. Do not return to that import PC;
+                        // T's exact ready wait will resume on a blank lease.
+                        *running_guest_thread_hook.borrow_mut() = None;
+                        if let Err(error) = uc.emu_stop() {
+                            current_thread_id_hook.fail_backend(
+                                token.receiver_thread_id,
+                                format!("stop reciprocal receiver after reply: {error:?}"),
+                            );
+                        }
+                        return;
+                    }
                     if let Some(resume) = callout.resume_import.as_ref() {
                         let kernel = unsafe { &*kernel_ptr };
                         let current_birth = current_thread_id_hook.get();
@@ -12688,8 +12873,120 @@ impl UnicornMips {
                     ))));
                 }
             }
+            let mut resumed_reciprocal_sent = false;
+            if !resumed_regular_wait
+                && let Some(prepared) = preflight_reciprocal_send_handoff(
+                    kernel,
+                    active_thread_id,
+                    &blocked_wait_threads,
+                    &pending_wndproc_returns,
+                )
+            {
+                // T's native image contains the stopped inner Send trap.
+                // Only a blank lease may receive S's checked outer-wait CPU
+                // image; no queued send or wait is taken before that restore.
+                pre_entry_try!(uc.reset_to_blank().map_err(|err| Error::Backend(format!(
+                    "blank native CPU before reciprocal Send receiver handoff: {err:?}"
+                ))));
+                pre_entry_try!(
+                    restore_mips_context_checked(&mut uc, &prepared.receiver_wait.regs).map_err(
+                        |err| Error::Backend(format!(
+                            "restore reciprocal Send receiver context before queue take: {err:?}"
+                        ))
+                    )
+                );
+                pre_entry_try!(update_user_kdata_current_ids(
+                    &mut uc,
+                    prepared.receiver_wait.thread_id,
+                    kernel.current_process_id(),
+                ));
+                let return_sp = prepared.receiver_wait.regs.regs[29];
+                pre_entry_try!(return_sp.checked_sub(WNDPROC_CALL_FRAME_BYTES).ok_or_else(|| {
+                    Error::Backend("reciprocal Send receiver stack underflow".to_owned())
+                }));
+                if !write_wndproc_call_registers(
+                    &mut uc,
+                    prepared.message.hwnd,
+                    prepared.message.msg,
+                    prepared.message.wparam,
+                    prepared.message.lparam,
+                    prepared.wndproc,
+                    WNDPROC_RETURN_STUB_ADDR,
+                ) {
+                    pre_entry_try!(Err::<(), Error>(Error::Backend(
+                        "prepare reciprocal Send receiver WNDPROC registers".to_owned()
+                    )));
+                }
+                let message = pre_entry_try!(kernel
+                    .take_ready_sent_message_w_filtered_if_id(
+                        prepared.receiver_wait.thread_id,
+                        None,
+                        0,
+                        0,
+                        prepared.inner_send_id,
+                    )
+                    .ok_or_else(|| Error::Backend(format!(
+                        "reciprocal inner send {} changed before exact queue take",
+                        prepared.inner_send_id
+                    ))));
+                if message.hwnd != prepared.message.hwnd
+                    || message.msg != prepared.message.msg
+                    || message.wparam != prepared.message.wparam
+                    || message.lparam != prepared.message.lparam
+                    || kernel.gwe.active_sent_message_id(prepared.receiver_wait.thread_id)
+                        != Some(prepared.inner_send_id)
+                {
+                    pre_entry_try!(Err::<(), Error>(Error::Backend(format!(
+                        "reciprocal inner send {} changed during exact queue take",
+                        prepared.inner_send_id
+                    ))));
+                }
+                pending_wndproc_returns.borrow_mut().push(PendingWndProcReturn {
+                    source: "BlockedSendMessage/SentMessage",
+                    hwnd: message.hwnd,
+                    msg: message.msg,
+                    wparam: message.wparam,
+                    lparam: message.lparam,
+                    typed_payload_owner: message.typed_payload_owner,
+                    wndproc: prepared.wndproc,
+                    return_pc: prepared.receiver_wait.return_pc,
+                    return_sp,
+                    caller_regs: None,
+                    class_name: Some(prepared.class_name),
+                    api_result: None,
+                    dialog_result_hwnd: None,
+                    finalize_destroy: false,
+                    destroy_root_hwnd: None,
+                    remaining_destroy_callouts: Vec::new(),
+                    send_thread_id: None,
+                    send_timeout_result_ptr: None,
+                    send_restore: Some(SendMessageRestoreContext {
+                        sender_thread_id: active_thread_id,
+                        sender_birth: prepared.sender_birth,
+                        receiver_thread_id: prepared.receiver_wait.thread_id,
+                        receiver_birth: prepared.receiver_birth,
+                        send_id: prepared.inner_send_id,
+                        wait_id: prepared.inner_wait_id,
+                        outer_send_id: prepared.outer_send_id,
+                        outer_wait_id: prepared.outer_wait_id,
+                        receiver_return_sp: return_sp,
+                        receiver_wait_regs: prepared.receiver_wait.regs.clone(),
+                    }),
+                    continuation: None,
+                    resume_import: None,
+                    clear_focus_after_return: None,
+                });
+                current_thread_id.set_verified(prepared.receiver_birth);
+                *running_guest_thread.borrow_mut() = Some(verified_send_running_thread(
+                    kernel,
+                    &prepared.receiver_wait,
+                    prepared.receiver_birth,
+                ));
+                resumed_reciprocal_sent = true;
+            }
             let mut resumed_prepared_sent = false;
             if !resumed_regular_wait
+                && !resumed_reciprocal_sent
                 && let Some((blocked, send_id, receiver_birth)) =
                     preflight_ready_birth_owned_get_message_send(
                         kernel,
@@ -12762,6 +13059,7 @@ impl UnicornMips {
                 }
             }
             if resumed_regular_wait
+                || resumed_reciprocal_sent
                 || resumed_prepared_sent
                 || try_resume_blocked_get_message_with_active_pc(
                     kernel,
@@ -12847,6 +13145,32 @@ impl UnicornMips {
                 )
             {
                 start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
+            }
+            let unresolved_send_wait_id = if running_guest_thread.borrow().is_none() {
+                let waits = blocked_wait_threads.borrow();
+                waits
+                    .iter()
+                    .find(|blocked| {
+                        blocked.thread_id == current_thread_id.get().0
+                            && matches!(blocked.kind, BlockedWaitKind::SendMessage { .. })
+                    })
+                    .map(|blocked| {
+                        (
+                            blocked.wait_id,
+                            verified_native_send_wait_birth(kernel, blocked),
+                        )
+                    })
+            } else {
+                None
+            };
+            if let Some((wait_id, owner_birth)) = unresolved_send_wait_id {
+                // A published Send wait, not the stopped import trap, is this
+                // birth's sole continuation. An unsupported or unresolved
+                // receiver handoff must fail closed before emu_start.
+                pre_entry_try!(Err::<(), Error>(Error::Backend(format!(
+                    "blocked SendMessage wait {wait_id} has no exact pre-entry handoff or reply (wait birth {owner_birth:?}, register birth {:?})",
+                    current_thread_id.get().1,
+                ))));
             }
         }
         let pre_entry_wait_failure = immediate_process_sync_error.borrow_mut().take();
@@ -44044,6 +44368,153 @@ fn preflight_ready_birth_owned_get_message_send(
     )?;
     (kernel.gwe.sent_message(send_id)?.receiver_birth == Some(birth))
         .then_some((blocked, send_id, birth))
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Clone)]
+struct ReciprocalSendHandoff {
+    receiver_wait: BlockedWaitThread,
+    receiver_birth: crate::ce::object::ThreadBirthKey,
+    sender_birth: crate::ce::object::ThreadBirthKey,
+    inner_wait_id: u64,
+    inner_send_id: u64,
+    outer_wait_id: u64,
+    outer_send_id: u64,
+    message: crate::ce::gwe::Message,
+    wndproc: u32,
+    class_name: String,
+}
+
+/// Only a birth-owned, plain S->T Send interrupted by T's plain reverse
+/// Send may enter S's WNDPROC while S's outer wait remains published. The
+/// import PC saved for either sender is never a runnable fallback.
+#[cfg(feature = "unicorn")]
+fn preflight_reciprocal_send_handoff(
+    kernel: &mut CeKernel,
+    active_thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> Option<ReciprocalSendHandoff> {
+    use crate::ce::gwe::{WindowDeliveryOwner, SMF_RESULT_READY};
+
+    let waits = blocked_waits.borrow();
+    let inner = waits.iter().find(|wait| {
+        wait.thread_id == active_thread_id
+            && matches!(wait.kind, BlockedWaitKind::SendMessage { .. })
+    })?;
+    let BlockedWaitKind::SendMessage {
+        send_id: inner_send_id,
+        receiver_thread_id,
+        result_ptr: None,
+        ..
+    } = inner.kind
+    else {
+        return None;
+    };
+    if inner.frame_ref.is_some() || inner.timeout_ms != crate::ce::timer::INFINITE {
+        return None;
+    }
+    let sender_birth = verified_native_send_wait_birth(kernel, inner)?;
+    let inner_sent = kernel.gwe.sent_message(inner_send_id)?;
+    let receiver_birth = inner_sent.receiver_birth?;
+    let owner = kernel.current_process_birth_key()?;
+    if inner_sent.sender_thread_id != Some(active_thread_id)
+        || inner_sent.sender_process_id != Some(owner.process_id())
+        || inner_sent.receiver_thread_id != receiver_thread_id
+        || receiver_birth.thread_id() != receiver_thread_id
+        || !kernel.is_live_thread_birth(receiver_birth)
+        || kernel.handles.thread_creation_owner_by_id(receiver_thread_id) != Some(owner)
+        || inner_sent.timeout_ms.is_some()
+        || inner_sent.result_ptr.is_some()
+        || inner_sent.result.is_some()
+        || inner_sent.flags & SMF_RESULT_READY != 0
+        || inner_sent.send_timeout_flags != 0
+        || kernel.gwe.active_sent_message_id(receiver_thread_id).is_some()
+    {
+        return None;
+    }
+    let receiver_wait = waits.iter().find(|wait| {
+        wait.thread_id == receiver_thread_id
+            && matches!(wait.kind, BlockedWaitKind::SendMessage { .. })
+    })?;
+    let BlockedWaitKind::SendMessage {
+        send_id: outer_send_id,
+        receiver_thread_id: outer_receiver_thread_id,
+        result_ptr: None,
+        ..
+    } = receiver_wait.kind
+    else {
+        return None;
+    };
+    if waits
+        .iter()
+        .filter(|wait| matches!(wait.kind, BlockedWaitKind::SendMessage { .. }))
+        .count()
+        != 2
+        || receiver_wait.frame_ref.is_some()
+        || receiver_wait.timeout_ms != crate::ce::timer::INFINITE
+        || verified_native_send_wait_birth(kernel, receiver_wait) != Some(receiver_birth)
+        || outer_receiver_thread_id != active_thread_id
+        || kernel.gwe.active_sent_message_id(active_thread_id) != Some(outer_send_id)
+    {
+        return None;
+    }
+    let outer_sent = kernel.gwe.sent_message(outer_send_id)?;
+    if outer_sent.sender_thread_id != Some(receiver_thread_id)
+        || outer_sent.sender_process_id != Some(owner.process_id())
+        || outer_sent.receiver_birth != Some(sender_birth)
+        || outer_sent.receiver_thread_id != active_thread_id
+        || outer_sent.timeout_ms.is_some()
+        || outer_sent.result_ptr.is_some()
+        || outer_sent.result.is_some()
+        || outer_sent.flags & SMF_RESULT_READY != 0
+        || outer_sent.send_timeout_flags != 0
+    {
+        return None;
+    }
+    let parent = pending_returns.borrow();
+    if parent.len() != 1
+        || !is_message_read_sent_source(parent[0].source)
+        || parent[0].send_restore.is_some()
+        || parent[0].send_thread_id != Some(active_thread_id)
+        || !parent[0].resume_import.as_ref().is_some_and(|resume| {
+            resume.thread_id == active_thread_id
+                && resume.thread_birth == sender_birth
+                && resume.sent_message_id == Some(outer_send_id)
+        })
+    {
+        return None;
+    }
+    let (queued_id, message, deferred_from_sleep_frame) = kernel
+        .gwe
+        .peek_sent_message_filtered_with_sleep_frame_for_birth(receiver_birth, None, 0, 0)?;
+    if queued_id != inner_send_id || deferred_from_sleep_frame.is_some() {
+        return None;
+    }
+    let window = kernel.gwe.window(message.hwnd)?;
+    if window.destroyed
+        || window.thread_id != receiver_thread_id
+        || window.delivery_owner()
+            != (WindowDeliveryOwner::Birth {
+                thread: receiver_birth,
+                process: owner,
+            })
+        || !is_guest_wndproc(window.wndproc)
+    {
+        return None;
+    }
+    Some(ReciprocalSendHandoff {
+        receiver_wait: receiver_wait.clone(),
+        receiver_birth,
+        sender_birth,
+        inner_wait_id: inner.wait_id,
+        inner_send_id,
+        outer_wait_id: receiver_wait.wait_id,
+        outer_send_id,
+        message,
+        wndproc: window.wndproc,
+        class_name: window.class_name.clone(),
+    })
 }
 
 #[cfg(feature = "unicorn")]
@@ -79524,6 +79995,9 @@ mod unicorn_tests {
         sender_regs.regs[6] = 0x66;
         sender_regs.regs[16] = 0xa0a0_0011;
         sender_regs.regs[29] = sender_sp;
+        sender_regs.hi = 0xa0a0_0022;
+        sender_regs.lo = 0xa0a0_0033;
+        sender_regs.fcsr = 1;
         cpu.suspended_guest_thread = Some(super::SuspendedGuestThread {
             thread_id: sender_thread,
             thread_birth: Some(sender_birth),
@@ -79583,7 +80057,12 @@ mod unicorn_tests {
             })
             .expect("S real outer Send native wait");
         let outer_wait_id = outer.wait_id;
+        let outer_return_pc = outer.return_pc;
         assert_eq!(outer.regs.regs[29], sender_sp);
+        assert_eq!(outer.regs.regs[16], 0xa0a0_0011);
+        assert_eq!(outer.regs.hi, 0xa0a0_0022);
+        assert_eq!(outer.regs.lo, 0xa0a0_0033);
+        assert_eq!(outer.regs.fcsr, 1);
         assert_eq!(outer.thread_handle, sender_handle);
         let outer_scheduler = kernel
             .blocked_waiter(outer_wait_id)
@@ -79596,6 +80075,27 @@ mod unicorn_tests {
         );
         assert_eq!(outer_scheduler.owner_birth, Some(sender_birth));
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+
+        let pre_deadline = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 100,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        assert!(pre_deadline.result.is_ok(), "pre-deadline: {:?}", pre_deadline.result);
+        assert!(
+            pre_deadline.report.attempt_id().is_none(),
+            "S's blocked outer Send replayed before T's finite Sleep deadline: {:?}",
+            pre_deadline.report
+        );
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
+        assert!(kernel.blocked_waiter(sleep_wait_id).is_some());
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert!(cpu.pending_wndproc_returns.is_empty());
 
         kernel.timers.sleep_ms(10_001);
         let wake = cpu.run_until_import_trap_with_framebuffer_limits_report(
@@ -79708,6 +80208,7 @@ mod unicorn_tests {
             })
             .expect("T real inner Send native wait");
         let inner_wait_id = inner.wait_id;
+        let inner_return_pc = inner.return_pc;
         assert_eq!(
             inner.regs.regs[29],
             receiver_sp - super::WNDPROC_CALL_FRAME_BYTES - 0x20
@@ -79808,14 +80309,188 @@ mod unicorn_tests {
             receiver_handoff.report,
         );
         assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
-        assert_eq!(
-            cpu.saved_context
-                .as_ref()
-                .expect("S inner WNDPROC context")
-                .regs
-                .regs[29],
-            sender_sp - super::WNDPROC_CALL_FRAME_BYTES
+        let sender_callback = &cpu.saved_context.as_ref().expect("S inner WNDPROC context").regs;
+        assert_eq!(sender_callback.regs[29], sender_sp - super::WNDPROC_CALL_FRAME_BYTES);
+        assert_eq!(sender_callback.regs[31], super::WNDPROC_RETURN_STUB_ADDR);
+        assert_eq!(sender_callback.regs[16], 0xa0a0_0011);
+        assert_eq!(sender_callback.hi, 0xa0a0_0022);
+        assert_eq!(sender_callback.lo, 0xa0a0_0033);
+        assert_eq!(sender_callback.fcsr, 1);
+        assert_eq!(cpu.pending_wndproc_returns.len(), 2);
+        let parent = &cpu.pending_wndproc_returns[0];
+        assert_eq!(parent.source, "GetMessageW/SentMessage");
+        assert_eq!(parent.resume_import.as_ref().and_then(|resume| resume.sent_message_id), Some(outer_id));
+        let callback = &cpu.pending_wndproc_returns[1];
+        assert_eq!(callback.source, "BlockedSendMessage/SentMessage");
+        let token = callback.send_restore.as_ref().expect("reciprocal inner token");
+        assert_eq!((token.outer_send_id, token.outer_wait_id), (outer_id, outer_wait_id));
+        assert_eq!((token.send_id, token.wait_id), (inner_id, inner_wait_id));
+        assert_eq!((token.receiver_birth, token.sender_birth), (sender_birth, receiver_birth));
+
+        // S replies from its real callback, but its blocked outer Send is not
+        // a runnable continuation yet. T's inner Send and the outer parent
+        // must remain exact until separate blank native leases unwind them.
+        let inner_reply = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
         );
+        assert!(
+            inner_reply.result.is_ok(),
+            "S inner WNDPROC return: {:?}; {:?}",
+            inner_reply.result,
+            inner_reply.report
+        );
+        assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+        assert_eq!(cpu.pending_wndproc_returns[0].source, "GetMessageW/SentMessage");
+        assert_eq!(kernel.gwe.active_sent_message_id(sender_thread), None);
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(outer_id));
+        assert_eq!(kernel.gwe.sent_message(inner_id).and_then(|send| send.result), Some(0x88));
+        assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), None);
+        assert!(kernel.blocked_waiter(inner_wait_id).is_some());
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 1);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]), inner_ids);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
+
+        let inner_resume = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(inner_return_pc),
+                live_pump: true,
+            },
+        );
+        assert!(
+            inner_resume.result.is_ok(),
+            "T inner Send continuation: {:?}; {:?}",
+            inner_resume.result,
+            inner_resume.report
+        );
+        assert_eq!(inner_resume.report.start_thread_id(), Some(receiver_thread));
+        assert_eq!(inner_resume.report.start_pc(), Some(inner_return_pc));
+        assert_eq!(cpu.saved_context_pc(), Some(inner_return_pc));
+        assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
+        let receiver_continuation = &cpu.saved_context.as_ref().expect("T inner Send return").regs;
+        assert_eq!(receiver_continuation.regs[2], 0x88);
+        assert_eq!(
+            receiver_continuation.regs[29],
+            receiver_sp - super::WNDPROC_CALL_FRAME_BYTES - 0x20
+        );
+        assert!(kernel.blocked_waiter(inner_wait_id).is_none());
+        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != inner_wait_id));
+        assert!(kernel.gwe.sent_message(inner_id).is_none());
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 1);
+
+        let outer_reply = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(get_trap),
+                live_pump: true,
+            },
+        );
+        assert!(
+            outer_reply.result.is_ok(),
+            "T outer WNDPROC return: {:?}; {:?}",
+            outer_reply.result,
+            outer_reply.report
+        );
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), Some(0x77));
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
+        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]).is_empty());
+
+        // T must park its resumed GetMessage import before S consumes its
+        // ready outer result. This is the same next-lease boundary as A10.
+        let receiver_park = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(outer_return_pc),
+                live_pump: true,
+            },
+        );
+        assert!(
+            receiver_park.result.is_ok(),
+            "T GetMessage park before S outer resume: {:?}; {:?}",
+            receiver_park.result,
+            receiver_park.report
+        );
+        assert_eq!(cpu.saved_context_pc(), Some(get_trap));
+        assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
+        assert!(kernel.blocked_waiter(outer_wait_id).is_some());
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
+
+        let outer_resume = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(outer_return_pc),
+                live_pump: true,
+            },
+        );
+        assert!(
+            outer_resume.result.is_ok(),
+            "S outer Send continuation: {:?}; {:?}",
+            outer_resume.result,
+            outer_resume.report
+        );
+        assert_eq!(outer_resume.report.start_thread_id(), Some(sender_thread));
+        assert_eq!(outer_resume.report.start_pc(), Some(outer_return_pc));
+        assert_eq!(cpu.saved_context_pc(), Some(outer_return_pc));
+        assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
+        let sender_continuation = &cpu.saved_context.as_ref().expect("S outer Send return").regs;
+        assert_eq!(sender_continuation.regs[2], 0x77);
+        assert_eq!(sender_continuation.regs[29], sender_sp);
+        assert_eq!(sender_continuation.regs[16], 0xa0a0_0011);
+        assert_eq!(sender_continuation.hi, 0xa0a0_0022);
+        assert_eq!(sender_continuation.lo, 0xa0a0_0033);
+        assert_eq!(sender_continuation.fcsr, 1);
+        assert!(kernel.blocked_waiter(outer_wait_id).is_none());
+        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != outer_wait_id));
+        assert!(kernel.gwe.sent_message(outer_id).is_none());
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
+        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd]).is_empty());
+
+        let no_replay = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 16,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        assert!(no_replay.result.is_ok(), "reciprocal no-replay: {:?}", no_replay.result);
+        assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+        assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
+        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd]).is_empty());
+        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != outer_wait_id && wait.wait_id != inner_wait_id));
         Ok(())
     }
 
