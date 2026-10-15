@@ -46,6 +46,29 @@ pub struct KeyEvent {
     pub enqueued_at_ms: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RemoteInputPayload {
+    Touch(TouchEvent),
+    Key(KeyEvent),
+}
+
+/// Admission order is local to this `CeRemote` instance, not guest time or a
+/// machine-wide event identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequencedRemoteInput {
+    pub sequence: u64,
+    pub payload: RemoteInputPayload,
+}
+
+impl SequencedRemoteInput {
+    pub fn enqueued_at_ms(&self) -> u64 {
+        match self.payload {
+            RemoteInputPayload::Touch(event) => event.enqueued_at_ms,
+            RemoteInputPayload::Key(event) => event.enqueued_at_ms,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RemoteStatus {
     pub running: bool,
@@ -95,13 +118,16 @@ pub enum RemoteError {
     },
     FramebufferUnavailable,
     InvalidVirtualKey(u32),
+    InputSequenceExhausted,
 }
 
 #[derive(Debug, Clone)]
 pub struct CeRemote {
     config: RemoteConfig,
-    touch_events: VecDeque<TouchEvent>,
-    key_events: VecDeque<KeyEvent>,
+    input_events: VecDeque<SequencedRemoteInput>,
+    last_input_sequence: u64,
+    queued_touch_events: usize,
+    queued_key_events: usize,
     serial_bytes: VecDeque<u8>,
     audio_sink: WebSocketAudioSink,
     imu_state: Value,
@@ -159,6 +185,7 @@ impl std::fmt::Display for RemoteError {
             ),
             Self::FramebufferUnavailable => write!(f, "guest framebuffer is unavailable"),
             Self::InvalidVirtualKey(vk) => write!(f, "vk must be between 1 and 255, got {vk}"),
+            Self::InputSequenceExhausted => write!(f, "remote input sequence exhausted"),
         }
     }
 }
@@ -176,8 +203,10 @@ impl CeRemote {
         let max_audio_chunks = config.max_audio_chunks;
         Self {
             config,
-            touch_events: VecDeque::new(),
-            key_events: VecDeque::new(),
+            input_events: VecDeque::new(),
+            last_input_sequence: 0,
+            queued_touch_events: 0,
+            queued_key_events: 0,
             serial_bytes: VecDeque::new(),
             audio_sink: WebSocketAudioSink::new(max_audio_chunks),
             imu_state: Value::Object(Default::default()),
@@ -206,6 +235,21 @@ impl CeRemote {
         self.paused
     }
 
+    fn reserve_input_sequences(&mut self, count: usize) -> Result<u64, RemoteError> {
+        debug_assert!(count != 0);
+        let count = u64::try_from(count).map_err(|_| RemoteError::InputSequenceExhausted)?;
+        let first = self
+            .last_input_sequence
+            .checked_add(1)
+            .ok_or(RemoteError::InputSequenceExhausted)?;
+        let last = self
+            .last_input_sequence
+            .checked_add(count)
+            .ok_or(RemoteError::InputSequenceExhausted)?;
+        self.last_input_sequence = last;
+        Ok(first)
+    }
+
     pub fn enqueue_touch(&mut self, phase: &str, x: i32, y: i32) -> Result<(), RemoteError> {
         let messages = touch_messages(phase)?;
         let width = self.config.framebuffer_width;
@@ -222,25 +266,39 @@ impl CeRemote {
             });
         }
 
+        // Reserve the entire expanded gesture before publishing its first
+        // event. A sequence overflow must not leave a lone tap DOWN queued.
+        let first_sequence = self.reserve_input_sequences(messages.len())?;
         let now_ms = system_time_ms();
         for (index, message) in messages.into_iter().enumerate() {
-            self.touch_events.push_back(TouchEvent {
-                message,
-                x,
-                y,
-                enqueued_at_ms: now_ms.saturating_add(touch_message_offset_ms(index)),
+            self.input_events.push_back(SequencedRemoteInput {
+                sequence: first_sequence + index as u64,
+                payload: RemoteInputPayload::Touch(TouchEvent {
+                    message,
+                    x,
+                    y,
+                    enqueued_at_ms: now_ms.saturating_add(touch_message_offset_ms(index)),
+                }),
             });
         }
+        self.queued_touch_events = self.input_events.len() - self.queued_key_events;
+        debug_assert_eq!(
+            self.queued_touch_events + self.queued_key_events,
+            self.input_events.len()
+        );
         self.push_log_line(format!("remote touch phase={phase} x={x} y={y}"));
         Ok(())
     }
 
-    pub fn drain_touch_events(&mut self) -> Vec<TouchEvent> {
-        self.touch_events.drain(..).collect()
+    pub fn drain_input_events(&mut self) -> Vec<SequencedRemoteInput> {
+        let events = self.input_events.drain(..).collect();
+        self.queued_touch_events = 0;
+        self.queued_key_events = 0;
+        events
     }
 
     pub fn touch_event_count(&self) -> usize {
-        self.touch_events.len()
+        self.queued_touch_events
     }
 
     pub fn enqueue_key(&mut self, phase: &str, vk: u32) -> Result<(), RemoteError> {
@@ -252,21 +310,26 @@ impl CeRemote {
         if !(1..=0xff).contains(&vk) {
             return Err(RemoteError::InvalidVirtualKey(vk));
         }
-        self.key_events.push_back(KeyEvent {
-            message,
-            vk,
-            enqueued_at_ms: system_time_ms(),
+        let sequence = self.reserve_input_sequences(1)?;
+        self.input_events.push_back(SequencedRemoteInput {
+            sequence,
+            payload: RemoteInputPayload::Key(KeyEvent {
+                message,
+                vk,
+                enqueued_at_ms: system_time_ms(),
+            }),
         });
+        self.queued_key_events = self.input_events.len() - self.queued_touch_events;
+        debug_assert_eq!(
+            self.queued_touch_events + self.queued_key_events,
+            self.input_events.len()
+        );
         self.push_log_line(format!("remote key phase={phase} vk=0x{vk:02x}"));
         Ok(())
     }
 
-    pub fn drain_key_events(&mut self) -> Vec<KeyEvent> {
-        self.key_events.drain(..).collect()
-    }
-
     pub fn key_event_count(&self) -> usize {
-        self.key_events.len()
+        self.queued_key_events
     }
 
     pub fn inject_serial_bytes(&mut self, bytes: impl AsRef<[u8]>) {
@@ -408,8 +471,8 @@ impl CeRemote {
             gps_enabled: true,
             gps_target: gps_target.into(),
             paused: self.paused,
-            queued_touch_events: self.touch_events.len(),
-            queued_key_events: self.key_events.len(),
+            queued_touch_events: self.queued_touch_events,
+            queued_key_events: self.queued_key_events,
             queued_serial_bytes: self.serial_bytes.len(),
             audio_clients: self.audio_sink.client_count(),
             queued_audio_chunks: self.audio_sink.queued_chunk_count(),

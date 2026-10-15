@@ -31,7 +31,9 @@ use crate::{
             ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
-        remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
+        remote::{
+            CeRemote, RemoteInputPayload, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam,
+        },
         resource::ResourceSystem,
         scheduler::{
             Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerStats,
@@ -10988,271 +10990,280 @@ impl CeKernel {
         hwnd: Option<u32>,
         touch_targeting: RemoteTouchTargeting,
     ) -> RemoteInputDrain {
-        let touch_events = self.remote.drain_touch_events();
-        let key_events = self.remote.drain_key_events();
+        let input_events = self.remote.drain_input_events();
         let base_time_ms = self.timers.tick_count();
-        let first_input_ms = touch_events
+        let first_input_ms = input_events
             .iter()
-            .map(|event| event.enqueued_at_ms)
-            .chain(key_events.iter().map(|event| event.enqueued_at_ms))
+            .map(|event| event.enqueued_at_ms())
             .min()
             .unwrap_or(0);
         let mut posted = 0;
         let mut details = Vec::new();
         let mut target_thread_ids = Vec::new();
 
-        for event in touch_events {
-            let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
-            let point = Point {
-                x: event.x,
-                y: event.y,
-            };
-            if touch_targeting == RemoteTouchTargeting::DesktopHitTest
-                && let Some(stale_capture) = self
-                    .gwe
-                    .get_capture()
-                    .filter(|captured| self.live_remote_window_target(*captured).is_none())
-            {
-                if event.message == WM_LBUTTONDOWN {
-                    // A fresh gesture may retarget by screen point. Clear only
-                    // the same still-stale capture; the kernel release path
-                    // would post WM_CAPTURECHANGED to the exited A owner.
-                    if self.gwe.get_capture() == Some(stale_capture)
-                        && self.live_remote_window_target(stale_capture).is_none()
+        for input in input_events {
+            match input.payload {
+                RemoteInputPayload::Touch(event) => {
+                    let time_ms =
+                        remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
+                    let point = Point {
+                        x: event.x,
+                        y: event.y,
+                    };
+                    if touch_targeting == RemoteTouchTargeting::DesktopHitTest
+                        && let Some(stale_capture) = self
+                            .gwe
+                            .get_capture()
+                            .filter(|captured| self.live_remote_window_target(*captured).is_none())
                     {
-                        self.gwe.release_capture();
-                    }
-                } else {
-                    // An old MOVE/UP has no new DOWN on B. Retain the stale
-                    // capture until a fresh DOWN, so later orphan phases also
-                    // drop instead of becoming a lone event for B.
-                    details.push(format!(
-                        "drop:stale-capture=0x{stale_capture:08x}/msg=0x{:04x}",
-                        event.message
-                    ));
-                    self.record_message_trace(MessageTraceRecord {
-                        op: "remote_touch_drop",
-                        thread_id,
-                        hwnd: Some(stale_capture),
-                        msg: Some(event.message),
-                        wparam: None,
-                        lparam: None,
-                        screen_pos: Some(make_lparam(point.x, point.y)),
-                        source: None,
-                        result: Some(0),
-                        detail: Some("stale captured owner; orphan touch phase".to_owned()),
-                    });
-                    continue;
-                }
-            }
-            let target = match touch_targeting {
-                RemoteTouchTargeting::Explicit => hwnd,
-                RemoteTouchTargeting::DesktopHitTest => self
-                    .gwe
-                    .get_capture()
-                    .filter(|captured| self.live_remote_window_target(*captured).is_some())
-                    .or_else(|| {
-                        self.gwe
-                            .window_from_point(point)
-                            .filter(|hit| self.live_remote_window_target(*hit).is_some())
-                    })
-                    .or_else(|| {
-                        hwnd.filter(|hint| {
-                            matches!(
-                                self.live_remote_window_target(*hint),
-                                Some((_, WindowDeliveryOwner::Birth { .. }))
-                            ) && self.gwe.is_window_visible(*hint)
-                                && self.gwe.is_window_enabled(*hint)
-                                && self
-                                    .gwe
-                                    .get_window_rect(*hint)
-                                    .is_some_and(|rect| rect.contains_point(point))
-                        })
-                    }),
-            };
-            let Some((target, target_thread_id, delivery_owner)) = target.and_then(|target| {
-                self.live_remote_window_target(target)
-                    .map(|(target_thread_id, delivery_owner)| {
-                        (target, target_thread_id, delivery_owner)
-                    })
-            }) else {
-                details.push(format!(
-                    "drop:msg=0x{:04x}/screen={},{}",
-                    event.message, point.x, point.y
-                ));
-                self.record_message_trace(MessageTraceRecord {
-                    op: "remote_touch_drop",
-                    thread_id,
-                    hwnd: target.or(hwnd),
-                    msg: Some(event.message),
-                    wparam: None,
-                    lparam: None,
-                    screen_pos: Some(make_lparam(point.x, point.y)),
-                    source: None,
-                    result: Some(0),
-                    detail: Some(
-                        if touch_targeting == RemoteTouchTargeting::Explicit && target.is_some() {
-                            "explicit target stale"
+                        if event.message == WM_LBUTTONDOWN {
+                            // A fresh gesture may retarget by screen point. Clear only
+                            // the same still-stale capture; the kernel release path
+                            // would post WM_CAPTURECHANGED to the exited A owner.
+                            if self.gwe.get_capture() == Some(stale_capture)
+                                && self.live_remote_window_target(stale_capture).is_none()
+                            {
+                                self.gwe.release_capture();
+                            }
                         } else {
-                            "no live target"
+                            // An old MOVE/UP has no new DOWN on B. Retain the stale
+                            // capture until a fresh DOWN, so later orphan phases also
+                            // drop instead of becoming a lone event for B.
+                            details.push(format!(
+                                "drop:stale-capture=0x{stale_capture:08x}/msg=0x{:04x}",
+                                event.message
+                            ));
+                            self.record_message_trace(MessageTraceRecord {
+                                op: "remote_touch_drop",
+                                thread_id,
+                                hwnd: Some(stale_capture),
+                                msg: Some(event.message),
+                                wparam: None,
+                                lparam: None,
+                                screen_pos: Some(make_lparam(point.x, point.y)),
+                                source: None,
+                                result: Some(0),
+                                detail: Some("stale captured owner; orphan touch phase".to_owned()),
+                            });
+                            continue;
                         }
-                        .to_owned(),
-                    ),
-                });
-                continue;
-            };
-            if event.message == WM_LBUTTONDOWN {
-                let _ = self.set_focus(Some(target));
-            }
-            let client = self.gwe.screen_to_client(target, point).unwrap_or(point);
-            let wparam = if event.message == WM_LBUTTONDOWN || event.message == WM_MOUSEMOVE {
-                1
-            } else {
-                0
-            };
-            let posted_to_owner = self.post_gwe_message_with_window_owner(
-                target_thread_id,
-                Some(delivery_owner),
-                Message::new(
-                    target,
-                    event.message,
-                    wparam,
-                    make_lparam(client.x, client.y),
-                    time_ms,
-                )
-                .with_mouse_pos(make_lparam(point.x, point.y)),
-            );
-            if !posted_to_owner {
-                details.push(format!(
-                    "drop:msg=0x{:04x}/hwnd=0x{target:08x}",
-                    event.message
-                ));
-                continue;
-            }
-            if !target_thread_ids.contains(&target_thread_id) {
-                target_thread_ids.push(target_thread_id);
-            }
-            details.push(format!(
+                    }
+                    let target = match touch_targeting {
+                        RemoteTouchTargeting::Explicit => hwnd,
+                        RemoteTouchTargeting::DesktopHitTest => self
+                            .gwe
+                            .get_capture()
+                            .filter(|captured| self.live_remote_window_target(*captured).is_some())
+                            .or_else(|| {
+                                self.gwe
+                                    .window_from_point(point)
+                                    .filter(|hit| self.live_remote_window_target(*hit).is_some())
+                            })
+                            .or_else(|| {
+                                hwnd.filter(|hint| {
+                                    matches!(
+                                        self.live_remote_window_target(*hint),
+                                        Some((_, WindowDeliveryOwner::Birth { .. }))
+                                    ) && self.gwe.is_window_visible(*hint)
+                                        && self.gwe.is_window_enabled(*hint)
+                                        && self
+                                            .gwe
+                                            .get_window_rect(*hint)
+                                            .is_some_and(|rect| rect.contains_point(point))
+                                })
+                            }),
+                    };
+                    let Some((target, target_thread_id, delivery_owner)) =
+                        target.and_then(|target| {
+                            self.live_remote_window_target(target).map(
+                                |(target_thread_id, delivery_owner)| {
+                                    (target, target_thread_id, delivery_owner)
+                                },
+                            )
+                        })
+                    else {
+                        details.push(format!(
+                            "drop:msg=0x{:04x}/screen={},{}",
+                            event.message, point.x, point.y
+                        ));
+                        self.record_message_trace(MessageTraceRecord {
+                            op: "remote_touch_drop",
+                            thread_id,
+                            hwnd: target.or(hwnd),
+                            msg: Some(event.message),
+                            wparam: None,
+                            lparam: None,
+                            screen_pos: Some(make_lparam(point.x, point.y)),
+                            source: None,
+                            result: Some(0),
+                            detail: Some(
+                                if touch_targeting == RemoteTouchTargeting::Explicit
+                                    && target.is_some()
+                                {
+                                    "explicit target stale"
+                                } else {
+                                    "no live target"
+                                }
+                                .to_owned(),
+                            ),
+                        });
+                        continue;
+                    };
+                    if event.message == WM_LBUTTONDOWN {
+                        let _ = self.set_focus(Some(target));
+                    }
+                    let client = self.gwe.screen_to_client(target, point).unwrap_or(point);
+                    let wparam = if event.message == WM_LBUTTONDOWN || event.message == WM_MOUSEMOVE
+                    {
+                        1
+                    } else {
+                        0
+                    };
+                    let posted_to_owner = self.post_gwe_message_with_window_owner(
+                        target_thread_id,
+                        Some(delivery_owner),
+                        Message::new(
+                            target,
+                            event.message,
+                            wparam,
+                            make_lparam(client.x, client.y),
+                            time_ms,
+                        )
+                        .with_mouse_pos(make_lparam(point.x, point.y)),
+                    );
+                    if !posted_to_owner {
+                        details.push(format!(
+                            "drop:msg=0x{:04x}/hwnd=0x{target:08x}",
+                            event.message
+                        ));
+                        continue;
+                    }
+                    if !target_thread_ids.contains(&target_thread_id) {
+                        target_thread_ids.push(target_thread_id);
+                    }
+                    details.push(format!(
                 "touch:hwnd=0x{target:08x}/thread={target_thread_id}/msg=0x{:04x}/client={},{} /screen={},{}",
                 event.message, client.x, client.y, point.x, point.y
             ));
-            self.record_message_trace(MessageTraceRecord {
-                op: "remote_touch_target",
-                thread_id: target_thread_id,
-                hwnd: Some(target),
-                msg: Some(event.message),
-                wparam: Some(wparam),
-                lparam: Some(make_lparam(client.x, client.y)),
-                screen_pos: Some(make_lparam(point.x, point.y)),
-                source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
-                result: Some(1),
-                detail: Some(
-                    match touch_targeting {
-                        RemoteTouchTargeting::Explicit => "explicit-target",
-                        RemoteTouchTargeting::DesktopHitTest => "desktop-hit-test",
+                    self.record_message_trace(MessageTraceRecord {
+                        op: "remote_touch_target",
+                        thread_id: target_thread_id,
+                        hwnd: Some(target),
+                        msg: Some(event.message),
+                        wparam: Some(wparam),
+                        lparam: Some(make_lparam(client.x, client.y)),
+                        screen_pos: Some(make_lparam(point.x, point.y)),
+                        source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
+                        result: Some(1),
+                        detail: Some(
+                            match touch_targeting {
+                                RemoteTouchTargeting::Explicit => "explicit-target",
+                                RemoteTouchTargeting::DesktopHitTest => "desktop-hit-test",
+                            }
+                            .to_owned(),
+                        ),
+                    });
+                    posted += 1;
+                }
+                RemoteInputPayload::Key(event) => {
+                    // A host wait hint and mouse capture have no keyboard authority.
+                    // Resolve focus first, then the active window, for this event's
+                    // current owner birth. The explicit API retains its supplied target.
+                    let key_target = if touch_targeting == RemoteTouchTargeting::Explicit {
+                        hwnd
+                    } else {
+                        let live_key_window = |candidate| {
+                            self.gwe.is_window_enabled(candidate)
+                                && self.live_remote_window_target(candidate).is_some_and(
+                                    |(_, owner)| owner != WindowDeliveryOwner::SystemDesktop,
+                                )
+                        };
+                        self.gwe
+                            .get_focus()
+                            .filter(|candidate| live_key_window(*candidate))
+                            .or_else(|| {
+                                self.gwe
+                                    .get_stored_active_window()
+                                    .filter(|candidate| live_key_window(*candidate))
+                            })
+                    };
+                    let time_ms =
+                        remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
+                    let Some(key_target) = key_target else {
+                        details.push(format!(
+                            "drop:key=0x{:02x}/msg=0x{:04x}",
+                            event.vk, event.message
+                        ));
+                        self.record_message_trace(MessageTraceRecord {
+                            op: "remote_key_drop",
+                            thread_id,
+                            hwnd: key_target,
+                            msg: Some(event.message),
+                            wparam: Some(event.vk),
+                            lparam: Some(1),
+                            screen_pos: None,
+                            source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                            result: Some(0),
+                            detail: Some("no live target".to_owned()),
+                        });
+                        continue;
+                    };
+                    let Some((target_thread_id, delivery_owner)) =
+                        self.live_remote_window_target(key_target)
+                    else {
+                        details.push(format!(
+                            "drop:key=0x{:02x}/msg=0x{:04x}/hwnd=0x{key_target:08x}",
+                            event.vk, event.message
+                        ));
+                        self.record_message_trace(MessageTraceRecord {
+                            op: "remote_key_drop",
+                            thread_id,
+                            hwnd: Some(key_target),
+                            msg: Some(event.message),
+                            wparam: Some(event.vk),
+                            lparam: Some(1),
+                            screen_pos: None,
+                            source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                            result: Some(0),
+                            detail: Some("no live target".to_owned()),
+                        });
+                        continue;
+                    };
+                    if !self.post_gwe_message_with_window_owner(
+                        target_thread_id,
+                        Some(delivery_owner),
+                        Message::new(key_target, event.message, event.vk, 1, time_ms)
+                            .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                    ) {
+                        details.push(format!(
+                            "drop:key=0x{:02x}/msg=0x{:04x}/hwnd=0x{key_target:08x}",
+                            event.vk, event.message
+                        ));
+                        continue;
                     }
-                    .to_owned(),
-                ),
-            });
-            posted += 1;
-        }
-
-        // A host wait hint and mouse capture have no keyboard authority.
-        // Resolve focus first, then the active window, against the current
-        // owner birth. The explicit API alone retains its supplied target.
-        let key_target = if touch_targeting == RemoteTouchTargeting::Explicit {
-            hwnd
-        } else {
-            let live_key_window = |candidate| {
-                self.gwe.is_window_enabled(candidate)
-                    && self
-                        .live_remote_window_target(candidate)
-                        .is_some_and(|(_, owner)| owner != WindowDeliveryOwner::SystemDesktop)
-            };
-            self.gwe
-                .get_focus()
-                .filter(|candidate| live_key_window(*candidate))
-                .or_else(|| {
-                    self.gwe
-                        .get_stored_active_window()
-                        .filter(|candidate| live_key_window(*candidate))
-                })
-        };
-        for event in key_events {
-            let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
-            let Some(key_target) = key_target else {
-                details.push(format!(
-                    "drop:key=0x{:02x}/msg=0x{:04x}",
-                    event.vk, event.message
-                ));
-                self.record_message_trace(MessageTraceRecord {
-                    op: "remote_key_drop",
-                    thread_id,
-                    hwnd: key_target,
-                    msg: Some(event.message),
-                    wparam: Some(event.vk),
-                    lparam: Some(1),
-                    screen_pos: None,
-                    source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
-                    result: Some(0),
-                    detail: Some("no live target".to_owned()),
-                });
-                continue;
-            };
-            let Some((target_thread_id, delivery_owner)) =
-                self.live_remote_window_target(key_target)
-            else {
-                details.push(format!(
-                    "drop:key=0x{:02x}/msg=0x{:04x}/hwnd=0x{key_target:08x}",
-                    event.vk, event.message
-                ));
-                self.record_message_trace(MessageTraceRecord {
-                    op: "remote_key_drop",
-                    thread_id,
-                    hwnd: Some(key_target),
-                    msg: Some(event.message),
-                    wparam: Some(event.vk),
-                    lparam: Some(1),
-                    screen_pos: None,
-                    source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
-                    result: Some(0),
-                    detail: Some("no live target".to_owned()),
-                });
-                continue;
-            };
-            if !self.post_gwe_message_with_window_owner(
-                target_thread_id,
-                Some(delivery_owner),
-                Message::new(key_target, event.message, event.vk, 1, time_ms)
-                    .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
-            ) {
-                details.push(format!(
-                    "drop:key=0x{:02x}/msg=0x{:04x}/hwnd=0x{key_target:08x}",
-                    event.vk, event.message
-                ));
-                continue;
-            }
-            if !target_thread_ids.contains(&target_thread_id) {
-                target_thread_ids.push(target_thread_id);
-            }
-            details.push(format!(
+                    if !target_thread_ids.contains(&target_thread_id) {
+                        target_thread_ids.push(target_thread_id);
+                    }
+                    details.push(format!(
                 "key:hwnd=0x{key_target:08x}/thread={target_thread_id}/msg=0x{:04x}/vk=0x{:02x}",
                 event.message, event.vk
             ));
-            self.record_message_trace(MessageTraceRecord {
-                op: "remote_key_target",
-                thread_id: target_thread_id,
-                hwnd: Some(key_target),
-                msg: Some(event.message),
-                wparam: Some(event.vk),
-                lparam: Some(1),
-                screen_pos: None,
-                source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
-                result: Some(1),
-                detail: (target_thread_id != thread_id)
-                    .then(|| format!("drain_thread={thread_id}")),
-            });
-            posted += 1;
+                    self.record_message_trace(MessageTraceRecord {
+                        op: "remote_key_target",
+                        thread_id: target_thread_id,
+                        hwnd: Some(key_target),
+                        msg: Some(event.message),
+                        wparam: Some(event.vk),
+                        lparam: Some(1),
+                        screen_pos: None,
+                        source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                        result: Some(1),
+                        detail: (target_thread_id != thread_id)
+                            .then(|| format!("drain_thread={thread_id}")),
+                    });
+                    posted += 1;
+                }
+            }
         }
 
         RemoteInputDrain {
