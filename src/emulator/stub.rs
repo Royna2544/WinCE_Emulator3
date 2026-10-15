@@ -172,6 +172,7 @@ impl UnicornMips {
 
     pub fn prune_active_process_from_parked(&mut self, _kernel: &CeKernel) {}
 
+    #[cfg(test)]
     pub fn prune_exited_and_active_processes_from_parked_with_framebuffer(
         &mut self,
         _kernel: &mut CeKernel,
@@ -233,6 +234,7 @@ impl UnicornMips {
         false
     }
 
+    #[cfg(test)]
     pub fn complete_active_process_thread_exit_with_framebuffer(
         &mut self,
         _kernel: &mut CeKernel,
@@ -406,8 +408,8 @@ impl CpuBackend for UnicornMips {
         false
     }
 
-    fn switch_to_next_parked_child_process(&mut self, _kernel: &mut CeKernel) -> bool {
-        false
+    fn switch_to_next_parked_child_process(&mut self, _kernel: &mut CeKernel) -> Result<bool> {
+        Ok(false)
     }
 
     fn rotate_to_next_parked_process(&mut self, _kernel: &mut CeKernel) -> bool {

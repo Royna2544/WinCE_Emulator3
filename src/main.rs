@@ -384,7 +384,7 @@ fn run_cpu_loop(
                 reported_blocked_message_wait = false;
             }
             let remote_target = blocked_remote_input_target(cpu, kernel);
-            let _ = service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref())?;
+            service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref())?;
             if cpu.try_switch_to_next_parked_child_process(kernel)? {
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
@@ -2183,6 +2183,7 @@ fn run_monitor(
     println!("  monitor: interactive commands enabled; type `help`");
     let stdin = io::stdin();
     let mut checkpoints = Vec::<MonitorCheckpoint>::new();
+    let mut recovery_required = false;
     loop {
         print!("fakece> ");
         io::stdout().flush().map_err(|err| {
@@ -2200,6 +2201,14 @@ fn run_monitor(
         let Some(command) = words.next() else {
             continue;
         };
+        if recovery_required
+            && matches!(command, "continue" | "c" | "until" | "run-until" | "tap")
+        {
+            println!(
+                "  host-exit framebuffer recovery required; restore a checkpoint or quit before running or queuing input"
+            );
+            continue;
+        }
         match command {
             "help" | "h" | "?" => print_monitor_help(),
             "continue" | "c" => {
@@ -2219,7 +2228,7 @@ fn run_monitor(
                     .map(parse_monitor_usize)
                     .transpose()?
                     .unwrap_or(args.cpu_instruction_limit);
-                monitor_run_and_report(
+                recovery_required |= monitor_run_and_report(
                     cpu,
                     kernel,
                     desktop,
@@ -2255,7 +2264,7 @@ fn run_monitor(
                     .map(parse_monitor_usize)
                     .transpose()?
                     .unwrap_or(args.cpu_instruction_limit);
-                monitor_run_and_report(
+                recovery_required |= monitor_run_and_report(
                     cpu,
                     kernel,
                     desktop,
@@ -2451,6 +2460,7 @@ fn run_monitor(
                 *kernel = restored_kernel;
                 *desktop.framebuffer_mut() = restored_framebuffer;
                 desktop.present()?;
+                recovery_required = false;
                 println!("  restored checkpoint {}", checkpoint.name);
             }
             "quit" | "q" | "exit" => break,
@@ -2708,14 +2718,18 @@ fn monitor_run_and_report(
     desktop: &mut DesktopRuntime,
     limits: UnicornRunLimits,
     framebuffer_dump: Option<&Path>,
-) {
+) -> bool {
     if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump, None) {
-        if cpu.last_debug_snapshot().is_some() {
+        if matches!(&err, wince_emulation_v3::Error::HostExitRecoveryRequired { .. }) {
+            eprintln!("  stopped for host-exit recovery: {err}");
+            return true;
+        } else if cpu.last_debug_snapshot().is_some() {
             eprintln!("  stopped; use regs or trace for detail");
         } else {
             eprintln!("  stopped: {err}");
         }
     }
+    false
 }
 
 fn print_monitor_help() {
