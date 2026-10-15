@@ -42,6 +42,37 @@ is the latest approved live observation; its one-run approval is spent. New
 writable-mount observations require a separate human approval and fresh
 adjacent, SHA-verified ZIP backups.
 
+### Next live-run preparation (planned, not authorized or executed)
+
+After the W-B1c input-order source gate, do not reuse
+`scripts/inavi_bounded_e22.ps1` unchanged: it hardcodes the E-37 executable,
+the 2026-10-14 adjacent backup names/hashes, an old approval and `e37-live-`
+evidence paths. Review and parameterize it for a *fresh* release EXE/matching
+PDB and current-source/config hashes. Obtain a new one-run approval for writes
+to the original SD, ResidentFlash and EmulatorRoot mounts, then run
+`scripts/backup_rw_mounts.ps1` to make and SHA-verify fresh adjacent ZIPs
+before launch. Preserve pre/post mount inventories, cap the app at 330 s with
+the existing independent watchdog/RSS/log limits, and do not infer that older
+run approvals or backups cover new source. Recheck the four slow-boot marker
+files without deleting them.
+
+Keep the comparable raw-NMEA feed and one input-ready-relative tap. Record
+HTTP ACK, remote drain/post, actual guest WNDPROC entry/return and subsequent
+frame hashes as different milestones. E-38 tap delivery predates W-B1b/W-B1c,
+so this run must establish that the new routing still reaches the intended
+iNavi window; a poll interval only bounds lag unless the events carry
+correlated monotonic timestamps. Capture launch-relative and input-ready-
+relative splash, progress and *actual map* frames separately, along with
+phase-aligned PID1/helper guest instructions, busy-slice MIPS and fixed setup
+cost, host RSS/private/virtual peaks and guest committed/reserved bytes.
+Current heap-live, virtual-live and `blob_mb` observations are partial proxies;
+before claiming a small CE6-like guest footprint, add and source-test a
+bounded committed-private-page scalar (the memory owner already exposes
+`private_commit_used_bytes`) or report that quantity as missing. Separate
+native cache/engine residency from guest RAM and host RSS. One clean run can
+test delivery and stability; causal speed/footprint claims still require the
+matched repeated-run protocol in [verification](subsystems/verification.md).
+
 Closed by other sessions (recorded in `PROGRESS.md`): growing sensor-init retries
 (packed-sample fix), the repeated `CreateProcessW(happyway_win.exe)` storm under
 count 0 plus a 100 ms native timeout (live-pump replay fix), whole-file read
