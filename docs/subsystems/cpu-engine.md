@@ -237,8 +237,8 @@ quantum, clock or handoff policy.
 
 Two earlier full-suite release AVs remain unattributed; a matched
 [six-run library cohort](../../evidence/parallel-native-av-cohort-20261016/validation.receipt.md)
-observed no crash in either the explicit-serial or default harness arm. Every
-positive `uc_emu_start` timeout starts and joins a native worker
+observed no crash in either the explicit-serial or default harness arm. An
+ordinary positive-timeout `uc_emu_start` starts and joins a native worker
 (`vendor/unicorn-engine-sys/uc.c:1013-1040,1230-1252`). Its unsynchronized
 `emulation_done`/stop fields can race the emulating thread at a deadline,
 including the normal nonzero live-pump timeout. This is a source-supported
