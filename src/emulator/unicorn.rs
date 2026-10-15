@@ -1589,7 +1589,7 @@ struct BlockedGuestThread {
     wait_id: u64,
     thread_id: u32,
     /// Immutable owner of the native registers captured at GetMessageW.
-    thread_birth: Option<crate::ce::object::ThreadBirthKey>,
+    thread_birth: crate::ce::object::ThreadBirthKey,
     thread_handle: u32,
     regs: MipsGuestContext,
     import_pc: u32,
@@ -21110,7 +21110,7 @@ fn try_block_empty_get_message<D>(
         *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
             wait_id,
             thread_id,
-            thread_birth: Some(captured_native_birth),
+            thread_birth: captured_native_birth,
             thread_handle: callout.thread_handle,
             regs: captured_regs,
             import_pc,
@@ -21223,7 +21223,7 @@ fn try_block_empty_get_message<D>(
         *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
             wait_id,
             thread_id,
-            thread_birth: Some(captured_native_birth),
+            thread_birth: captured_native_birth,
             thread_handle,
             regs: captured_regs,
             import_pc,
@@ -21362,7 +21362,7 @@ fn try_block_empty_get_message<D>(
         *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
             wait_id,
             thread_id,
-            thread_birth: Some(captured_native_birth),
+            thread_birth: captured_native_birth,
             thread_handle,
             regs: captured_regs,
             import_pc,
@@ -29127,12 +29127,9 @@ fn recover_running_guest_thread_for_saved_context(
     // prevents the pre-entry selector from choosing a timed-out Sleep frame.
     let exact_blocked_get_message = |candidate: &BlockedGuestThread| {
         // A native GetMessage payload remains a blocked import even when its
-        // scheduler record is lost. An unknown owner must also fail closed;
-        // a payload from an older numeric TID birth cannot park its replacement.
-        candidate.thread_id == thread_id
-            && candidate
-                .thread_birth
-                .is_none_or(|candidate_birth| candidate_birth == saved_birth)
+        // scheduler record is lost. An older numeric TID birth cannot park
+        // its replacement.
+        candidate.thread_id == thread_id && candidate.thread_birth == saved_birth
     };
     if blocked_waits.iter().any(|wait| {
         wait.thread_id == thread_id
@@ -29184,17 +29181,14 @@ fn orphaned_blocked_get_message_wait_before_native_entry<D>(
         .chain(displaced_get_messages.iter())
         .find(|candidate| {
             candidate.thread_id == thread_id
-                && candidate
-                    .thread_birth
-                    .is_none_or(|candidate_birth| candidate_birth == birth)
+                && candidate.thread_birth == birth
                 && candidate.import_pc == start_pc
-                && (candidate.thread_birth != Some(birth)
-                    || verified_get_message_wait_birth(
-                        kernel,
-                        candidate.wait_id,
-                        candidate.thread_id,
-                        candidate.thread_handle,
-                    ) != Some(birth))
+                && verified_get_message_wait_birth(
+                    kernel,
+                    candidate.wait_id,
+                    candidate.thread_id,
+                    candidate.thread_handle,
+                ) != Some(birth)
         })?;
     // A returned sent-message WNDPROC can legitimately revisit the import
     // address. Only its top, exact-ID active receiver token owns that replay.
@@ -30251,7 +30245,7 @@ mod wait_scheduler_tests {
             .expect("registered test thread")
     }
 
-    fn registered_native_test_thread(
+    pub(super) fn registered_native_test_thread(
         kernel: &mut crate::ce::kernel::CeKernel,
         thread_id: u32,
     ) -> (u32, crate::ce::object::ThreadBirthKey) {
@@ -30261,6 +30255,27 @@ mod wait_scheduler_tests {
             .thread_birth_key_by_id(thread_id)
             .expect("registered native test thread birth");
         (handle, birth)
+    }
+
+    pub(super) fn registered_native_test_thread_in_process(
+        kernel: &mut crate::ce::kernel::CeKernel,
+        process_id: u32,
+        thread_id: u32,
+    ) -> (u32, u32, crate::ce::object::ThreadBirthKey) {
+        let process_handle = kernel.handles.create_process(process_id);
+        let process_birth = kernel
+            .handles
+            .process_birth_key_for_handle(process_handle)
+            .expect("registered test process birth");
+        let thread_handle = kernel
+            .handles
+            .try_create_thread_in_birth(process_birth, thread_id, 0x0040_0000, 0, false)
+            .expect("registered child test thread");
+        let thread_birth = kernel
+            .handles
+            .thread_birth_key_by_id(thread_id)
+            .expect("registered child test thread birth");
+        (process_handle, thread_handle, thread_birth)
     }
 
     fn retired_reused_native_test_thread(
@@ -37812,11 +37827,9 @@ mod wait_scheduler_tests {
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::BlockedGuestThread {
                 wait_id: getmsg_wait_id,
                 thread_id: main_thread_id,
-                thread_birth: Some(
-                    kernel
-                        .live_thread_birth_key_by_id(main_thread_id)
-                        .expect("boot GetMessage birth"),
-                ),
+                thread_birth: kernel
+                    .live_thread_birth_key_by_id(main_thread_id)
+                    .expect("boot GetMessage birth"),
                 thread_handle: main_thread_handle,
                 regs: super::MipsGuestContext::zero(),
                 import_pc: 0,
@@ -37944,11 +37957,9 @@ mod wait_scheduler_tests {
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::BlockedGuestThread {
                 wait_id: getmsg_wait_id,
                 thread_id: main_thread_id,
-                thread_birth: Some(
-                    kernel
-                        .live_thread_birth_key_by_id(main_thread_id)
-                        .expect("boot GetMessage birth"),
-                ),
+                thread_birth: kernel
+                    .live_thread_birth_key_by_id(main_thread_id)
+                    .expect("boot GetMessage birth"),
                 thread_handle: main_thread_handle,
                 regs: super::MipsGuestContext::zero(),
                 import_pc,
@@ -42027,7 +42038,7 @@ mod wait_scheduler_tests {
         scheduler.blocked_guest_thread = Some(super::BlockedGuestThread {
             wait_id: wait_b,
             thread_id,
-            thread_birth: Some(birth),
+            thread_birth: birth,
             thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0x0040_1000,
@@ -42040,7 +42051,7 @@ mod wait_scheduler_tests {
         scheduler.displaced_blocked_get_messages = vec![super::BlockedGuestThread {
             wait_id: wait_d,
             thread_id,
-            thread_birth: Some(birth),
+            thread_birth: birth,
             thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0x0040_2000,
@@ -43586,6 +43597,8 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let ui_thread_id = 7;
         let worker_thread_id = 8;
+        let (ui_thread_handle, ui_thread_birth) =
+            registered_native_test_thread(&mut kernel, ui_thread_id);
         let hwnd = kernel.create_window_ex_w(
             ui_thread_id,
             "VISIBLE_GETMESSAGE_TARGET",
@@ -43600,8 +43613,8 @@ mod wait_scheduler_tests {
         let blocked = super::BlockedGuestThread {
             wait_id: 1,
             thread_id: ui_thread_id,
-            thread_birth: None,
-            thread_handle: 0x107,
+            thread_birth: ui_thread_birth,
+            thread_handle: ui_thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0,
             return_pc: 0x7000_1000,
@@ -48739,7 +48752,12 @@ mod guest_thread_stack_tests {
         let mut parent = UnicornMips::new()?;
 
         let idle_thread = 3;
-        let idle_handle = 0x303;
+        let (idle_process_handle, idle_handle, idle_birth) =
+            super::wait_scheduler_tests::registered_native_test_thread_in_process(
+                &mut kernel,
+                67,
+                idle_thread,
+            );
         let wait_id = kernel.register_blocked_waiter(
             idle_thread,
             idle_handle,
@@ -48758,7 +48776,7 @@ mod guest_thread_stack_tests {
         idle_child.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id,
             thread_id: idle_thread,
-            thread_birth: None,
+            thread_birth: idle_birth,
             thread_handle: idle_handle,
             regs: MipsGuestContext::zero(),
             import_pc: 0,
@@ -48770,7 +48788,7 @@ mod guest_thread_stack_tests {
         });
         parent.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\idle_child.exe".to_owned()),
-            process_handle: Some(0x333),
+            process_handle: Some(idle_process_handle),
             thread_handle: Some(idle_handle),
             process_state: crate::ce::kernel::CurrentProcessState {
                 process_id: 67,
@@ -49577,11 +49595,9 @@ mod guest_thread_stack_tests {
         parent_cpu.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id,
             thread_id: parent_thread,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(parent_thread)
-                    .expect("parent GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(parent_thread)
+                .expect("parent GetMessage birth"),
             thread_handle: parent_handle,
             regs: MipsGuestContext::zero(),
             import_pc: 0,
@@ -49670,19 +49686,25 @@ mod guest_thread_stack_tests {
             cpu.set_initial_thread_id(thread_id);
             cpu.current_thread_id = thread_id;
             cpu.running_guest_thread = None;
-            cpu.blocked_guest_thread = Some(BlockedGuestThread {
-                wait_id,
-                thread_id,
-                thread_birth: kernel.live_thread_birth_key_by_id(thread_id),
-                thread_handle,
-                regs: MipsGuestContext::zero(),
-                import_pc: 0,
-                return_pc: 0x0040_1000 + thread_id,
-                msg_ptr: 0x3000_0100 + thread_id,
-                hwnd: None,
-                min_msg: 0,
-                max_msg: 0,
-            });
+            // TID 9 intentionally has only a numeric compatibility wait and
+            // legacy queue input; it has no native register payload to resume.
+            if process_id != 9 {
+                cpu.blocked_guest_thread = Some(BlockedGuestThread {
+                    wait_id,
+                    thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(thread_id)
+                        .expect("target GetMessage birth"),
+                    thread_handle,
+                    regs: MipsGuestContext::zero(),
+                    import_pc: 0,
+                    return_pc: 0x0040_1000 + thread_id,
+                    msg_ptr: 0x3000_0100 + thread_id,
+                    hwnd: None,
+                    min_msg: 0,
+                    max_msg: 0,
+                });
+            }
             Ok(ParkedProcess {
                 application: Some(module_path.to_owned()),
                 process_handle: None,
@@ -51678,11 +51700,17 @@ mod guest_thread_stack_tests {
         assert!(kernel.post_message_w(active_hwnd, crate::ce::gwe::WM_LBUTTONDOWN, 1, 0));
 
         let blocked_thread = 4;
+        let (blocked_process_handle, blocked_handle, blocked_birth) =
+            super::wait_scheduler_tests::registered_native_test_thread_in_process(
+                &mut kernel,
+                68,
+                blocked_thread,
+            );
         let mut blocked_cpu = UnicornMips::new()?;
         blocked_cpu.set_initial_thread_id(blocked_thread);
         let wait_id = kernel.register_blocked_waiter(
             blocked_thread,
-            0x404,
+            blocked_handle,
             Vec::new(),
             crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
                 hwnd: None,
@@ -51695,8 +51723,8 @@ mod guest_thread_stack_tests {
         blocked_cpu.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id,
             thread_id: blocked_thread,
-            thread_birth: None,
-            thread_handle: 0x404,
+            thread_birth: blocked_birth,
+            thread_handle: blocked_handle,
             regs: MipsGuestContext::zero(),
             import_pc: 0x7fff_2db0,
             return_pc: 0x0804_2000,
@@ -51707,8 +51735,8 @@ mod guest_thread_stack_tests {
         });
         scheduler.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned()),
-            process_handle: Some(0x500),
-            thread_handle: Some(0x504),
+            process_handle: Some(blocked_process_handle),
+            thread_handle: Some(blocked_handle),
             process_state: crate::ce::kernel::CurrentProcessState {
                 process_id: 68,
                 exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -52036,7 +52064,12 @@ mod guest_thread_stack_tests {
         let mut scheduler = UnicornMips::new()?;
 
         let active_thread = 6;
-        let active_handle = 0x606;
+        let (_, active_handle, active_birth) =
+            super::wait_scheduler_tests::registered_native_test_thread_in_process(
+                &mut kernel,
+                68,
+                active_thread,
+            );
         scheduler.set_initial_thread_id(active_thread);
         scheduler.current_thread_id = active_thread;
         scheduler.saved_context = Some(SavedCpuContext {
@@ -52068,7 +52101,7 @@ mod guest_thread_stack_tests {
         scheduler.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id: active_wait_id,
             thread_id: active_thread,
-            thread_birth: None,
+            thread_birth: active_birth,
             thread_handle: active_handle,
             regs: MipsGuestContext::zero(),
             import_pc: 0,
@@ -54197,11 +54230,9 @@ mod guest_thread_stack_tests {
         parent_cpu.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id,
             thread_id: parent_thread,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(parent_thread)
-                    .expect("parent GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(parent_thread)
+                .expect("parent GetMessage birth"),
             thread_handle: parent_handle,
             regs,
             import_pc,
@@ -54746,11 +54777,9 @@ mod guest_thread_stack_tests {
         child_cpu.blocked_guest_thread = Some(BlockedGuestThread {
             wait_id,
             thread_id: child_thread,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(child_thread)
-                    .expect("launched child GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(child_thread)
+                .expect("launched child GetMessage birth"),
             thread_handle: launch.thread_handle,
             regs: MipsGuestContext::zero(),
             import_pc: 0,
@@ -77542,7 +77571,7 @@ mod unicorn_tests {
         cpu.blocked_guest_thread = Some(super::BlockedGuestThread {
             wait_id,
             thread_id: worker_thread_id,
-            thread_birth: Some(worker_birth),
+            thread_birth: worker_birth,
             thread_handle: worker_handle,
             regs,
             import_pc: 0,
@@ -79196,7 +79225,7 @@ mod unicorn_tests {
         let blocked = super::BlockedGuestThread {
             wait_id,
             thread_id,
-            thread_birth: Some(birth),
+            thread_birth: birth,
             thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0x7fff_0420,
@@ -79303,7 +79332,7 @@ mod unicorn_tests {
         let blocked = super::BlockedGuestThread {
             wait_id: get_wait_id,
             thread_id: receiver_thread_id,
-            thread_birth: Some(receiver_birth),
+            thread_birth: receiver_birth,
             thread_handle: receiver_handle,
             regs: receiver_regs,
             import_pc: super::IMPORT_TRAP_BASE + 0x700,
@@ -79533,7 +79562,7 @@ mod unicorn_tests {
         let stale_get_message = super::BlockedGuestThread {
             wait_id: stale_get_wait_id,
             thread_id,
-            thread_birth: Some(old_birth),
+            thread_birth: old_birth,
             thread_handle: old_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0x7fff_0420,
@@ -79555,6 +79584,27 @@ mod unicorn_tests {
             &mut running_thread,
         ));
         assert_eq!(running_thread, Some((thread_id, new_handle)));
+        // R: the old payload can share the numeric TID and import PC with
+        // B-prime, but neither the late replay fence nor recovery may borrow
+        // its old birth to condemn the replacement's fresh native entry.
+        let uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .expect("native R fixture");
+        let current = super::NativeCurrentThread::new(thread_id, Some(new_birth));
+        assert_eq!(
+            super::orphaned_blocked_get_message_wait_before_native_entry(
+                &kernel,
+                &uc,
+                &current,
+                stale_get_message.import_pc,
+                Some(&stale_get_message),
+                &[],
+                &[],
+            ),
+            None,
+        );
         Ok(())
     }
 
@@ -80168,6 +80218,245 @@ mod unicorn_tests {
     #[test]
     fn native_selected_get_message_orphan_fails_before_guest_entry() -> crate::Result<()> {
         native_get_message_blocked_receiver_send_fixture(false, false, true)
+    }
+
+    #[test]
+    fn native_modal_button_tap_resumes_before_orphaned_get_message_fence() -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W;
+        use crate::ce::{
+            coredll::CoredllGuestMemory,
+            gwe::{Point, WM_LBUTTONUP, WM_PAINT},
+            scheduler::SchedulerBlockedWaitKind,
+            timer::INFINITE,
+        };
+        use crate::emulator::imports::{ImportModuleKind, ImportTrap};
+
+        #[derive(Default)]
+        struct ModalTextMemory {
+            bytes: BTreeMap<u32, u8>,
+        }
+
+        impl CoredllGuestMemory for ModalTextMemory {
+            fn read_u8(&self, addr: u32) -> crate::Result<u8> {
+                Ok(self.bytes.get(&addr).copied().unwrap_or(0))
+            }
+
+            fn write_u8(&mut self, addr: u32, value: u8) -> crate::Result<()> {
+                self.bytes.insert(addr, value);
+                Ok(())
+            }
+
+            fn read_u32(&self, addr: u32) -> crate::Result<u32> {
+                let mut bytes = [0; 4];
+                self.read_bytes(addr, &mut bytes)?;
+                Ok(u32::from_le_bytes(bytes))
+            }
+
+            fn write_u32(&mut self, addr: u32, value: u32) -> crate::Result<()> {
+                self.write_bytes(addr, &value.to_le_bytes())
+            }
+
+            fn read_u16(&self, addr: u32) -> crate::Result<u16> {
+                let mut bytes = [0; 2];
+                self.read_bytes(addr, &mut bytes)?;
+                Ok(u16::from_le_bytes(bytes))
+            }
+
+            fn write_u16(&mut self, addr: u32, value: u16) -> crate::Result<()> {
+                self.write_bytes(addr, &value.to_le_bytes())
+            }
+        }
+
+        let mut image_bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut image_bytes, 0x200, 0x2610_0001); // addiu s0, s0, 1
+        write_vec_u32(&mut image_bytes, 0x204, 0x1000_ffff); // spin after one instruction
+        let image = crate::pe::PeImage::parse_bytes("modal-get-message-gap.exe", &image_bytes)?;
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let birth = kernel
+            .live_thread_birth_key_by_id(thread_id)
+            .expect("boot modal thread birth");
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(thread_id);
+        let entry = cpu.entry.expect("fixture entry");
+        let get_trap = super::IMPORT_TRAP_BASE + 0x700;
+        cpu.import_traps.insert(ImportTrap {
+            address: get_trap,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(ORD_GET_MESSAGE_W),
+            name: Some("GetMessageW".to_owned()),
+            iat_va: 0,
+        });
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+
+        let mut memory = ModalTextMemory::default();
+        let text_ptr = 0x2000;
+        let caption_ptr = 0x2100;
+        for (addr, value) in [(text_ptr, "Continue"), (caption_ptr, "Modal")].into_iter() {
+            for (index, unit) in value.encode_utf16().chain(std::iter::once(0)).enumerate() {
+                memory.write_u16(addr + index as u32 * 2, unit)?;
+            }
+        }
+        let modal_state = crate::ce::coredll::message_box_w_prepare(
+            &mut kernel,
+            &memory,
+            None,
+            None,
+            thread_id,
+            &[0, text_ptr, caption_ptr, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare MessageBoxW returned {result}")))?;
+        let dialog = modal_state.dialog_hwnd();
+        let button = kernel
+            .gwe
+            .get_dlg_item(dialog, 1)
+            .expect("MessageBox OK button");
+        let modal_wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                birth,
+                thread_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::ModalMessageBox {
+                    dialog_hwnd: dialog,
+                },
+                kernel.timers.tick_count(),
+                INFINITE,
+            )
+            .expect("birth-owned modal wait");
+        let get_wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                birth,
+                thread_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::GetMessage {
+                    hwnd: Some(dialog),
+                    min_msg: WM_PAINT,
+                    max_msg: WM_LBUTTONUP,
+                },
+                kernel.timers.tick_count(),
+                INFINITE,
+            )
+            .expect("birth-owned dialog GetMessage wait");
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[29] = cpu.stack_top.expect("fixture stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: get_trap,
+            regs: regs.clone(),
+        });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.current_thread_id = thread_id;
+        cpu.running_guest_thread = None;
+        cpu.blocked_guest_thread = Some(super::BlockedGuestThread {
+            wait_id: get_wait_id,
+            thread_id,
+            thread_birth: birth,
+            thread_handle,
+            regs: regs.clone(),
+            import_pc: get_trap,
+            return_pc: entry,
+            msg_ptr: regs.regs[29] - 0x400,
+            hwnd: Some(dialog),
+            min_msg: WM_PAINT,
+            max_msg: WM_LBUTTONUP,
+        });
+        cpu.blocked_modal_message_box = Some(super::BlockedModalMessageBox {
+            wait_id: modal_wait_id,
+            thread_id,
+            thread_handle,
+            regs,
+            return_pc: entry,
+            modal_state,
+        });
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        let rect = kernel
+            .gwe
+            .get_window_rect(button)
+            .expect("button screen rect");
+        let point = Point {
+            x: rect.left + rect.width() / 2,
+            y: rect.top + rect.height() / 2,
+        };
+        assert_eq!(
+            kernel.gwe.window_from_point_for_thread(thread_id, point),
+            Some(button)
+        );
+        kernel
+            .remote
+            .enqueue_touch("tap", point.x, point.y)
+            .unwrap();
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(thread_id, Some(dialog)),
+            2
+        );
+        // A real button tap removes only the dialog's GetMessage wait. The
+        // still-live modal selector must consume this gap before the A13 fence.
+        assert_eq!(kernel.live_thread_birth_key_by_id(thread_id), Some(birth));
+        assert!(kernel.blocked_waiter(modal_wait_id).is_some());
+        assert!(kernel.blocked_waiter(get_wait_id).is_none());
+        assert_eq!(
+            cpu.blocked_guest_thread.as_ref().map(|slot| slot.wait_id),
+            Some(get_wait_id)
+        );
+        assert!(kernel.has_modal_dialog_result(thread_id, dialog));
+        assert!(kernel.gwe.is_window(dialog));
+        assert_eq!(kernel.shell.message_boxes().count(), 0);
+
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let resumed = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(entry + 4),
+                live_pump: false,
+            },
+        );
+        assert!(
+            resumed.result.is_ok(),
+            "modal continuation: {:?}",
+            resumed.result
+        );
+        assert_eq!(resumed.report.start_thread_id(), Some(thread_id));
+        assert_eq!(resumed.report.start_pc(), Some(entry));
+        assert_eq!(
+            cpu.saved_context
+                .as_ref()
+                .expect("continued context")
+                .regs
+                .regs[16],
+            1
+        );
+        assert_eq!(
+            cpu.saved_context
+                .as_ref()
+                .expect("continued context")
+                .regs
+                .regs[2],
+            1
+        );
+        assert!(cpu.blocked_guest_thread.is_none());
+        assert!(cpu.blocked_modal_message_box.is_none());
+        assert!(kernel.blocked_waiter(modal_wait_id).is_none());
+        assert!(kernel.blocked_waiter(get_wait_id).is_none());
+        assert!(!kernel.gwe.is_window(dialog));
+        assert_eq!(kernel.shell.message_boxes().count(), 1);
+        assert_eq!(
+            kernel.shell.last_message_box().map(|record| record.result),
+            Some(1)
+        );
+        assert!(
+            cpu.last_debug_snapshot()
+                .expect("modal native snapshot")
+                .last_imports
+                .iter()
+                .all(|import| import.ordinal != Some(ORD_GET_MESSAGE_W))
+        );
+        Ok(())
     }
 
     // The ordinary one-way Send controls above do not cover a receiver that
@@ -83180,11 +83469,9 @@ mod unicorn_tests {
                 let blocked_record = super::BlockedGuestThread {
                     wait_id,
                     thread_id: 1,
-                    thread_birth: Some(
-                        kernel
-                            .live_thread_birth_key_by_id(1)
-                            .expect("boot GetMessage birth"),
-                    ),
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(1)
+                        .expect("boot GetMessage birth"),
                     thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
                     regs: regs.clone(),
                     import_pc: 0,
@@ -86801,7 +87088,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
             wait_id: stale_wait_id,
             thread_id,
-            thread_birth: Some(thread_birth),
+            thread_birth,
             thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0,
@@ -86874,9 +87161,11 @@ mod unicorn_tests {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let exiting_thread = 5;
-        let exiting_handle = 0x0000_0500;
+        let (exiting_handle, exiting_birth) =
+            super::wait_scheduler_tests::registered_native_test_thread(&mut kernel, exiting_thread);
         let other_thread = 6;
-        let other_handle = 0x0000_0600;
+        let (other_handle, other_birth) =
+            super::wait_scheduler_tests::registered_native_test_thread(&mut kernel, other_thread);
         let exiting_wait = kernel.register_blocked_waiter(
             exiting_thread,
             exiting_handle,
@@ -86905,7 +87194,7 @@ mod unicorn_tests {
             super::BlockedGuestThread {
                 wait_id: exiting_wait,
                 thread_id: exiting_thread,
-                thread_birth: None,
+                thread_birth: exiting_birth,
                 thread_handle: exiting_handle,
                 regs: super::MipsGuestContext::zero(),
                 import_pc: 0,
@@ -86918,7 +87207,7 @@ mod unicorn_tests {
             super::BlockedGuestThread {
                 wait_id: other_wait,
                 thread_id: other_thread,
-                thread_birth: None,
+                thread_birth: other_birth,
                 thread_handle: other_handle,
                 regs: super::MipsGuestContext::zero(),
                 import_pc: 0,
@@ -87126,7 +87415,7 @@ mod unicorn_tests {
         let blocked_record = super::BlockedGuestThread {
             wait_id,
             thread_id: receiver_thread_id,
-            thread_birth: Some(receiver_birth),
+            thread_birth: receiver_birth,
             thread_handle: receiver_handle,
             regs: receiver_regs,
             import_pc,
@@ -87288,11 +87577,9 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
             wait_id: getmsg_wait_id,
             thread_id: main_thread_id,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(main_thread_id)
-                    .expect("boot GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(main_thread_id)
+                .expect("boot GetMessage birth"),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0,
@@ -87416,11 +87703,9 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
             wait_id,
             thread_id: main_thread_id,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(main_thread_id)
-                    .expect("boot GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(main_thread_id)
+                .expect("boot GetMessage birth"),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0,
@@ -87910,7 +88195,7 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
             wait_id: stale_wait_id,
             thread_id,
-            thread_birth: Some(old_birth),
+            thread_birth: old_birth,
             thread_handle: old_handle,
             regs: old_regs,
             import_pc: 0,
@@ -88117,11 +88402,9 @@ mod unicorn_tests {
         let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
             wait_id,
             thread_id: main_thread_id,
-            thread_birth: Some(
-                kernel
-                    .live_thread_birth_key_by_id(main_thread_id)
-                    .expect("boot GetMessage birth"),
-            ),
+            thread_birth: kernel
+                .live_thread_birth_key_by_id(main_thread_id)
+                .expect("boot GetMessage birth"),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
             import_pc: 0,
