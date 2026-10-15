@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-EVIDENCE = Path(__file__).resolve().parents[1] / "evidence" / "e37-live-20261014T051228Z"
+EVIDENCE = Path(__file__).resolve().parents[2] / "evidence" / "e37-live-20261014T051228Z"
 EXPECTED_SHA256 = {
     "app.stdout.raw.txt": "F386537C12C3ADFD117A8D1A52D5BB20EBE3A77FACED345AE7EC2437597095AA",
     "memory.jsonl": "627DA624A893F141EB93E72FFBD7C813ABC54547998296EC3B9470CC3067BD65",
