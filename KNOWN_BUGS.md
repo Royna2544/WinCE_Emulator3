@@ -101,8 +101,11 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     release **2,081/0/9 ignored** and no-default **1,502/0/3 ignored**.
     The bounded [D-011 framebuffer gate](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
     now refuses un-restorable saved backings before stopped-exit effects and
-    retains active/parked/pending ownership for recovery; release
-    **2,092/0/9 ignored** and no-default **1,509/0/3 ignored** passed.
+    retains active/parked/pending ownership for recovery. A stopped boot CPU
+    whose selected process no longer matches its saved owner also fails with
+    typed authority recovery. The monitor blocks new checkpoints after
+    refusal; only an earlier checkpoint restore clears its hold. Release
+    **2,094/0/9 ignored** and no-default **1,510/0/3 ignored** passed.
     Full host teardown remains open: failures after preflight are not proven
     whole-exit atomic, and immediate pseudo-exit native CPU stop/canonical
     Task/VM retirement, CE6 foreign-link topology, direct WndProc,

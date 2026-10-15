@@ -55,10 +55,17 @@ result. The per-slice text before this condense is at
   A malformed/mismatched backing or missing destination returns a typed
   recovery error; the stopped active, parked or pending CPU/launch remains
   owned, and the live/monitor paths do not run another slice through that
-  refusal. The behavioral red was 2/2; corrected focused scheduler controls
-  passed 4/4 after an initial fixture error. Final 18-block suites passed
-  release **2,092/0/9 ignored** and no-default **1,509/0/3 ignored**;
-  alternate feature, format and diff checks passed. This does not prove
+  refusal. A mismatched selected owner of the stopped boot CPU likewise
+  returns typed authority recovery instead of ordinary `false`. The original
+  behavioral red was 2/2; a later selected-owner red was 0/1 and turned
+  green 1/1, and corrected focused scheduler controls passed 4/4. A later
+  monitor red showed that saving a checkpoint after refusal could bypass its
+  hold; the corrected focused control passed 1/1. The monitor now blocks new
+  checkpoints after refusal and clears the hold only by restoring an earlier
+  checkpoint. Final 18-block suites passed release **2,094/0/9 ignored** and
+  no-default **1,510/0/3 ignored**; alternate feature, format and diff checks
+  passed.
+  This does not prove
   canonical Task/VM retirement after a root pseudo signal or atomicity of
   every later exit effect. No live iNavi run was made.
 - Bounded guest pseudo-exit caller-birth source/test gate
