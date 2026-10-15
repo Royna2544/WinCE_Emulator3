@@ -79,17 +79,20 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     [timer receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md),
     [window receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)).
     W-B1b separately source-gates bounded remote touch/key target birth
-    ([input receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md)).
+    ([input receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md));
+    W-B1c preserves mixed touch/key admission order within one `CeRemote`
+    ([order receipt](evidence/stage3-mixed-input-order-20261015/validation.receipt.md)).
     Broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other input
     producers, full exit capture retirement, implicit gesture ownership and
     host teardown remain outside these gates; their reuse isolation is unproved.
-  - Remote input drains touches before keys without a shared sequence: a key
-    queued before a focus-changing tap may reach the new focus owner. Mixed
-    touch/key ordering is a separate gate after W-B1b.
-  - W-B1b removed hidden/off-point hint delivery and retention of input with
+  - W-B1c does not establish physical arrival order across HTTP and desktop
+    producers, ordering with NMEA/serial batch dispatch, CE6 focus/activation
+    parity, cross-thread guest WNDPROC execution order or O-C5 guest-time
+    assignment. Host `GetMessage(NULL)` wake without a HWND is separate.
+    W-B1b removed hidden/off-point hint delivery and retention of input with
     no live target. Earlier E-38 and callback-drive live tap-delivery evidence
-    predates this routing; the next approved live run must verify that taps
-    still reach the intended iNavi window.
+    predates both W-B1b and W-B1c routing; the next approved live run must
+    verify taps still reach the intended iNavi window.
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
     native wait payloads are unpinned despite exact-birth publication. Wait-ID
     wrap/reuse and live modal continuation behavior remain unproved.

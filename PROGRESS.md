@@ -8,10 +8,27 @@ references for historical reconstruction.
 
 Each gate is bounded; none is full Stage 3 or live-app acceptance. Newest
 first. Totals are passed/failed/ignored for release
-`unicorn,trace,win32-desktop`, then no-feature. Each receipt holds the sealed
-HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
-condense is at `git show d4263dde:PROGRESS.md`.
+`unicorn,trace,win32-desktop`, then no-feature. Linked receipts identify the
+source and validation evidence; a source gate is not a live EXE/PDB or app-run
+result. The per-slice text before this condense is at
+`git show d4263dde:PROGRESS.md`.
 
+- W-B1c mixed remote key/touch admission order
+  ([receipt](evidence/stage3-mixed-input-order-20261015/validation.receipt.md)):
+  the preserved expected red showed an earlier A-focused key reaching B after
+  a later B-point DOWN changed focus in one drain. One typed, per-`CeRemote`
+  sequenced FIFO now replaces the separate touch/key drains; tap expansion is
+  contiguous, and active/hint keys resolve their live target at each event.
+  Explicit HWND and W-B1b exact-birth consume/drop rules remain in force;
+  message-time projection is unchanged. The key(A) → DOWN(B) → key(B) focused
+  release control passed 1/0, and all 27 inherited W-B1b controls passed.
+  Backup HEAD `0e06e2c5` matches the tested source; the a02 source seal was
+  captured **after** the release run started, as its receipt states. Full
+  release passed 1,992/0/9 and no-feature 1,452/0/3 across 18 result blocks
+  each; Unicorn-only and desktop-without-trace checks exited 0. This proves
+  local adapter admission order, not global HTTP/desktop or cross-device
+  arrival order, CE6 focus policy, guest WNDPROC execution order or O-C5
+  guest-time policy. No new iNavi run or tap-delivery result exists.
 - W-B1b remote touch/key window-owner birth
   ([receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md)):
   stale explicit host HWNDs consume/drop input before focus, queue/status,
@@ -23,8 +40,9 @@ condense is at `git show d4263dde:PROGRESS.md`.
   passed before the fresh a38 source seal. Sealed a38 release passed
   1,988/0/9 and a39 no-feature 1,448/0/3 across 18 blocks each; a40/a41
   alternate-feature checks passed. Patch SHA-256 is `ED7A3B48…962D40`.
-  Mixed touch/key ordering, full exit capture retirement, implicit gesture
-  ownership, host teardown, other producers and live iNavi remain open.
+  Full exit capture retirement, implicit gesture ownership, host teardown,
+  other producers and live iNavi remain open; W-B1c above is a separate
+  local-order source gate.
 - W-B1a window-owner birth
   ([receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)):
   windows retain one frozen creation owner; native creation ordinals 246/688/690

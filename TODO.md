@@ -16,12 +16,6 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - After the bounded W-B1b remote-input
-     [source gate](evidence/stage3-window-input-birth-20261015/validation.receipt.md),
-     gate mixed touch/key ordering separately. First execute an expected red
-     that enqueues a key while A is focused, then a
-     DOWN on B that changes focus, and asserts the key reaches A. Only then
-     replace `src/ce/remote.rs`'s separate drains with one sequenced host input queue.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
@@ -63,6 +57,17 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   any/all mode of the TID 10 wait; wait id 833 needs a boot-forward trace. Each
   writable-mount live run needs fresh user approval and a verified backup
   (`scripts/backup_rw_mounts.ps1`).
+- Before another mounted iNavi observation, build a fresh release EXE and
+  matching PDB from the W-B1c-gated source and record source, config and binary
+  hashes. Parameterize `scripts/inavi_bounded_e22.ps1` with a mandatory per-run
+  spec; its hardcoded E-37 binary, backup hashes, approval and evidence paths
+  cannot be reused. Obtain a new one-run approval, then create and SHA-verify
+  fresh adjacent ZIPs of the SD, ResidentFlash and EmulatorRoot writable mounts
+  before launch. Add and source-test a live guest page-budget scalar, labelled
+  as narrow accounting rather than total guest commit. Observe input ACK,
+  drain/post, guest WNDPROC and frame separately, with phase-aligned busy-slice
+  MIPS, per-slice setup cost and host RSS/private memory. No app or mount run
+  has been made for W-B1c.
 - Host idle polling must not decide from debug snapshots. Derive it from
   canonical wait state (`docs/evidence/stale-snapshot-host-routing-design-20261014.md`).
 - Child `WM_ACTIVATE` stale-return stub (A-6): the controls pass (ledger E-27).
