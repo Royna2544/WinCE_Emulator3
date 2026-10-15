@@ -13189,15 +13189,21 @@ impl UnicornMips {
         if let Some(cause) = pre_entry_wait_failure {
             pre_entry_try!(Err::<(), Error>(cause));
         }
-        if let Some(wait_id) = orphaned_blocked_get_message_wait_before_native_entry(
-            kernel,
-            &uc,
-            &current_thread_id,
-            start_pc,
-            blocked_guest_thread.borrow().as_ref(),
-            &displaced_blocked_get_messages.borrow(),
-            &pending_wndproc_returns.borrow(),
-        ) {
+        let orphaned_get_message_wait_id = {
+            let blocked_slot = blocked_guest_thread.borrow();
+            let displaced = displaced_blocked_get_messages.borrow();
+            let pending = pending_wndproc_returns.borrow();
+            orphaned_blocked_get_message_wait_before_native_entry(
+                kernel,
+                &uc,
+                &current_thread_id,
+                start_pc,
+                blocked_slot.as_ref(),
+                &displaced,
+                &pending,
+            )
+        };
+        if let Some(wait_id) = orphaned_get_message_wait_id {
             // Modal completion and exact sent-callout returns have already
             // had their chance to take ownership above. A still-parked import
             // with no birth-matched scheduler wait must not execute again.
@@ -29170,9 +29176,7 @@ fn orphaned_blocked_get_message_wait_before_native_entry<D>(
         return blocked_get_message
             .into_iter()
             .chain(displaced_get_messages.iter())
-            .find(|candidate| {
-                candidate.thread_id == thread_id && candidate.import_pc == start_pc
-            })
+            .find(|candidate| candidate.thread_id == thread_id && candidate.import_pc == start_pc)
             .map(|candidate| candidate.wait_id);
     };
     let orphan = blocked_get_message
@@ -29197,6 +29201,7 @@ fn orphaned_blocked_get_message_wait_before_native_entry<D>(
     let exact_callback = pending_returns.last().is_some_and(|pending| {
         pending.source == "GetMessageW/SentMessage"
             && pending.send_thread_id == Some(thread_id)
+            && pending.send_timeout_result_ptr.is_none()
             && pending.return_pc == start_pc
             && pending.return_sp == read_mips_reg(uc, RegisterMIPS::SP)
             && read_mips_reg(uc, RegisterMIPS::RA) == WNDPROC_RETURN_STUB_ADDR
@@ -37808,7 +37813,9 @@ mod wait_scheduler_tests {
                 wait_id: getmsg_wait_id,
                 thread_id: main_thread_id,
                 thread_birth: Some(
-                    kernel.live_thread_birth_key_by_id(main_thread_id).expect("boot GetMessage birth"),
+                    kernel
+                        .live_thread_birth_key_by_id(main_thread_id)
+                        .expect("boot GetMessage birth"),
                 ),
                 thread_handle: main_thread_handle,
                 regs: super::MipsGuestContext::zero(),
@@ -37938,7 +37945,9 @@ mod wait_scheduler_tests {
                 wait_id: getmsg_wait_id,
                 thread_id: main_thread_id,
                 thread_birth: Some(
-                    kernel.live_thread_birth_key_by_id(main_thread_id).expect("boot GetMessage birth"),
+                    kernel
+                        .live_thread_birth_key_by_id(main_thread_id)
+                        .expect("boot GetMessage birth"),
                 ),
                 thread_handle: main_thread_handle,
                 regs: super::MipsGuestContext::zero(),
@@ -49569,7 +49578,9 @@ mod guest_thread_stack_tests {
             wait_id,
             thread_id: parent_thread,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(parent_thread).expect("parent GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(parent_thread)
+                    .expect("parent GetMessage birth"),
             ),
             thread_handle: parent_handle,
             regs: MipsGuestContext::zero(),
@@ -54187,7 +54198,9 @@ mod guest_thread_stack_tests {
             wait_id,
             thread_id: parent_thread,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(parent_thread).expect("parent GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(parent_thread)
+                    .expect("parent GetMessage birth"),
             ),
             thread_handle: parent_handle,
             regs,
@@ -54734,7 +54747,9 @@ mod guest_thread_stack_tests {
             wait_id,
             thread_id: child_thread,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(child_thread).expect("launched child GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(child_thread)
+                    .expect("launched child GetMessage birth"),
             ),
             thread_handle: launch.thread_handle,
             regs: MipsGuestContext::zero(),
@@ -83165,7 +83180,11 @@ mod unicorn_tests {
                 let blocked_record = super::BlockedGuestThread {
                     wait_id,
                     thread_id: 1,
-                    thread_birth: Some(kernel.live_thread_birth_key_by_id(1).expect("boot GetMessage birth")),
+                    thread_birth: Some(
+                        kernel
+                            .live_thread_birth_key_by_id(1)
+                            .expect("boot GetMessage birth"),
+                    ),
                     thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
                     regs: regs.clone(),
                     import_pc: 0,
@@ -87270,7 +87289,9 @@ mod unicorn_tests {
             wait_id: getmsg_wait_id,
             thread_id: main_thread_id,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(main_thread_id).expect("boot GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(main_thread_id)
+                    .expect("boot GetMessage birth"),
             ),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
@@ -87396,7 +87417,9 @@ mod unicorn_tests {
             wait_id,
             thread_id: main_thread_id,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(main_thread_id).expect("boot GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(main_thread_id)
+                    .expect("boot GetMessage birth"),
             ),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
@@ -88095,7 +88118,9 @@ mod unicorn_tests {
             wait_id,
             thread_id: main_thread_id,
             thread_birth: Some(
-                kernel.live_thread_birth_key_by_id(main_thread_id).expect("boot GetMessage birth"),
+                kernel
+                    .live_thread_birth_key_by_id(main_thread_id)
+                    .expect("boot GetMessage birth"),
             ),
             thread_handle: main_thread_handle,
             regs: super::MipsGuestContext::zero(),
