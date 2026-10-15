@@ -76015,17 +76015,15 @@ mod unicorn_tests {
             pc: sleep_return_pc,
         });
 
-        let hwnd = kernel.create_window_ex_w(
-            receiver_thread,
-            "FINITE_SLEEP_RECEIVER",
-            "",
-            None,
-            0,
-            0,
-            0,
-        );
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread, "FINITE_SLEEP_RECEIVER", "", None, 0, 0, 0);
         let wndproc = entry + 0x40;
-        assert!(kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc).is_some());
+        assert!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, GWL_WNDPROC, wndproc)
+                .is_some()
+        );
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
         let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -76038,12 +76036,16 @@ mod unicorn_tests {
             },
         );
         attempt.result?;
-        assert!(attempt.report.attempt_id().is_some(), "native MIPS attempt did not start");
+        assert!(
+            attempt.report.attempt_id().is_some(),
+            "native MIPS attempt did not start"
+        );
         let sleep = cpu
             .blocked_wait_threads
             .iter()
             .find(|wait| {
-                wait.thread_id == receiver_thread && matches!(wait.kind, super::BlockedWaitKind::Sleep)
+                wait.thread_id == receiver_thread
+                    && matches!(wait.kind, super::BlockedWaitKind::Sleep)
             })
             .cloned()
             .expect("real MIPS Sleep must retain a native wait payload");
@@ -76096,6 +76098,183 @@ mod unicorn_tests {
         assert_eq!(cpu.blocked_wait_threads[0].regs, sleep.regs);
         assert_eq!(cpu.blocked_wait_threads[0].return_pc, sleep.return_pc);
         assert_eq!(cpu.current_thread_id, peer_thread);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: native same-process SendMessageW must not enter a receiver in finite Sleep"]
+    fn native_same_process_send_defers_wndproc_during_receiver_sleep() -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::{ORD_SEND_MESSAGE_W, ORD_SLEEP};
+        use crate::emulator::imports::{ImportModuleKind, ImportTrap};
+
+        let sleep_trap = super::IMPORT_TRAP_BASE + 0x400;
+        let send_trap = sleep_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let mut image_bytes = tiny_mips_spinner_pe();
+        for (offset, words) in [
+            (
+                0x200,
+                [
+                    0x3c19_0000 | (sleep_trap >> 16),
+                    0x3739_0000 | (sleep_trap & 0xffff),
+                    0x0320_f809, // T calls Sleep through a real MIPS jalr
+                    0,
+                    0x1000_ffff,
+                    0,
+                ],
+            ),
+            (
+                0x240,
+                [
+                    0x3c19_0000 | (send_trap >> 16),
+                    0x3739_0000 | (send_trap & 0xffff),
+                    0x0320_f809, // S calls SendMessageW through a real MIPS jalr
+                    0,
+                    0x1000_ffff,
+                    0,
+                ],
+            ),
+        ] {
+            for (index, word) in words.into_iter().enumerate() {
+                write_vec_u32(&mut image_bytes, offset + index * 4, word);
+            }
+        }
+        for (index, word) in [0x2402_0077, 0x03e0_0008, 0].into_iter().enumerate() {
+            write_vec_u32(&mut image_bytes, 0x280 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("sleep-native-send.exe", &image_bytes)?;
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let receiver_thread = super::MAIN_GUEST_THREAD_ID;
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_by_id(receiver_thread)
+            .expect("boot receiver birth");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.set_initial_thread_id(receiver_thread);
+        for (address, ordinal, name) in [
+            (sleep_trap, ORD_SLEEP, "Sleep"),
+            (send_trap, ORD_SEND_MESSAGE_W, "SendMessageW"),
+        ] {
+            cpu.import_traps.insert(ImportTrap {
+                address,
+                module_kind: ImportModuleKind::Coredll,
+                module_name: "COREDLL.dll".to_owned(),
+                ordinal: Some(ordinal),
+                name: Some(name.to_owned()),
+                iat_va: 0,
+            });
+        }
+        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+        let entry = cpu.entry.expect("fixture entry");
+        let wndproc = entry + 0x80;
+        let receiver_sp = cpu.stack_top.expect("fixture stack") - 0x100;
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread, "SLEEP_NATIVE_SEND", "", None, 0, 0, 0);
+        assert!(
+            kernel
+                .gwe
+                .set_window_long(hwnd, GWL_WNDPROC, wndproc)
+                .is_some()
+        );
+        let mut receiver_regs = super::MipsGuestContext::zero();
+        receiver_regs.regs[4] = 10_000;
+        receiver_regs.regs[16] = 0xa1a1_0020;
+        receiver_regs.regs[29] = receiver_sp;
+        cpu.saved_context = Some(super::SavedCpuContext {
+            pc: entry,
+            regs: receiver_regs,
+        });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.running_guest_thread = Some((
+            receiver_thread,
+            crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        ));
+
+        // S is a ready displaced context, not a CE-suspended task. It enters
+        // the genuine SendMessageW import only after T's Sleep blocks.
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(entry + 0x40, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sender_thread)
+            .expect("live sender birth");
+        let mut sender_regs = super::MipsGuestContext::zero();
+        sender_regs.regs[4] = hwnd;
+        sender_regs.regs[5] = crate::ce::gwe::WM_USER + 0x72;
+        sender_regs.regs[6] = 0x66;
+        sender_regs.regs[29] = receiver_sp - 0x100;
+        cpu.suspended_guest_thread = Some(super::SuspendedGuestThread {
+            thread_id: sender_thread,
+            thread_birth: Some(sender_birth),
+            thread_handle: Some(sender_handle),
+            regs: sender_regs,
+            pc: entry + 0x40,
+        });
+
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(wndproc),
+                live_pump: true,
+            },
+        );
+        // The current direct receiver-context branch marks T's staged
+        // context unverified and can fail the post-run provenance check after
+        // entering the callout. Keep the import/wait/send witnesses below as
+        // the reachability gate; an error before them is a fixture failure.
+        assert!(
+            attempt.report.attempt_id().is_some(),
+            "native MIPS attempt did not start"
+        );
+        let imports: Vec<_> = cpu
+            .last_debug_snapshot()
+            .expect("native attempt import trace")
+            .last_imports
+            .iter()
+            .filter_map(|import| import.ordinal)
+            .collect();
+        assert!(
+            imports
+                .windows(2)
+                .any(|pair| pair == [ORD_SLEEP, ORD_SEND_MESSAGE_W]),
+            "real MIPS T→S import sequence missing: {imports:?}"
+        );
+        let sleep = cpu
+            .blocked_wait_threads
+            .iter()
+            .find(|wait| {
+                wait.thread_id == receiver_thread
+                    && matches!(wait.kind, super::BlockedWaitKind::Sleep)
+            })
+            .expect("receiver must still own its finite Sleep wait");
+        assert_eq!(sleep.timeout_ms, 10_001);
+        assert_ne!(sleep.return_pc, 0, "Sleep continuation must not be PC zero");
+        assert_eq!(sleep.regs.regs[16], 0xa1a1_0020);
+        assert_eq!(
+            kernel
+                .blocked_waiter(sleep.wait_id)
+                .map(|wait| wait.owner_birth),
+            Some(Some(receiver_birth)),
+        );
+        let send_ids = kernel.gwe.sent_message_ids_for_windows(&[hwnd]);
+        assert_eq!(
+            send_ids.len(),
+            1,
+            "native SendMessageW did not queue one send"
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_thread),
+            None,
+            "native SendMessageW entered T's WNDPROC before finite Sleep returned: wait={} send={}",
+            sleep.wait_id,
+            send_ids[0]
+        );
+        assert!(kernel.thread_has_pending_sent_message(receiver_thread));
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        attempt.result?;
         Ok(())
     }
 
