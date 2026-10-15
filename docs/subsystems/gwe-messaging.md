@@ -95,14 +95,72 @@ parent/owner traversal or numeric sent-message process cleanup. The later
 sender gate narrows the latter, not foreign-link recovery, full teardown or
 live-app/CE6 acceptance.
 
+### Proposed host-exit exact-window-set gate (design; not implemented)
+
+This Stage 3 cut applies the common [exit-effect ownership](../ARCHITECTURE.md)
+contract to **machine-driven process exit only**. Kernel's verified canonical
+`ProcessBirthKey` remains the exit authority. GWES owns the one live-HWND
+selection and exact-set mutation from each window's frozen creation process
+birth; parent and owner links are not target authority. `LegacyUnknown` with a
+captured process birth remains selectable by that birth, while an unbound
+legacy/system window is not guessed from its numeric PID. Keep guest-requested
+`DestroyWindow` and its current child/owned recursion separate and unchanged.
+
+Current consumers are both Kernel exit paths (`mark_process_launch_exited_*`
+and current-process pseudo `terminate_process`), GWE's window, queue, send,
+focus/capture, clipboard, IME, region, z-order and invalidation state, and
+Kernel's typed-payload, shell, HWND-timer, trace and backing-store cleanup.
+The already-destroyed backing-store selector remains separate: a dead HWND
+has no live GWES teardown target but its captured backing can still belong to
+the exiting birth. `Gwe` is cloned with its windows and immutable birth keys;
+this cut does not implement whole-machine checkpoint relineage or make a
+cloned key valid in another machine.
+
+At the stopped host-exit boundary, preflight the canonical birth before any
+effect. GWES captures the complete live target set for that birth and retires
+**exactly that set** in one operation, returning the actually retired HWNDs.
+The shared exact-set destructor performs the existing per-target queue/send,
+focus/capture and rendering cleanup once; the public recursive destructor may
+reuse that mutation routine only after independently deriving its recursive
+target set. Kernel uses the returned set, not a guessed descendant list, for
+payload, shell and timer cleanup and tracing. Kernel's separate frozen-birth
+backing-store list drives restore/discard even for already-dead HWNDs. An
+unknown/mismatched exit birth fails before mutation; no cross-birth parent or
+owner edge expands the selected set. Preserve the existing sent-message
+sender-exit gate, one-shot cancellation/reply behavior, and guest API return
+behavior; do not add callback synthesis or a scheduling policy in this cut.
+
+Expected-red controls first: strand an A-birth HWND/backing under a recycled
+PID, then create B-birth windows and fixture-only cross-birth **parent** and
+**owner** links from B to A in separate cases. B's real host exit must retire
+B's complete set while A's HWND, frozen owner, backing, queued work, timers
+and typed payloads remain unclaimed. A same-birth child/owned-window exit
+control must still retire the full B set, and a normal guest `DestroyWindow`
+control must still recurse through its valid same-birth subtree. Check both
+host exit callers, no-birth refusal and repeated/no-live-target exit; preserve
+the pre-fix red log and then run focused, full release-feature, no-default and
+alternate-feature checks on a frozen source. Tests prove identity isolation,
+not CE6 permission for a cross-process parent/owner topology.
+
+[O-G4](../DECISIONS.md) remains open for CE6 topology and the fate of a
+foreign window's link to a retired parent/owner. An exact-set teardown must
+not silently destroy or reparent that foreign HWND to make the fixture pass;
+its visual visibility after a synthetic invalid link is not a CE6 claim.
+Partial host-exit teardown is not a successful completion: if a future
+preparation step can fail, move it before the first mutation or report the
+irreversible partial effect. This source gate neither accepts full Stage 3
+nor authorizes a writable-mount iNavi run.
+
 ### Bounded sender-owned send transaction (source-tested)
 
 The [sender-ownership receipt](../../evidence/stage3-sender-birth-20261015/validation.receipt.md)
 seals the tested Send/Timeout transaction from captured raw/native caller
 birth through atomic GWES publication, exact process/thread-birth exit
 selection, and native wait/result/re-entry checks. `SentMessage` has one
-immutable sender owner: `Birth`, explicit fixture-compatible `LegacyUnknown`,
-or `SystemNoWait`. Numeric sender IDs are derived, not a second owner. An
+sender-owner field: immutable authenticated `Birth`, explicit numeric
+fixture-compatible `LegacyUnknown`, or `SystemNoWait`. Numeric IDs for `Birth`
+are derived, not a second owner; the legacy-unknown process ID remains mutable
+for compatibility. An
 invalid captured birth fails before a send ID, queue/status/wake, trace or
 result-pointer effect. Active cleanup detaches the sender result pointer while
 allowing the receiver callback to finish. The synthetic stranded-A queued and

@@ -1832,9 +1832,12 @@ The [expected-red receipt](../../evidence/stage3-sender-birth-20261015/red.recei
 preserves the test-first queued, active and raw stale-caller failures with
 attempt-numbered hashes. Its first active attempt failed fixture setup; later
 attempts reached the bug. The [final receipt](../../evidence/stage3-sender-birth-20261015/validation.receipt.md)
-seals Git HEAD `e93922f543de4623f7495b904a1655ecda8b4aac` plus one
-uncommitted test-only non-hung timing correction, lists SHA-256 for every
-tested source/test file and every failed/passing raw log, and records the
+seals the six tested source/test files at Git HEAD
+`e27a4cddb2fe30fc8280f06492a48ea189a65ca9`, with a HEAD manifest and
+reversible source patch from `b00272ca`. The native library pass preceded the
+now-committed non-hung integration-test timing correction; the final full
+suites include it. The receipt lists SHA-256 for the tested files and all
+numbered raw logs, and records the
 three enabled original red controls. Independent producer/fixture/native
 reviews preceded the final validation. Full offline suites passed release
 **2,067/0/9 ignored** and no-default **1,495/0/3 ignored** across 18 groups

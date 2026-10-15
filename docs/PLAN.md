@@ -278,7 +278,8 @@ close only their named gates, not Stage 2 or live acceptance.
   At that earlier host-exit seal, recursive foreign parent/owner links and
   numeric sent-message sender cleanup lacked birth proof. The later bounded
   [sender gate](../evidence/stage3-sender-birth-20261015/validation.receipt.md)
-  addresses the tested queued-send path; full owner-filtered host teardown,
+  covers tested queued and active sends, including identified native and
+  no-wait producers; full owner-filtered host teardown,
   live-app behavior and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
