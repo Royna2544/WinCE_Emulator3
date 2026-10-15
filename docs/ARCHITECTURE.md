@@ -56,6 +56,12 @@ reuse, machine checkpoint relineage and live-app behavior remain unproved.
 A4 below remains the shared ownership contract, not a declaration that all
 consumers migrated.
 
+The bounded [D-010 finite-Sleep Task/Frame source gate](../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
+passed on resealed source (release 2,025/0/9 ignored; no-feature 1,472/0/3
+ignored). It connects one exact-birth frame through wait selection and native
+resume, not a general `CeMachine`/TaskDirectory, completed Stage 3 or a live
+iNavi result. A1-A3 below remain the target shared contracts.
+
 ## A1. Machine authority
 
 `CeMachine` is the proposed common execution anchor: one sequenced owner of

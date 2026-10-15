@@ -35,6 +35,11 @@ architecture is implemented.
   256-MiB sparse fixed window and no copied spillover
   ([receipt](../evidence/om2-heap-20261014/validation.receipt.md)). This did
   not run iNavi or prove a speed, host-RSS or map-readiness gain.
+- D-010's finite-Sleep Task/Frame cut passed its resealed source gate: release
+  2,025/0/9 ignored and no-feature 1,472/0/3 ignored
+  ([receipt](../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
+  Only finite Sleep has this canonical active frame; broader Task/continuation
+  authority, Stage 3 and live iNavi acceptance remain open.
 - Phase 0 hot-path hygiene is done (E-9): amortized scheduler block hook,
   hookless trampoline default, per-slice guest-MIPS logging. It changed no
   scheduling policy; the 1M-instruction slice count is still the round-robin tick.
@@ -281,6 +286,12 @@ close only their named gates, not Stage 2 or live acceptance.
   without an HWND remain open. See [remote-observability](subsystems/remote-observability.md)
   for scope and remaining remote-boundary work. No app or writable-mount run
   was performed for this gate.
+- D-010 finite-Sleep Task/Frame publication, exact wake/restore and deferred
+  same-process sent-message delivery passed the resealed source gate
+  ([receipt](../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
+  Real-MIPS GetMessageW, PeekMessageW(PM_REMOVE) and GetMessageWNoWait paths
+  return one WNDPROC result to the blocked sender. Reciprocal cross-Send,
+  post-wake MsgWait, other waits, full Stage 3 and live behavior remain open.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full
