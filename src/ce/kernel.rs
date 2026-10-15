@@ -129,7 +129,6 @@ pub enum MessagePumpResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemoteTouchTargeting {
     Explicit,
-    ThreadHitTest,
     DesktopHitTest,
 }
 
@@ -9085,7 +9084,9 @@ impl CeKernel {
         if self.gwe.advance_caret_blink(self.timers.tick_count()) {
             self.gwe.invalidate_caret_rect();
         }
-        self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        // The guest HWND is a retrieval filter, not the recipient of a raw
+        // coordinate event. Input resolves by capture/hit-test independently.
+        self.drain_remote_input_to_thread_window(thread_id, None);
         if let Some(message) = self.get_gwe_message_for_reader(thread_id, hwnd, min_msg, max_msg) {
             self.clear_timer_message_pending(thread_id, &message);
             self.gwe
@@ -9286,7 +9287,9 @@ impl CeKernel {
         if self.gwe.advance_caret_blink(self.timers.tick_count()) {
             self.gwe.invalidate_caret_rect();
         }
-        self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        // Preserve this HWND only for the queued-message read below. It must
+        // not steer host input before the message exists in a recipient FIFO.
+        self.drain_remote_input_to_thread_window(thread_id, None);
         if let Some(message) =
             self.peek_gwe_message_for_reader(thread_id, hwnd, min_msg, max_msg, flags)
         {
@@ -11004,24 +11007,60 @@ impl CeKernel {
                 x: event.x,
                 y: event.y,
             };
-            let target = match touch_targeting {
-                RemoteTouchTargeting::Explicit => hwnd,
-                RemoteTouchTargeting::ThreadHitTest => self
+            if touch_targeting == RemoteTouchTargeting::DesktopHitTest
+                && let Some(stale_capture) = self
                     .gwe
                     .get_capture()
-                    .or_else(|| self.gwe.window_from_point_for_thread(thread_id, point))
-                    .or(hwnd),
+                    .filter(|captured| self.live_remote_window_target(*captured).is_none())
+            {
+                if event.message == WM_LBUTTONDOWN {
+                    // A fresh gesture may retarget by screen point. Clear only
+                    // the same still-stale capture; the kernel release path
+                    // would post WM_CAPTURECHANGED to the exited A owner.
+                    if self.gwe.get_capture() == Some(stale_capture)
+                        && self.live_remote_window_target(stale_capture).is_none()
+                    {
+                        self.gwe.release_capture();
+                    }
+                } else {
+                    // An old MOVE/UP has no new DOWN on B. Retain the stale
+                    // capture until a fresh DOWN, so later orphan phases also
+                    // drop instead of becoming a lone event for B.
+                    details.push(format!(
+                        "drop:stale-capture=0x{stale_capture:08x}/msg=0x{:04x}",
+                        event.message
+                    ));
+                    self.record_message_trace(MessageTraceRecord {
+                        op: "remote_touch_drop",
+                        thread_id,
+                        hwnd: Some(stale_capture),
+                        msg: Some(event.message),
+                        wparam: None,
+                        lparam: None,
+                        screen_pos: Some(make_lparam(point.x, point.y)),
+                        source: None,
+                        result: Some(0),
+                        detail: Some("stale captured owner; orphan touch phase".to_owned()),
+                    });
+                    continue;
+                }
+            }
+            let target = match touch_targeting {
+                RemoteTouchTargeting::Explicit => hwnd,
                 RemoteTouchTargeting::DesktopHitTest => self
                     .gwe
                     .get_capture()
                     .or_else(|| self.gwe.window_from_point(point))
                     .or_else(|| {
-                        hwnd.filter(|hwnd| {
-                            self.gwe.is_window_visible(*hwnd)
-                                && self.gwe.is_window_enabled(*hwnd)
+                        hwnd.filter(|hint| {
+                            matches!(
+                                self.live_remote_window_target(*hint),
+                                Some((_, WindowDeliveryOwner::Birth { .. }))
+                            ) && self.gwe.is_window_visible(*hint)
+                                && self.gwe.is_window_enabled(*hint)
                                 && self
                                     .gwe
-                                    .get_window_rect(*hwnd)
+                                    .get_window_rect(*hint)
                                     .is_some_and(|rect| rect.contains_point(point))
                         })
                     }),
@@ -11047,10 +11086,10 @@ impl CeKernel {
                     source: None,
                     result: Some(0),
                     detail: Some(
-                        match touch_targeting {
-                            RemoteTouchTargeting::Explicit => "no target window",
-                            RemoteTouchTargeting::ThreadHitTest => "no thread hit-test target",
-                            RemoteTouchTargeting::DesktopHitTest => "no desktop hit-test target",
+                        if touch_targeting == RemoteTouchTargeting::Explicit && target.is_some() {
+                            "explicit target stale"
+                        } else {
+                            "no live target"
                         }
                         .to_owned(),
                     ),
@@ -11105,7 +11144,6 @@ impl CeKernel {
                 detail: Some(
                     match touch_targeting {
                         RemoteTouchTargeting::Explicit => "explicit-target",
-                        RemoteTouchTargeting::ThreadHitTest => "thread-hit-test",
                         RemoteTouchTargeting::DesktopHitTest => "desktop-hit-test",
                     }
                     .to_owned(),
@@ -11114,9 +11152,25 @@ impl CeKernel {
             posted += 1;
         }
 
-        let key_target = hwnd
-            .or_else(|| self.gwe.get_capture())
-            .or_else(|| self.gwe.get_active_window());
+        // A host wait hint and mouse capture have no keyboard authority.
+        // Resolve focus first, then the active window, against the current
+        // owner birth. The explicit API alone retains its supplied target.
+        let key_target = if touch_targeting == RemoteTouchTargeting::Explicit {
+            hwnd
+        } else {
+            let live_key_window = |candidate| {
+                self.live_remote_window_target(candidate)
+                    .is_some_and(|(_, owner)| owner != WindowDeliveryOwner::SystemDesktop)
+            };
+            self.gwe
+                .get_focus()
+                .filter(|candidate| live_key_window(*candidate))
+                .or_else(|| {
+                    self.gwe
+                        .get_active_window()
+                        .filter(|candidate| live_key_window(*candidate))
+                })
+        };
         for event in key_events {
             let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
             let Some(key_target) = key_target else {
@@ -11134,7 +11188,7 @@ impl CeKernel {
                     screen_pos: None,
                     source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
                     result: Some(0),
-                    detail: Some("no target window".to_owned()),
+                    detail: Some("no live target".to_owned()),
                 });
                 continue;
             };
@@ -11155,7 +11209,7 @@ impl CeKernel {
                     screen_pos: None,
                     source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
                     result: Some(0),
-                    detail: Some("no live target window owner".to_owned()),
+                    detail: Some("no live target".to_owned()),
                 });
                 continue;
             };
@@ -11219,25 +11273,9 @@ impl CeKernel {
         thread_id: u32,
         hwnd: Option<u32>,
     ) -> RemoteInputDrain {
-        // A supplied wait/filter HWND is not a hint to retarget. If it has
-        // died, consume/drop this input instead of falling through to a live
-        // capture, hit-test or active window with the same numeric TID.
-        if hwnd.is_some_and(|requested| self.live_remote_window_target(requested).is_none()) {
-            return self.drain_remote_input_to_target(
-                thread_id,
-                hwnd,
-                RemoteTouchTargeting::Explicit,
-            );
-        }
-        let targeting = if hwnd.is_some() {
-            RemoteTouchTargeting::ThreadHitTest
-        } else {
-            RemoteTouchTargeting::DesktopHitTest
-        };
-        let hwnd = hwnd
-            .or_else(|| self.gwe.get_capture())
-            .or_else(|| self.gwe.get_active_window());
-        self.drain_remote_input_to_target(thread_id, hwnd, targeting)
+        // The host's blocked-wait/modal HWND is only a bounded fallback for
+        // coordinate input; it is not a queue filter or routing authority.
+        self.drain_remote_input_to_target(thread_id, hwnd, RemoteTouchTargeting::DesktopHitTest)
     }
 
     pub fn drain_remote_input_to_active_window(&mut self) -> usize {
@@ -11245,30 +11283,9 @@ impl CeKernel {
     }
 
     fn drain_remote_input_to_active_window_detailed(&mut self) -> RemoteInputDrain {
-        let hwnd = self
-            .gwe
-            .get_capture()
-            .or_else(|| self.gwe.get_active_window())
-            .filter(|hwnd| self.gwe.is_window(*hwnd));
-        let Some(hwnd) = hwnd else {
-            return RemoteInputDrain {
-                posted: 0,
-                target_thread_ids: Vec::new(),
-                detail: "no active window".to_owned(),
-            };
-        };
-        let Some((thread_id, _process_id)) = self.gwe.window_thread_process_id(hwnd) else {
-            return RemoteInputDrain {
-                posted: 0,
-                target_thread_ids: Vec::new(),
-                detail: format!("no thread for active hwnd=0x{hwnd:08x}"),
-            };
-        };
-        self.drain_remote_input_to_target(
-            thread_id,
-            Some(hwnd),
-            RemoteTouchTargeting::DesktopHitTest,
-        )
+        // Drain even when no window is active: undeliverable input must not
+        // remain queued and replay into a window created later.
+        self.drain_remote_input_to_target(0, None, RemoteTouchTargeting::DesktopHitTest)
     }
 
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {
@@ -14618,128 +14635,9 @@ mod tests {
         Ok(())
     }
 
-    fn stale_requested_window_thread_touch_drops(capture_b: bool, destroy_a: bool) -> Result<()> {
-        use crate::ce::gwe::{QS_MOUSEBUTTON, QS_POSTMESSAGE};
-
-        let (mut kernel, handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
-        let thread_id = birth_b.thread_id();
-        if destroy_a {
-            assert!(kernel.destroy_window(hwnd_a));
-            assert!(!kernel.gwe.is_window(hwnd_a));
-        }
-        if capture_b {
-            assert_eq!(kernel.set_capture(hwnd_b), None);
-        } else {
-            assert_eq!(kernel.gwe.get_capture(), None);
-            assert_eq!(kernel.gwe.get_active_window(), Some(hwnd_b));
-            assert_eq!(
-                kernel
-                    .gwe
-                    .window_from_point_for_thread(thread_id, Point { x: 101, y: 103 }),
-                Some(hwnd_b),
-                "the live B fallback must be available to expose rerouting"
-            );
-        }
-        let wait_id = kernel.register_blocked_waiter(
-            thread_id,
-            handle_b,
-            vec![],
-            SchedulerBlockedWaitKind::GetMessage {
-                hwnd: None,
-                min_msg: 0,
-                max_msg: 0,
-            },
-            kernel.timers.tick_count(),
-            crate::ce::timer::INFINITE,
-        );
-        assert_ne!(wait_id, 0);
-        let status_flags = QS_MOUSEBUTTON | QS_POSTMESSAGE;
-        let status_before = kernel
-            .gwe
-            .peek_queue_status_for_birth(birth_b, status_flags);
-        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
-        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
-        let signals_before = kernel.scheduler_stats().message_input_signal_count;
-        let focus_before = kernel.gwe.get_focus();
-        let active_before = kernel.gwe.get_active_window();
-        let capture_before = kernel.gwe.get_capture();
-        let keyboard_before = kernel.gwe.get_keyboard_target(thread_id);
-        let mouse_pos_before = kernel.gwe.get_message_pos(thread_id);
-        let trace_before = kernel.recent_message_ops().len();
-
-        kernel.remote.enqueue_touch("down", 101, 103).unwrap();
-        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd_a));
-        let target_or_post_traces: Vec<_> = kernel.recent_message_ops()[trace_before..]
-            .iter()
-            .filter(|trace| {
-                trace.op == "remote_touch_target"
-                    || (trace.op == "post_message" && trace.msg == Some(WM_LBUTTONDOWN))
-            })
-            .cloned()
-            .collect();
-
-        assert_eq!(
-            drain.posted, 0,
-            "stale requested HWND must not reroute touch"
-        );
-        assert!(drain.target_thread_ids.is_empty());
-        assert_eq!(kernel.gwe.get_focus(), focus_before);
-        assert_eq!(kernel.gwe.get_active_window(), active_before);
-        assert_eq!(kernel.gwe.get_capture(), capture_before);
-        assert_eq!(kernel.gwe.get_keyboard_target(thread_id), keyboard_before);
-        assert_eq!(kernel.gwe.get_message_pos(thread_id), mouse_pos_before);
-        assert_eq!(
-            kernel
-                .gwe
-                .peek_queue_status_for_birth(birth_b, status_flags),
-            status_before
-        );
-        assert_eq!(
-            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
-            ready_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_wake_candidate_count,
-            wakes_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_signal_count,
-            signals_before
-        );
-        assert!(
-            target_or_post_traces.is_empty(),
-            "{target_or_post_traces:?}"
-        );
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_a),
-            WM_LBUTTONDOWN,
-            WM_LBUTTONDOWN,
-        ));
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_b),
-            WM_LBUTTONDOWN,
-            WM_LBUTTONDOWN,
-        ));
-        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
-        Ok(())
-    }
-
-    #[test]
-    fn stale_requested_window_touch_does_not_reroute_to_live_capture() -> Result<()> {
-        stale_requested_window_thread_touch_drops(true, false)
-    }
-
-    #[test]
-    fn stale_requested_window_touch_does_not_reroute_to_live_hit_test() -> Result<()> {
-        stale_requested_window_thread_touch_drops(false, false)
-    }
-
-    #[test]
-    fn destroyed_requested_window_touch_does_not_reroute_to_live_hit_test() -> Result<()> {
-        stale_requested_window_thread_touch_drops(false, true)
-    }
+    // Superseded a03–a05: a host wait HWND is only a fallback hint; it does
+    // not own a coordinate touch or suppress a live capture/hit-test target.
+    // Corrected cases are a15, a16, and a18; original red logs remain saved.
 
     #[test]
     fn live_capture_touch_uses_captured_window_birth_not_requested_thread() -> Result<()> {
@@ -14959,139 +14857,9 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn destroyed_requested_window_key_does_not_reroute_to_live_active() -> Result<()> {
-        use crate::ce::gwe::{QS_KEY, WM_KEYDOWN};
-
-        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
-        let thread_id = birth_b.thread_id();
-        assert!(kernel.destroy_window(hwnd_a));
-        assert!(!kernel.gwe.is_window(hwnd_a));
-        assert_eq!(kernel.gwe.get_active_window(), Some(hwnd_b));
-        let status_before = kernel.gwe.peek_queue_status_for_birth(birth_b, QS_KEY);
-        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
-        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
-        let signals_before = kernel.scheduler_stats().message_input_signal_count;
-        let trace_before = kernel.recent_message_ops().len();
-        kernel.remote.enqueue_key("down", 0x0d).unwrap();
-
-        // Some(hwnd_a) is the bounded stale wait/filter source; an active B
-        // window does not authorize retargeting this already-selected event.
-        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd_a));
-
-        assert_eq!(drain.posted, 0);
-        assert!(drain.target_thread_ids.is_empty());
-        assert_eq!(kernel.remote.key_event_count(), 0);
-        assert_eq!(
-            kernel.gwe.peek_queue_status_for_birth(birth_b, QS_KEY),
-            status_before
-        );
-        assert_eq!(
-            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
-            ready_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_wake_candidate_count,
-            wakes_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_signal_count,
-            signals_before
-        );
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_b),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-        ));
-        assert!(
-            !kernel.recent_message_ops()[trace_before..]
-                .iter()
-                .any(|trace| trace.op == "remote_key_target" && trace.hwnd == Some(hwnd_b))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn stale_capture_after_tid_reuse_does_not_publish_input_to_b() -> Result<()> {
-        use crate::ce::gwe::{QS_KEY, QS_MOUSEBUTTON, WM_KEYDOWN};
-
-        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
-        let thread_id = birth_b.thread_id();
-        assert_eq!(kernel.set_capture(hwnd_a), None);
-        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_a));
-        assert_eq!(kernel.gwe.get_active_window(), Some(hwnd_b));
-        let status_before = kernel
-            .gwe
-            .peek_queue_status_for_birth(birth_b, QS_MOUSEBUTTON | QS_KEY);
-        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
-        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
-        let signals_before = kernel.scheduler_stats().message_input_signal_count;
-        let focus_before = kernel.gwe.get_focus();
-        let active_before = kernel.gwe.get_active_window();
-        let trace_before = kernel.recent_message_ops().len();
-        kernel.remote.enqueue_touch("down", 31, 37).unwrap();
-        kernel.remote.enqueue_key("down", 0x0d).unwrap();
-
-        // This host route selected A's stale capture HWND, not B's live
-        // window. Numeric TID reuse cannot publish either event into B.
-        let drain = kernel.drain_remote_input_to_active_window_detailed();
-
-        assert_eq!(drain.posted, 0);
-        assert!(drain.target_thread_ids.is_empty());
-        assert_eq!(kernel.remote.touch_event_count(), 0);
-        assert_eq!(kernel.remote.key_event_count(), 0);
-        assert_eq!(kernel.gwe.get_focus(), focus_before);
-        assert_eq!(kernel.gwe.get_active_window(), active_before);
-        assert_eq!(
-            kernel
-                .gwe
-                .peek_queue_status_for_birth(birth_b, QS_MOUSEBUTTON | QS_KEY),
-            status_before
-        );
-        assert_eq!(
-            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
-            ready_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_wake_candidate_count,
-            wakes_before
-        );
-        assert_eq!(
-            kernel.scheduler_stats().message_input_signal_count,
-            signals_before
-        );
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_a),
-            WM_LBUTTONDOWN,
-            WM_LBUTTONDOWN,
-        ));
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_a),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-        ));
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_b),
-            WM_LBUTTONDOWN,
-            WM_LBUTTONDOWN,
-        ));
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_b),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-        ));
-        assert!(
-            !kernel.recent_message_ops()[trace_before..]
-                .iter()
-                .any(|trace| { matches!(trace.op, "remote_touch_target" | "remote_key_target") })
-        );
-        Ok(())
-    }
+    // Superseded a08/a09: a GetMessage HWND is a read filter, not a key
+    // destination, and stale mouse capture does not consume a fresh B DOWN.
+    // Corrected cases are a19–a22; original red logs remain saved.
 
     #[test]
     fn coordinate_only_remote_tap_reaches_live_b_after_a_exit() -> Result<()> {
@@ -15381,15 +15149,639 @@ mod tests {
         Ok(())
     }
 
+    fn captured_a_reused_tid_fixture(
+        down_before_a_exit: bool,
+    ) -> Result<(CeKernel, ThreadBirthKey, u32, u32)> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_a, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth_a = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_a)
+            .expect("A thread birth");
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_a,
+                "CAPTURE_BIRTH_A",
+                "A",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("A checked window");
+        kernel.remote.set_framebuffer_size(800, 480);
+        assert_eq!(kernel.set_capture(hwnd_a), None);
+        if down_before_a_exit {
+            kernel.remote.enqueue_touch("down", 51, 61).unwrap();
+            let down = kernel.drain_remote_input_to_active_window_detailed();
+            assert_eq!(down.posted, 1);
+            assert_eq!(down.target_thread_ids, vec![thread_id]);
+            assert!(kernel.gwe.has_message_filtered_for_birth(
+                birth_a,
+                Some(hwnd_a),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONDOWN,
+            ));
+        }
+        assert!(kernel.mark_guest_thread_exited_by_birth(birth_a, 0));
+        assert!(kernel.close_handle(handle_a)?);
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("B process birth");
+        let handle_b = kernel
+            .handles
+            .try_create_thread_in_birth(process_b, thread_id, 0x402000, 0, false)?;
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        assert_ne!(birth_a, birth_b);
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "CAPTURE_BIRTH_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("B checked window");
+        kernel.gwe.set_focus(Some(hwnd_b));
+        kernel.gwe.set_active_window(Some(hwnd_b));
+        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_a));
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), None);
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_b), Some(process_b));
+        Ok((kernel, birth_b, hwnd_a, hwnd_b))
+    }
+
     #[test]
-    fn remote_input_blocked_thread_target_overrides_stale_active_window() -> Result<()> {
+    fn stale_capture_new_down_move_up_retargets_live_b() -> Result<()> {
+        use crate::ce::gwe::WM_MOUSEMOVE;
+
+        let (mut kernel, birth_b, hwnd_a, hwnd_b) = captured_a_reused_tid_fixture(false)?;
+        let thread_id = birth_b.thread_id();
+        let point = Point { x: 71, y: 83 };
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_b));
+        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_a));
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+        kernel
+            .remote
+            .enqueue_touch("move", point.x, point.y)
+            .unwrap();
+        kernel.remote.enqueue_touch("up", point.x, point.y).unwrap();
+
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 3);
+        assert_eq!(drain.target_thread_ids, vec![thread_id]);
+        assert_eq!(
+            kernel.gwe.get_capture(),
+            None,
+            "fresh DOWN releases stale A capture"
+        );
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        for message in [WM_LBUTTONDOWN, WM_MOUSEMOVE, WM_LBUTTONUP] {
+            let posted = kernel
+                .gwe
+                .peek_message_filtered_for_birth(
+                    birth_b,
+                    Some(hwnd_b),
+                    message,
+                    message,
+                    PeekFlags::REMOVE,
+                )
+                .expect("B receives each phase of the new gesture");
+            assert_eq!(posted.hwnd, hwnd_b);
+            assert_eq!(posted.lparam, make_lparam(point.x, point.y));
+            assert_eq!(
+                posted.mouse_pos_at_post,
+                Some(make_lparam(point.x, point.y))
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stale_capture_orphan_up_drops_after_a_exit() -> Result<()> {
+        let (mut kernel, birth_b, hwnd_a, hwnd_b) = captured_a_reused_tid_fixture(true)?;
+        let thread_id = birth_b.thread_id();
+        let status_before = kernel
+            .gwe
+            .peek_queue_status_for_birth(birth_b, crate::ce::gwe::QS_MOUSEBUTTON);
+        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_a));
+        kernel.remote.enqueue_touch("up", 51, 61).unwrap();
+
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 0);
+        assert!(drain.target_thread_ids.is_empty());
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_b, crate::ce::gwe::QS_MOUSEBUTTON),
+            status_before
+        );
+        assert_eq!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            ready_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_wake_candidate_count,
+            wakes_before
+        );
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONUP,
+            WM_LBUTTONUP,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn stale_capture_key_uses_live_b_focus() -> Result<()> {
+        use crate::ce::gwe::WM_KEYDOWN;
+
+        let (mut kernel, birth_b, hwnd_a, hwnd_b) = captured_a_reused_tid_fixture(false)?;
+        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_a));
+        assert_eq!(kernel.gwe.get_focus(), Some(hwnd_b));
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 1);
+        assert_eq!(drain.target_thread_ids, vec![birth_b.thread_id()]);
+        assert_eq!(kernel.remote.key_event_count(), 0);
+        assert_eq!(
+            kernel.gwe.get_capture(),
+            Some(hwnd_a),
+            "key does not change mouse capture"
+        );
+        let key = kernel
+            .gwe
+            .peek_message_filtered_for_birth(
+                birth_b,
+                Some(hwnd_b),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("B focus receives key despite stale A mouse capture");
+        assert_eq!(key.wparam, 0x0d);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_focus_key_falls_back_to_live_b_active() -> Result<()> {
+        use crate::ce::gwe::WM_KEYDOWN;
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_a, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth_a = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_a)
+            .expect("A thread birth");
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_a,
+                "FOCUS_BIRTH_A",
+                "A",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("A checked window");
+        kernel.gwe.set_focus(Some(hwnd_a));
+        assert!(kernel.mark_guest_thread_exited_by_birth(birth_a, 0));
+        assert!(kernel.close_handle(handle_a)?);
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = kernel
+            .handles
+            .process_birth_key(launch_b.process_id)
+            .expect("B process birth");
+        let handle_b = kernel
+            .handles
+            .try_create_thread_in_birth(process_b, thread_id, 0x402000, 0, false)?;
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "ACTIVE_BIRTH_B",
+                "B",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("B checked window");
+        kernel.gwe.set_active_window(Some(hwnd_b));
+        assert_eq!(kernel.gwe.get_focus(), Some(hwnd_a));
+        assert_eq!(kernel.gwe.get_active_window(), Some(hwnd_b));
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 1);
+        assert_eq!(drain.target_thread_ids, vec![thread_id]);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn no_live_active_route_consumes_input_without_later_replay() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.get_active_window(), None);
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel.remote.enqueue_touch("down", 41, 43).unwrap();
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+        let trace_before = kernel.recent_message_ops().len();
+
+        let absent = kernel.drain_remote_input_to_active_window_detailed();
+        let no_target_drops = &kernel.recent_message_ops()[trace_before..];
+        for op in ["remote_touch_drop", "remote_key_drop"] {
+            assert!(
+                no_target_drops.iter().any(|record| {
+                    record.op == op
+                        && record
+                            .detail
+                            .as_deref()
+                            .is_some_and(|detail| detail.contains("no live target"))
+                }),
+                "missing explicit no-live-target {op} trace"
+            );
+        }
+        let retained = (
+            kernel.remote.touch_event_count(),
+            kernel.remote.key_event_count(),
+        );
+        let (handle_b, thread_id) = kernel.create_guest_thread(0x402000, 0, false);
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("new B thread birth");
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "LATER_ACTIVE_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("new B checked window");
+        kernel.gwe.set_focus(Some(hwnd_b));
+        kernel.gwe.set_active_window(Some(hwnd_b));
+        let replayed = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(absent.posted, 0);
+        assert_eq!(
+            replayed.posted, 0,
+            "no-target input retained {retained:?} and replayed"
+        );
+        assert_eq!(retained, (0, 0));
+        assert!(replayed.target_thread_ids.is_empty());
+        assert_eq!(thread_id, birth_b.thread_id());
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_live_host_hint_does_not_receive_touch() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_for_handle(handle)
+            .expect("hint thread birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth,
+                "HIDDEN_HINT",
+                "hidden",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("checked hidden hint");
+        let point = Point { x: 71, y: 83 };
+        assert!(!kernel.gwe.is_window_visible(hwnd));
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), None);
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd));
+
+        assert_eq!(drain.posted, 0);
+        assert!(drain.target_thread_ids.is_empty());
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth,
+            Some(hwnd),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn off_point_live_host_hint_does_not_receive_touch() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_for_handle(handle)
+            .expect("hint thread birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth,
+                "OFF_POINT_HINT",
+                "off point",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 40, 40),
+            )
+            .expect("checked visible hint");
+        let point = Point { x: 71, y: 83 };
+        assert!(kernel.gwe.is_window_visible(hwnd));
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), None);
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd));
+
+        assert_eq!(drain.posted, 0);
+        assert!(drain.target_thread_ids.is_empty());
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth,
+            Some(hwnd),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_modal_owner_does_not_steal_off_point_dialog_touch() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth = kernel
+            .handles
+            .thread_birth_key_for_handle(handle)
+            .expect("modal thread birth");
+        let owner = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth,
+                "MODAL_DISABLED_OWNER",
+                "owner",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("checked owner");
+        let dialog = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth,
+                "MODAL_OFF_POINT_DIALOG",
+                "dialog",
+                None,
+                Some(owner),
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(400, 300, 100, 100),
+            )
+            .expect("checked owned dialog");
+        let point = Point { x: 71, y: 83 };
+        assert_eq!(kernel.enable_window(owner, false), Some(true));
+        assert!(!kernel.gwe.is_window_enabled(owner));
+        assert!(kernel.gwe.is_window_visible(dialog));
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), None);
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(dialog));
+
+        assert_eq!(drain.posted, 0);
+        assert!(drain.target_thread_ids.is_empty());
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        for hwnd in [owner, dialog] {
+            assert!(!kernel.gwe.has_message_filtered_for_birth(
+                birth,
+                Some(hwnd),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONDOWN,
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stale_topmost_hit_test_falls_through_to_live_b_host_hint() -> Result<()> {
+        use crate::ce::gwe::MSGSRC_SOFTWARE_POST;
+
+        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        let point = Point { x: 211, y: 223 };
+        assert_eq!(kernel.gwe.get_capture(), None);
+        // Z-order is independent of A's expired thread birth.
+        assert!(kernel.gwe.set_window_pos(
+            hwnd_a, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE,
+        ));
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_a));
+        assert_eq!(kernel.recipient_birth_for_window(hwnd_a), None);
+        assert!(kernel.gwe.is_window_visible(hwnd_b));
+        assert!(kernel.gwe.is_window_enabled(hwnd_b));
+        assert!(
+            kernel
+                .gwe
+                .get_window_rect(hwnd_b)
+                .is_some_and(|rect| rect.contains_point(point))
+        );
+        kernel.remote.enqueue_touch("down", point.x, point.y).unwrap();
+        let trace_before = kernel.recent_message_ops().len();
+
+        // The topmost coordinate hit is stale A. Reject it, then try the
+        // independently valid B host wait/modal hint for this same point.
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd_b));
+
+        assert_eq!(drain.posted, 1);
+        assert_eq!(drain.target_thread_ids, vec![thread_id]);
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        let b_message = kernel
+            .gwe
+            .peek_message_filtered_for_birth(
+                birth_b,
+                Some(hwnd_b),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("live exact-Birth B hint receives the touch");
+        assert_eq!(b_message.hwnd, hwnd_b);
+        assert_eq!(b_message.mouse_pos_at_post, Some(make_lparam(point.x, point.y)));
+        assert_eq!(b_message.source, MSGSRC_SOFTWARE_POST);
+        let targets: Vec<_> = kernel.recent_message_ops()[trace_before..]
+            .iter()
+            .filter(|record| record.op == "remote_touch_target")
+            .collect();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].hwnd, Some(hwnd_b));
+        assert_eq!(targets[0].thread_id, thread_id);
+        Ok(())
+    }
+
+    #[test]
+    fn key_without_explicit_focus_or_active_does_not_use_top_level_fallback() -> Result<()> {
+        use crate::ce::gwe::{QS_KEY, WM_KEYDOWN};
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_b, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "UNFOCUSED_TOP_LEVEL_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 800, 480),
+            )
+            .expect("live checked B window");
+        kernel.gwe.set_focus(None);
+        kernel.gwe.set_active_window(None);
+        assert_eq!(kernel.gwe.get_focus(), None);
+        assert!(kernel.gwe.is_window(hwnd_b));
+        assert!(kernel.gwe.is_window_visible(hwnd_b));
+        let status_before = kernel.gwe.peek_queue_status_for_birth(birth_b, QS_KEY);
+        let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        let trace_before = kernel.recent_message_ops().len();
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+
+        // GWE may return this arbitrary top-level HWND as its convenience
+        // active fallback. A host key requires explicit live focus or active.
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 0);
+        assert!(drain.target_thread_ids.is_empty());
+        assert_eq!(kernel.remote.key_event_count(), 0);
+        assert_eq!(kernel.gwe.peek_queue_status_for_birth(birth_b, QS_KEY), status_before);
+        assert_eq!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            ready_before
+        );
+        assert_eq!(
+            kernel.scheduler_stats().message_input_wake_candidate_count,
+            wakes_before
+        );
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        assert!(kernel.recent_message_ops()[trace_before..].iter().any(|record| {
+            record.op == "remote_key_drop"
+                && record
+                    .detail
+                    .as_deref()
+                    .is_some_and(|detail| detail.contains("no live target"))
+        }));
+        assert!(!kernel.recent_message_ops()[trace_before..]
+            .iter()
+            .any(|record| record.op == "remote_key_target" && record.hwnd == Some(hwnd_b)));
+        Ok(())
+    }
+
+    #[test]
+    fn remote_input_blocked_visible_hit_test_overrides_hidden_active_window() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let active_thread_id = 1;
         let blocked_thread_id = 2;
         let active = kernel.create_window_ex_w(active_thread_id, "ACTIVE", "", None, 0, 0, 0);
-        let blocked = kernel.create_window_ex_w(blocked_thread_id, "BLOCKED", "", None, 0, 0, 0);
+        let blocked = kernel.create_window_ex_w_with_rect(
+            blocked_thread_id,
+            "BLOCKED",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
         assert_eq!(kernel.gwe.set_active_window(Some(active)), None);
+        // Supersedes the old hidden-hint oracle: the blocked HWND is only a
+        // fallback hint. This window earns delivery by visibility and point hit.
+        assert_eq!(
+            kernel.gwe.window_from_point(Point { x: 640, y: 440 }),
+            Some(blocked)
+        );
         while kernel.gwe.get_message(active_thread_id).is_some() {}
         while kernel.gwe.get_message(blocked_thread_id).is_some() {}
 
@@ -15426,7 +15818,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_key_input_posts_to_window_owner_thread() -> Result<()> {
+    fn remote_key_input_uses_focused_window_owner_thread() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let owner_thread_id = 1;
@@ -15434,13 +15826,18 @@ mod tests {
         let owned = kernel.create_window_ex_w(owner_thread_id, "OWNER", "", None, 0, 0, 0);
         let helper = kernel.create_window_ex_w(draining_thread_id, "HELPER", "", None, 0, 0, 0);
         assert!(kernel.gwe.is_window(helper));
+        kernel.gwe.set_focus(Some(owned));
+        kernel.gwe.set_active_window(Some(helper));
+        assert_eq!(kernel.gwe.get_focus(), Some(owned));
+        // Supersedes the old key-hint oracle: the key follows live focus,
+        // even when a different window is the host wait hint and active HWND.
         while kernel.gwe.get_message(owner_thread_id).is_some() {}
         while kernel.gwe.get_message(draining_thread_id).is_some() {}
 
         kernel.remote.enqueue_key("down", 0x0d).unwrap();
 
         assert_eq!(
-            kernel.drain_remote_input_to_thread_window(draining_thread_id, Some(owned)),
+            kernel.drain_remote_input_to_thread_window(draining_thread_id, Some(helper)),
             1
         );
 
