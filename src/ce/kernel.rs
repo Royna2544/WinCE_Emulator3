@@ -16012,6 +16012,133 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "expected red: W-B1c mixed touch/key admission order"]
+    fn remote_key_before_focus_changing_down_preserves_cross_type_enqueue_order() -> Result<()> {
+        use crate::ce::gwe::{
+            MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, WM_KEYDOWN,
+        };
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_a, thread_a) = kernel.create_guest_thread(0x401000, 0, false);
+        let (handle_b, thread_b) = kernel.create_guest_thread(0x402000, 0, false);
+        let birth_a = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_a)
+            .expect("A thread birth");
+        let birth_b = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_b)
+            .expect("B thread birth");
+        assert_ne!(birth_a, birth_b);
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_a,
+                "INPUT_ORDER_A",
+                "A",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 400, 480),
+            )
+            .expect("A Birth-owned window");
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_b,
+                "INPUT_ORDER_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(400, 0, 400, 480),
+            )
+            .expect("B Birth-owned window");
+        assert!(matches!(
+            kernel.gwe.window(hwnd_a).map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth { thread, .. }) if thread == birth_a
+        ));
+        assert!(matches!(
+            kernel.gwe.window(hwnd_b).map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth { thread, .. }) if thread == birth_b
+        ));
+
+        let point = Point { x: 450, y: 30 };
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_b));
+        let _ = kernel.set_focus(Some(hwnd_a));
+        assert_eq!(kernel.gwe.get_focus(), Some(hwnd_a));
+        kernel.remote.set_framebuffer_size(800, 480);
+        let trace_before = kernel.recent_message_ops().len();
+
+        kernel.remote.enqueue_key("down", 0x41).unwrap();
+        kernel.remote.enqueue_touch("down", point.x, point.y).unwrap();
+        assert_eq!(kernel.remote.key_event_count(), 1);
+        assert_eq!(kernel.remote.touch_event_count(), 1);
+
+        let drain = kernel.drain_remote_input_to_active_window_detailed();
+
+        assert_eq!(drain.posted, 2);
+        assert_eq!(kernel.remote.key_event_count(), 0);
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        let key = kernel
+            .gwe
+            .peek_message_filtered_for_birth(
+                birth_a,
+                Some(hwnd_a),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("key admitted before B DOWN must reach focused A Birth");
+        assert_eq!(key.hwnd, hwnd_a);
+        assert_eq!(key.wparam, 0x41);
+        assert_eq!(key.source, MSGSRC_HARDWARE_KEYBOARD);
+        let down = kernel
+            .gwe
+            .peek_message_filtered_for_birth(
+                birth_b,
+                Some(hwnd_b),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("later coordinate DOWN must reach B Birth");
+        assert_eq!(down.hwnd, hwnd_b);
+        assert_eq!(down.mouse_pos_at_post, Some(make_lparam(point.x, point.y)));
+        assert_eq!(down.source, MSGSRC_SOFTWARE_POST);
+        assert_eq!(kernel.gwe.get_focus(), Some(hwnd_b));
+        assert_eq!(drain.target_thread_ids, vec![thread_a, thread_b]);
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_a,
+            Some(hwnd_a),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        let targets: Vec<_> = kernel.recent_message_ops()[trace_before..]
+            .iter()
+            .filter(|record| matches!(record.op, "remote_key_target" | "remote_touch_target"))
+            .map(|record| (record.op, record.hwnd, record.thread_id))
+            .collect();
+        assert_eq!(
+            targets,
+            vec![
+                ("remote_key_target", Some(hwnd_a), thread_a),
+                ("remote_touch_target", Some(hwnd_b), thread_b),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn modal_button_dismisses_only_requested_dialog_and_never_popup() {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let thread_id = 77;
