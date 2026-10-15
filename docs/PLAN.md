@@ -257,12 +257,13 @@ close only their named gates, not Stage 2 or live acceptance.
   wait/modal HWNDs are fallback hints only, and keys use live focus/active
   ownership. Full exit capture retirement and implicit gesture ownership
   remain open. Independent-window/backing selection on verified process exit
-  and the no-birth pseudo-exit fence are source-green under PID reuse (focused
-  controls and no-default full suite **1,485/0/3**;
-  [receipt pending](../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
+  and the no-birth pseudo-exit fence are source-tested under PID reuse (focused
+  controls; release **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**
+  across 18 groups each;
+  [receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
   Full owner-filtered host teardown remains open because GWE recursive foreign
   parent/owner links and numeric sent-message sender cleanup lack birth proof;
-  no final release broad pass, live-app result or CE6 parity is established.
+  the broad passes do not establish live-app behavior or CE6 parity.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates

@@ -80,14 +80,16 @@ hotkeys, sent/paint/modal and other input producers, full GWES, and live iNavi
 acceptance remain open.
 Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
 
-### Bounded host-exit selection (independent windows; receipt pending)
+### Bounded host-exit selection (independent windows; source-tested)
 
 The bounded PID-reuse gate selects independent live windows and captured
 backing stores, including already-destroyed windows, by the verified exiting
 process birth and each window's frozen creation process birth rather than its
 numeric PID/TID. Its control requires a stale prior-birth A window and backing
-store to survive B's later exit after PID reuse
-([validation receipt pending](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
+store to survive B's later exit after PID reuse. The normal reused-PID and
+no-birth controls passed; the 18-group broad suites passed release
+**2,055/0/9 ignored** and no-default **1,485/0/3 ignored**
+([validation receipt](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
 This does not birth-filter `destroy_window`'s recursive parent/owner traversal
 or numeric sent-message process cleanup. Foreign-link recovery, full host
 teardown, exit capture retirement and live-app/CE6 acceptance remain open.

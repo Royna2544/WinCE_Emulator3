@@ -1806,6 +1806,26 @@ no-default **1,482/0/3 ignored**; Unicorn-only and desktop-without-trace
 checks, formatting and diff checks exited 0. No iNavi app, writable mount,
 remote LAN server or full Stage 3 acceptance is part of this gate.
 
+## Bounded host-exit PID-reuse source gate (2026-10-15, executed)
+
+The test-only
+[expected-red receipt](../../evidence/stage3-host-teardown-red/validation.receipt.md)
+preserves the failure in which B's exit after numeric PID reuse destroyed a
+stranded prior-birth A independent HWND. The bounded
+[production receipt](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+records the enabled normal control, the full numbered validation attempts and
+the final source patch. Verified host process exit now selects independent
+live windows and captured backing stores by immutable window creation process
+birth; current-process pseudo-exit without a canonical birth rejects before
+window cleanup, exit signaling or waiter wakes. After fixture correction to
+register synthetic process births and create exact-birth windows, the final
+18-group suites passed release **2,055/0/9 ignored** and no-default
+**1,485/0/3 ignored**. Earlier broad attempts failed on synthetic fixtures;
+they are preserved diagnostics, not final passes. This gate does not
+birth-filter recursive GWE foreign parent/owner traversal or numeric
+sent-message sender cleanup. There was no iNavi run, writable-mount backup or
+guest write, LAN debug session, full Stage 3 acceptance or CE6 parity claim.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
