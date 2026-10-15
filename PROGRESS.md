@@ -72,11 +72,17 @@ Only the verified birth retires after D-011 preflight; retired pins refuse
 writes. Attempt 01's full release AV remains unexplained despite the retry.
 
 Other direct host writes, restore/rebind and exact module-retirement fences,
-DLL migration, checkpoint relineage and production activation remain open. The
-intermittent WINDOWPOS stack failure remains under investigation
-([stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
-[three clean library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md));
-no production stack defect or fix has been established.
+DLL migration, checkpoint relineage and production activation remain open.
+The [H-W1 host-write authority design](docs/subsystems/guest-memory.md#h-w1-host-origin-native-write-authority-design-record-not-implemented)
+inventories current native writers; it is not implemented. The two earlier
+default-harness native AV incidents remain under one unresolved bug. A
+[matched six-run release library cohort](evidence/parallel-native-av-cohort-20261016/validation.receipt.md)
+at stable source observed **0/3** crashes with explicit serial harness threads
+and **0/3** with default harness threads; all six runs passed **1,133/0/6
+ignored**. This does not explain the prior full-suite crashes or establish
+production safety. The scoped native audit found a timer worker on nonzero
+Unicorn timeouts, so one Rust emulation thread alone is not a single-thread
+safety proof.
 
 ## 2026-10-15 Live-run preparation, historical reds and design refresh
 

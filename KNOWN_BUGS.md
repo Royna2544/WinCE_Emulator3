@@ -4,8 +4,8 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
-- **Intermittent host test-thread stack overflow on the direct visible
-  WINDOWPOS payload path:** the release-feature broad attempt 02 reported
+- **Intermittent `0xc0000005` under the parallel default harness:** the
+  release-feature native-failure broad attempt 02 reported
   `guest_thread_stack_tests::direct_visible_message_payload_windowpos_matches_raw_and_mips_reads`
   overflowing its test-thread stack, then exited `0xc0000005`
   ([raw log](evidence/stage2-writable-image-native-failure-20261016/broad-release-attempt02.raw.log)).
@@ -24,22 +24,32 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   at requested 512, 256 and 128 KiB test-thread stacks, then overflowed at
   64 KiB ([receipt](evidence/stage2-windowpos-stack-20261016/validation.receipt.md));
   this does not explain the earlier broad-run overflow, whose requested
-  test-thread stack size was not explicitly stamped in the raw log. Neither
-  its cause nor live risk is established. The test clones a
+  test-thread stack size was not explicitly stamped in the raw log. The test clones a
   full `CeKernel` for raw Get/Peek comparison and also exercises the shared
   native callout/payload path;
   which part consumes the stack is unknown. The existing release EXE's PE
   header reserves 1 MiB for its main stack, but source-level stack sizing
-  and live-run exposure have not been established. Do not mask the defect by
-  increasing the test stack; isolate its stack demand and remove any
-  unnecessary large by-value or recursive path before live acceptance.
-- **Unexplained full-release access violation during the synthetic
-  writable-image exit gate:** the first complete release attempt emitted one
-  `FAILED` line for a mixed-native-deadline test, then the harness exited
-  `0xc0000005` before a result block. That line does not establish the fault
-  site or cause. The named test passed in isolation and the next complete
-  release attempt passed, but neither explains or resolves the crash
+  and live-run exposure have not been established. Separately, the first
+  full-release writable-image exit-gate attempt emitted one `FAILED` line for
+  `mixed_native_deadline_visible_peer_yield_preserves_checked_jr_continuation`,
+  then the library harness exited `0xc0000005` before a result block
+  ([raw log](evidence/stage2-writable-image-exit-retire-20261016/broad-release-attempt01.raw.log)).
+  That line does not locate the fault. The mixed-deadline test passed alone
+  (**1/0/0**) and the next complete release attempt passed (**2,132/0/9**)
   ([receipt](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
+  Neither incident is explained by those passes; a shared cause and test-only
+  scope are unproved. Concurrent native instances under the test harness
+  remain one possibility, but unsafe host backing handed to `mem_map_ptr`,
+  pins or hooks could also expose a production memory-safety defect. A
+  [matched library cohort](evidence/parallel-native-av-cohort-20261016/validation.receipt.md)
+  observed 0/3 crashes with explicit serial harness threads and 0/3 with the
+  default harness on one source seal; neither arm reproduces or explains the
+  earlier full-suite failures. Native nonzero-timeout execution itself starts
+  a timer worker, so one Rust emulation thread does not establish native
+  single-thread safety. Audit those lifetimes and process-global state; do not
+  mask the WINDOWPOS stack demand by increasing the
+  test stack; isolate and remove unnecessary large by-value or recursive paths
+  before live acceptance.
 - **Native memory performance remains a live-run gate:** a synthetic
   8,192-page (32-MiB) fixed heap originally took 78,689.550 ms to map and
   another 75.753 s to close its fresh owner. Fixed private heap/stack pages

@@ -72,16 +72,18 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    treat the synthetic `Unclassified`/zero-charge path as that decision.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
-   Independently diagnose the intermittent WINDOWPOS test-thread overflow:
-   the requested 128-KiB isolated stack passed, 64 KiB overflowed, three new
-   default release `--lib` reruns passed, and one of three earlier full
-   default release attempts crashed. Locate the overflow phase and its
-   dependence on broader-suite concurrency/state before considering a fix;
-   do not treat a larger test stack as a proven repair
-   ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
-   Separately diagnose the exit-gate full release attempt's access violation;
-   its passing isolated test and full retry do not establish a cause or fix
-   ([receipt](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
+   Diagnose the intermittent native `0xc0000005` seen in two different
+   default-harness full-suite tests without assuming one cause or test-only
+   scope. The requested 128-KiB isolated WINDOWPOS stack passed and 64 KiB
+   overflowed; a later matched release-library cohort observed **0/3** crashes
+   with serial harness threads and **0/3** with default harness threads on one
+   stable source seal. Neither that non-reproduction nor the mixed-deadline
+   isolated pass/full retry is a fix. Audit process-global state, `mem_map_ptr`
+   pin lifetime and native timeout-worker interactions; do not inflate the
+   test stack as a substitute for root cause
+   ([cohort](evidence/parallel-native-av-cohort-20261016/validation.receipt.md),
+   [WINDOWPOS probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
+   [exit retry](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-16 and 2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
