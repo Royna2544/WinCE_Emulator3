@@ -199,6 +199,14 @@ slices do not complete the machine-owned Task/continuation/scheduler core,
 Stage 3, or live-app acceptance. See `PROGRESS.md` and `docs/PLAN.md` for
 current gates.
 
+The [A10 ordinary Send/GetMessage](evidence/scheduler-source-cut-a10/validation.receipt.md)
+and [A12 strict reciprocal Send](evidence/scheduler-source-cut-a12/validation.production.receipt.md)
+source/test gates pass their bounded shapes. A11b's next-lease import replay
+is historical for A12's one birth-owned, same-process plain S→T→S pair; timed,
+result-pointer, third-sender, deeper-pending and cross-process cases are not
+supported and can fail closed with terminal `Backend`. No A12 iNavi run or
+writable-mount backup was made. Do not treat these slices as full Stage 3.
+
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in
 `PROGRESS.md`, 2026-10-12 section):

@@ -290,8 +290,19 @@ close only their named gates, not Stage 2 or live acceptance.
   same-process sent-message delivery passed the resealed source gate
   ([receipt](../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
   Real-MIPS GetMessageW, PeekMessageW(PM_REMOVE) and GetMessageWNoWait paths
-  return one WNDPROC result to the blocked sender. Reciprocal cross-Send,
-  post-wake MsgWait, other waits, full Stage 3 and live behavior remain open.
+  return one WNDPROC result to the blocked sender. Reciprocal cross-Send was
+  outside this D-010 gate; post-wake MsgWait, other waits, full Stage 3 and
+  live behavior remain open.
+- A10 ordinary A→B Send/GetMessage and the subsequent strict A12 S→T→S
+  plain-Send handoff passed separate bounded source/test gates
+  ([A10](../evidence/scheduler-source-cut-a10/validation.receipt.md),
+  [A12](../evidence/scheduler-source-cut-a12/validation.production.receipt.md)).
+  A12's post-format release/no-default suites passed 2,047/0/9 ignored and
+  1,482/0/3 ignored. The unignored real-MIPS control executes both replies
+  once; a wrong-parent-birth control fails before guest entry. Third sender,
+  timed/result-pointer, deeper pending-callback and cross-process forms are
+  ineligible for this handoff and fail closed with terminal `Backend`. This
+  is not general Task/continuation authority or a live-app result.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

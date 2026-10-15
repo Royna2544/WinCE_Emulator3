@@ -1757,6 +1757,32 @@ not prove a live dead-driver integration path or grant a new one-run approval.
 There has been no second real backup, runner reservation, guest launch or
 guest write from this workflow.
 
+## A12 reciprocal Send source gate (2026-10-15, executed)
+
+The historical
+[A11b expected red](../../evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
+replayed T's inner `SendMessageW` on the next native lease, creating a third
+send and duplicate wait before S's callback. The bounded A12
+[source seal](../../evidence/scheduler-source-cut-a12/source-seal.md) and
+[production validation receipt](../../evidence/scheduler-source-cut-a12/validation.production.receipt.md)
+pin the formatted `unicorn.rs` SHA-256
+`4A08AFB9FA4AE0072E145DA1588673997D5BBD3D79700B661A2B79EB45E90E07`.
+Post-format focused native same-process 6/6, native-send-to 4/4 and
+saved-context 6/6 passed. The two 18-group broad suites passed release
+2,047/0/9 ignored and no-default 1,482/0/3 ignored; format and diff checks,
+alternate feature checks and a release build passed. The normal real-MIPS
+positive control runs S→T→S on exact birth/stack, returns inner `0x88` and
+outer `0x77` once, retires only their matching sends/waits and detects no
+replay. A wrong-parent-birth negative fails before guest entry with original
+sends/waits and parent intact. The separate
+[focused history](../../evidence/scheduler-source-cut-a12/validation.focused.receipt.md)
+records pre-format tests and a diagnostic fixture-assertion correction; it is
+not the final source seal. This is one same-process, birth-owned, plain
+two-send case. Third sender, timed/result-pointer, deeper pending-callback
+and cross-process variants remain unsupported and may fail closed with
+terminal `Backend`; no iNavi, writable mount, LAN server or Stage 3/live
+acceptance follows.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

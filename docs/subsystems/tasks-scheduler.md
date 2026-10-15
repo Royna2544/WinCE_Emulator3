@@ -6,7 +6,11 @@ gate: release-feature 2,045/0/9 ignored and no-default 1,482/0/3 ignored
 across 18 groups each, with unchanged pre/post source hashes. A09's four
 same-process failures are historical; A10's exact-wait/birth recovery guard
 passes the strict next-lease controls. The general Task/Frame and live-app
-boundaries above remain open.
+boundaries above remain open. The strict same-process plain S→T→S reciprocal
+shape has a separate bounded
+[A12 source/test gate](../../evidence/scheduler-source-cut-a12/validation.production.receipt.md)
+with post-format release 2,047/0/9 ignored and no-default 1,482/0/3 ignored;
+it is not general nested-send authority.
 
 ## Responsibility and scope
 
@@ -38,7 +42,7 @@ Only a positive finite `Sleep` now has an active task-owned frame. `TaskFrameRef
 
 The same-process guest `SendMessageW` path now leaves a send queued while its receiver owns a blocked finite-Sleep frame. The queued send retains that exact frame as immutable provenance even after Sleep retires. The sender uses the existing exact-birth scheduler/native SendMessage wait; it does **not** acquire a new canonical SendMessage frame, activate the sleeping receiver's WNDPROC, publish an early API result or use a cross-process rotation token. If S has no runnable work before T's deadline, the live host idles briefly and reports `NoAttempt` instead of replaying S's blocked import or advancing virtual time twice. Once Sleep returns, the pre-run active-callout selector still leaves this marked send queued; T's real `GetMessageW`, `PeekMessageW(PM_REMOVE)` or `GetMessageWNoWait` retrieval can enter WNDPROC and pass its result to S through the existing compatibility continuation. The two tested nonblocking retrieval paths then use a real finite `Sleep(1)` to yield before S resumes. Exact receiver-birth exit completes only sends marked for that birth with failure and leaves neighboring sends intact. A blocked `GetMessage` receiver retains its legitimate sent-callout bridge and is not classified as finite Sleep.
 
-The formerly expected-red native controls `native_finite_sleep_defers_active_sent_callout_for_same_receiver` and `native_same_process_send_defers_wndproc_during_receiver_sleep` are source-green in the D: checkout. The real-MIPS `native_same_process_send_delivers_after_receiver_sleep_timeout` control also passes: one T `Sleep` and one S `SendMessageW` create one GWE send ID and one S wait; a pre-deadline call makes no native attempt; T resumes at its Sleep return PC without an early callout; T's `GetMessageW` enters the real WNDPROC; and S resumes once with its `0x77` result and no retained send/wait. The separate `native_same_process_peek_remove_delivers_after_receiver_sleep_timeout` and `native_same_process_get_message_no_wait_delivers_after_receiver_sleep_timeout` controls pass the corresponding nonblocking retrieval paths: each enters the deferred WNDPROC once, executes a real finite `Sleep(1)` after retrieval, and gives S `0x77` at its native SendMessage return PC. All four `native_same_process_` controls passed together. Kernel controls separately check that the marker survives Sleep retirement until queue take and that receiver exit replies to only its marked send. Structural controls include exact-frame selection and generation/wait-ID exhaustion. The [resealed source gate](../../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md) passed full release 2,025/0/9 ignored, no-feature 1,472/0/3 ignored, alternate feature checks and a release build. It does not prove live-app behavior or full Stage 3. Reciprocal cross-Send after wake was untested at this D-010 seal; the later A11b test-only fixture exposed a next-lease import replay, not a live-app failure. Post-wake MsgWait processing, other wait families and nested GetMessage caller-return remain unproved; O-T1, O-T3 and O-K3 remain globally open.
+The formerly expected-red native controls `native_finite_sleep_defers_active_sent_callout_for_same_receiver` and `native_same_process_send_defers_wndproc_during_receiver_sleep` are source-green in the D: checkout. The real-MIPS `native_same_process_send_delivers_after_receiver_sleep_timeout` control also passes: one T `Sleep` and one S `SendMessageW` create one GWE send ID and one S wait; a pre-deadline call makes no native attempt; T resumes at its Sleep return PC without an early callout; T's `GetMessageW` enters the real WNDPROC; and S resumes once with its `0x77` result and no retained send/wait. The separate `native_same_process_peek_remove_delivers_after_receiver_sleep_timeout` and `native_same_process_get_message_no_wait_delivers_after_receiver_sleep_timeout` controls pass the corresponding nonblocking retrieval paths: each enters the deferred WNDPROC once, executes a real finite `Sleep(1)` after retrieval, and gives S `0x77` at its native SendMessage return PC. All four `native_same_process_` controls passed together. Kernel controls separately check that the marker survives Sleep retirement until queue take and that receiver exit replies to only its marked send. Structural controls include exact-frame selection and generation/wait-ID exhaustion. The [resealed source gate](../../evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md) passed full release 2,025/0/9 ignored, no-feature 1,472/0/3 ignored, alternate feature checks and a release build. It does not prove live-app behavior or full Stage 3. Reciprocal cross-Send after wake was untested at this D-010 seal; A11b later exposed a next-lease import replay, and the bounded A12 source/test gate repaired only its strict two-send shape. Neither is a live-app result. Post-wake MsgWait processing, other wait families and nested GetMessage caller-return remain unproved; O-T1, O-T3 and O-K3 remain globally open.
 
 Two native KData failure controls cover suspended-peer activation after finite-Sleep capture/publication, once for a running worker and once for boot main. With KData unmapped, activation stops with typed `Backend` failure, cancels only the newly published frame and wait, preserves a sibling opaque wait, and leaves the original PC/RA/V0 intact; it does not invent a Sleep return. A separate stale-window control rejects an HWND still owned by exited birth A after numeric TID reuse by B: raw and queued Kernel sends do not borrow B's Sleep frame, while native `SendMessageW` and `SendMessageTimeout` stop before WNDPROC, send queue or register changes. B's live HWND remains sendable. These are focused failure and ownership gates, not coverage of every native activation or message route.
 
@@ -112,7 +116,7 @@ The first source cut connects `try_block_sleep`, `CeKernel` publication/removal,
 
 The two formerly expected-red controls are source-green: one exercises the active sent-callout candidate while T has a real-MIPS finite Sleep; the other runs real-MIPS T `Sleep` followed by same-process S `SendMessageW` and proves T's WNDPROC is not entered early. Three further real-MIPS controls follow that **same** T/S scenario through the pre-deadline `NoAttempt`, T's timed Sleep return, T's `GetMessageW`-, `PeekMessageW(PM_REMOVE)`- or `GetMessageWNoWait`-initiated WNDPROC, and S's single `0x77` API return. The two nonblocking cases use a real finite `Sleep(1)` to yield S after retrieval. They establish eventual delivery for these paths, not a general continuation migration. A blocked `GetMessage` receiver is different: its legitimate sent-callout path may enter WNDPROC, remove the GetMessage wait and retain the parent in `ResumeImportAfterWndProc`. The separate real-MIPS `GetMessage` → sent WNDPROC → finite `Sleep` → WNDPROC return → parent import continuation control remains to be built, with exact birth, SP/RA/S0/HI/LO/FPU and one-return assertions. The continuation may re-enter GetMessage and reblock, so a real message or quit is needed before asserting a caller return. Local CE6 positive `NKSleep` blocks one thread; two concurrent finite Sleeps on that same CE thread are not a valid app-path proof.
 
-The pre-cut a04 inventory found numeric-TID wait removal, scheduler selection without active-frame identity, and native wait/pin retirement before register restoration. The finite-Sleep path now requires exact frame identity, claims completion once, uses checked capture/restore, and retires the exact frame and wait only after its result/context boundary. Its deferred-send marker persists after that retirement so pre-run callout selection cannot bypass real `GetMessageW`, `PeekMessageW(PM_REMOVE)` or `GetMessageWNoWait` retrieval. Exact-birth receiver exit retires only marked sends for that birth and wakes their senders with a failure result. The focused KData activation failure and stale birth-owned HWND controls test exact cancellation and rejection before native side effects. The broader compatibility wait families still need their own checked transition and failure-path coverage; this cut must not be generalized to them by assumption. Keep the existing parked-Sleep birth gates and add or retain wrong-generation, reused-TID birth, alias-close, cancellation/exit and failed capture/restore negatives. Reciprocal cross-Send and post-wake MsgWait delivery remain open; the finite-Sleep cut's broad suites and source seal are recorded in the receipt above.
+The pre-cut a04 inventory found numeric-TID wait removal, scheduler selection without active-frame identity, and native wait/pin retirement before register restoration. The finite-Sleep path now requires exact frame identity, claims completion once, uses checked capture/restore, and retires the exact frame and wait only after its result/context boundary. Its deferred-send marker persists after that retirement so pre-run callout selection cannot bypass real `GetMessageW`, `PeekMessageW(PM_REMOVE)` or `GetMessageWNoWait` retrieval. Exact-birth receiver exit retires only marked sends for that birth and wakes their senders with a failure result. The focused KData activation failure and stale birth-owned HWND controls test exact cancellation and rejection before native side effects. The broader compatibility wait families still need their own checked transition and failure-path coverage; this cut must not be generalized to them by assumption. Keep the existing parked-Sleep birth gates and add or retain wrong-generation, reused-TID birth, alias-close, cancellation/exit and failed capture/restore negatives. Reciprocal cross-Send was outside this finite-Sleep cut; A12 later source-gated only its strict two-send shape, while post-wake MsgWait remains open. The finite-Sleep cut's broad suites and source seal are recorded in the receipt above.
 
 #### Connected A→B bounded gate, then separate cross-Send boundaries
 
@@ -252,10 +256,13 @@ acceptance. Cross-process parked-sender restore, legacy numeric-only HWNDs,
 post-wake MsgWait and overloaded `SMF_TIMEOUT` last-error semantics remain
 separate from this cut.
 
-The next distinct gate has a test-only
-[A11b reciprocal expected red](../../evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md).
+The next distinct gate began with the test-only
+[A11b reciprocal expected red](../../evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
+and now has a bounded
+[A12 source/test receipt](../../evidence/scheduler-source-cut-a12/validation.production.receipt.md).
 The preliminary A11 same-call WNDPROC timing assertion was invalid; A11b
-allows T's inner Send trap to stop safely before checking the next lease.
+correctly allowed T's inner Send trap to stop safely before checking the next
+lease.
 
 Under A2/A3/A5, this fixture first captures S and T's exact
 `ThreadBirthKey`s, distinct native stacks, and the original S→T send/wait IDs.
@@ -269,14 +276,26 @@ WNDPROC to complete outer send ID 1; S's original API returns exactly once.
 There is no second Get/Peek retrieval. Record both directions' send/wait IDs,
 birth and frame provenance, PC/RA/SP and one-return counts at each step.
 An absent native frame or stale sender/receiver birth must fail closed before
-borrowing another thread's context or consuming the other send. In A11b, the
-first lease leaves exact send IDs 1/2 and scheduler/native waits 2/3 intact.
-The next bounded lease replays T's inner Send at the same trap, producing send
-ID 3 and duplicate native wait 4 before S's WNDPROC/SP assertion. This is a
-confirmed source-control no-replay failure, not a live-app deadlock, completed
-return path or Stage 3 gate. No production repair or broad suite has followed
-this test-only fixture; unignore it only after the exact nested return and
-one-time retirement assertions pass on a freshly sealed source.
+borrowing another thread's context or consuming the other send. A11b's first
+lease left exact send IDs 1/2 and scheduler/native waits 2/3 intact; its next
+bounded lease replayed T's inner Send at the same trap, creating send ID 3 and
+duplicate wait 4. That remains historical source-red evidence, not a live-app
+deadlock. A12's blank-lease transfer now restores S's captured outer context
+before taking only inner ID 2. A birth/frame/parent preflight and exact
+return token keep both waits and T's GetMessage parent intact. The unignored
+real-MIPS positive control executes S's inner callback on S's stack, returns
+`0x88` once to T, then T returns `0x77` once to S; both waits and GWE records
+retire, S has the exact import return PC/RA and preserved SP/S0/HI/LO/FPR2/FCSR,
+and a further slice creates no
+third send. The paired wrong-parent-birth control requires a typed pre-entry
+`Backend` with both original sends/waits and parent intact, no child token or
+guest start. The formatted-source 18-group release/no-default suites passed
+2,047/0/9 ignored and 1,482/0/3 ignored. This only covers one birth-owned,
+same-process plain two-send pair. A third sender, timed/result-pointer Send,
+second pending return/deeper nesting or cross-process pair makes the strict
+handoff ineligible and can fail closed with terminal `Backend`; these are
+live-run risks, not import replays or accepted CE behavior. Full Stage 3 and
+live iNavi remain open.
 
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval

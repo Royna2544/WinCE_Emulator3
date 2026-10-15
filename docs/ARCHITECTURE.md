@@ -71,10 +71,18 @@ each, with unchanged pre/post source hashes. A09's four same-process failures
 are historical: A10 verifies the exact GetMessage/native wait and saved/live
 birth before recovery, then A's next-lease continuation. Only the runnable-
 receiver fixture checks a later no-replay slice; the three finite-Sleep
-fixtures stop at A's continuation. The same-birth orphaned GetMessage payload
-with a missing scheduler wait, reciprocal/cross-process sends, legacy numeric-
-only HWND ownership, post-wake MsgWait, `SMF_TIMEOUT` last-error semantics,
-completed Stage 3 and live-iNavi behavior remain open.
+fixtures stop at A's continuation. The follow-on strict same-process
+S→T→S plain-Send shape has a bounded
+[A12 source/test gate](../evidence/scheduler-source-cut-a12/validation.production.receipt.md):
+formatted-source release 2,047/0/9 ignored and no-default 1,482/0/3 ignored.
+The historical A11b import replay is repaired for that exact next-lease
+handoff and full inner/outer return, including a wrong-parent-birth refusal.
+It is not a general nested-send or machine-owned Task/Frame migration. The
+same-birth orphaned GetMessage payload with a missing scheduler wait, third
+sender/timed/result-pointer/deeper/cross-process reciprocal forms, legacy
+numeric-only HWND ownership, post-wake MsgWait, `SMF_TIMEOUT` last-error
+semantics, completed Stage 3 and live-iNavi behavior remain open. Ineligible
+blocked reciprocal sends fail closed with terminal `Backend`, a live-run risk.
 
 ## A1. Machine authority
 
