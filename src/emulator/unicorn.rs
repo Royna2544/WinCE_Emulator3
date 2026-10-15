@@ -17512,6 +17512,18 @@ fn overlaps_fixed_system_slab(mapped: &KernelMemoryMappings, base: u32, len: u32
 }
 
 #[cfg(feature = "unicorn")]
+fn overlaps_native_writable_image_run(mapped: &KernelMemoryMappings, base: u32, len: u32) -> bool {
+    let start = u64::from(base);
+    let end = start + u64::from(len);
+    len != 0
+        && mapped.writable_image_runs.values().any(|run| {
+            let run_start = u64::from(run.identity.run_base());
+            let run_end = run_start + u64::from(run.len);
+            start < run_end && run_start < end
+        })
+}
+
+#[cfg(feature = "unicorn")]
 fn expected_sealed_image_runs(
     blobs: &[MappedBlob],
     memory: &MemoryMap,
@@ -18646,9 +18658,35 @@ fn map_kernel_memory_allocations_for_owner<D>(
             "private slab mapping requires a captured process birth".to_owned(),
         ));
     }
+    // A legacy allocation's published extent, not its originally requested
+    // size, is the span the generation mapper will seed. Check every visible
+    // allocation before stale reclaim or any map-ledger mutation. The VM
+    // predicate also includes retired image runs whose native pin survives.
+    let allocations: Vec<_> = match owner {
+        Some(owner) => kernel
+            .memory
+            .virtual_allocations_visible_to(owner)
+            .collect(),
+        None => kernel.memory.virtual_allocations().collect(),
+    };
+    for allocation in allocations
+        .iter()
+        .copied()
+        .filter(|allocation| allocation.backing == VirtualAllocationBacking::LegacySeed)
+    {
+        if kernel
+            .memory
+            .overlaps_writable_image_guest_range(allocation.base, allocation.size)
+            || overlaps_native_writable_image_run(mapped, allocation.base, allocation.size)
+        {
+            return Err(Error::Backend(format!(
+                "virtual allocation 0x{:08x}+0x{:x} overlaps writable image run",
+                allocation.base, allocation.size
+            )));
+        }
+    }
     // All owner-qualified heap pages are canonical fixed private slabs. The
     // old copied spillover frontier must never run after heap metadata changes.
-    mapped.heap_generation = kernel.memory.heap_generation();
 
     if mapped.virtual_generation != kernel.memory.virtual_generation() {
         reclaim_stale_virtual_memory_pages(uc, kernel, mapped, owner)?;
@@ -18665,13 +18703,6 @@ fn map_kernel_memory_allocations_for_owner<D>(
                 active_guards,
             )?;
         }
-        let allocations: Vec<_> = match owner {
-            Some(owner) => kernel
-                .memory
-                .virtual_allocations_visible_to(owner)
-                .collect(),
-            None => kernel.memory.virtual_allocations().collect(),
-        };
         for allocation in allocations {
             if allocation.backing != VirtualAllocationBacking::LegacySeed {
                 continue;
@@ -18719,6 +18750,8 @@ fn map_kernel_memory_allocations_for_owner<D>(
         mapped.virtual_generation = kernel.memory.virtual_generation();
     }
 
+    mapped.heap_generation = kernel.memory.heap_generation();
+
     Ok(())
 }
 
@@ -18730,12 +18763,26 @@ fn reclaim_stale_virtual_memory_pages<D>(
     owner: Option<crate::ce::object::ProcessBirthKey>,
 ) -> Result<()> {
     let live_pages = live_virtual_memory_pages(kernel, owner)?;
-    let stale_pages = mapped
+    let mut stale_pages = mapped
         .virtual_pages
         .iter()
         .copied()
         .filter(|page| !live_pages.contains(page))
         .collect::<Vec<_>>();
+    stale_pages.sort_unstable();
+    // A stale VA-only virtual-page record may point at an adopted image after
+    // module/allocator churn. Refuse the entire reclaim before the first
+    // unmap, including when VM retirement left only a native pin/ledger.
+    if let Some(page) = stale_pages.iter().copied().find(|page| {
+        kernel
+            .memory
+            .overlaps_writable_image_guest_range(*page, 0x1000)
+            || overlaps_native_writable_image_run(mapped, *page, 0x1000)
+    }) {
+        return Err(Error::Backend(format!(
+            "stale virtual page 0x{page:08x} overlaps writable image run"
+        )));
+    }
     for page in stale_pages {
         uc.mem_unmap(u64::from(page), 0x1000).map_err(|err| {
             Error::Backend(format!("unmap stale virtual page 0x{page:08x}: {err:?}"))
@@ -18824,6 +18871,26 @@ fn repair_missing_virtual_page_for_fault<D>(
     };
     let page_base = address & !0xfff;
     let page_end = u64::from(page_base) + 0x1000;
+    // Legacy native pages are VA-only; even a foreign or retired pinned image
+    // forbids copying them at this address. Stable private/shared pages are
+    // birth-owned, so only an image of the same birth conflicts in VM. A run
+    // already mapped into this particular native owner conflicts regardless.
+    let image_overlap = match allocation.backing {
+        VirtualAllocationBacking::LegacySeed => kernel
+            .memory
+            .overlaps_writable_image_guest_range(page_base, 0x1000),
+        VirtualAllocationBacking::StablePrivateSlab
+        | VirtualAllocationBacking::StableSharedViewSlab => owner.is_some_and(|owner| {
+            kernel
+                .memory
+                .overlaps_writable_image_guest_range_for_owner(owner, page_base, 0x1000)
+        }),
+    };
+    if image_overlap || overlaps_native_writable_image_run(mapped, page_base, 0x1000) {
+        return Err(Error::Backend(format!(
+            "virtual allocation fault repair range 0x{page_base:08x}..0x{page_end:08x} overlaps writable image run"
+        )));
+    }
     if mapped.sealed_image_runs.values().any(|run| {
         let run_begin = u64::from(run.base);
         let run_end = run_begin + u64::from(run.len);
@@ -19926,6 +19993,11 @@ fn map_guest_range<D>(
         .and_then(|end| end.checked_add(0xfff))
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
+    if overlaps_native_writable_image_run(mapped, first_page, page_end - first_page) {
+        return Err(Error::Backend(format!(
+            "{label} range 0x{first_page:08x}..0x{page_end:08x} overlaps writable image run"
+        )));
+    }
     if mapped.sealed_image_runs.values().any(|run| {
         let run_end = u64::from(run.base) + u64::from(run.len);
         u64::from(first_page) < run_end && u64::from(run.base) < u64::from(page_end)
@@ -76950,6 +77022,315 @@ mod unicorn_tests {
         drop(uc); // Native owner must die before its raw-pointer pin.
         drop(mapped);
         drop(native_pins);
+        Ok(())
+    }
+
+    fn forge_native_writable_image_page<D>(
+        uc: &mut Unicorn<'_, D>,
+        mapped: &mut super::KernelMemoryMappings,
+        owner: crate::ce::object::ProcessBirthKey,
+        base: u32,
+        bytes: [u8; 4],
+    ) {
+        // Deliberately inconsistent ledger: VM publication now rejects this
+        // overlap, but a stale native owner must still refuse it before FFI.
+        let identity = crate::ce::memory::WritableImageRunIdentity::new(owner, base, 1, base)
+            .expect("aligned synthetic image identity");
+        uc.mem_map(u64::from(base), 0x1000, Prot::ALL)
+            .expect("native sentinel page");
+        uc.mem_write(u64::from(base), &bytes)
+            .expect("native sentinel bytes");
+        mapped.writable_image_runs.insert(
+            identity,
+            super::NativeWritableImageRunRecord {
+                identity,
+                len: 0x1000,
+                host_address: 0,
+                perms: Prot::ALL.0 as u32,
+            },
+        );
+        mapped.ranges.push((base, 0x1000));
+    }
+
+    #[test]
+    fn legacy_vm_seed_fault_and_map_refuse_stale_native_writable_image_without_mutation()
+    -> crate::Result<()> {
+        const BASE: u32 = 0x6300_0000;
+        const IMAGE_BYTES: [u8; 4] = [0x91, 0x92, 0x93, 0x94];
+        let mut kernel = phase1_kernel("stale-native-image-vm.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        // The request starts after the image, but LegacySeed publishes its
+        // full 64-KiB aligned extent starting at BASE.
+        let legacy_base = kernel
+            .memory
+            .virtual_alloc(
+                owner,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                BASE + 0x1000,
+                0x1000,
+                0x3000,
+                0x04,
+            )
+            .expect("preexisting legacy reservation");
+        assert_eq!(legacy_base, BASE);
+        assert_eq!(
+            kernel.memory.virtual_allocation(owner, BASE).unwrap().size,
+            0x1_0000
+        );
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, legacy_base, vec![0x5a; 0x1_0000],)
+        );
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        forge_native_writable_image_page(&mut uc, &mut mapped, owner, BASE, IMAGE_BYTES);
+        mapped.virtual_pages.insert(BASE);
+        let original_ranges = mapped.ranges.clone();
+        let original_virtual_pages = mapped.virtual_pages.clone();
+        let original_heap_generation = mapped.heap_generation;
+        let original_virtual_generation = mapped.virtual_generation;
+        let vm_generation = kernel.memory.virtual_generation();
+        let native_pins = super::NativeMappingPins::default();
+        let active_guards = RefCell::new(BTreeMap::new());
+        let mut blobs = Vec::new();
+
+        let err = super::map_kernel_memory_allocations_for_owner(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            &mut blobs,
+            Some(owner),
+            Some(&native_pins),
+            Some(&active_guards),
+        )
+        .expect_err("published legacy extent must be preflighted before reclaim and seed");
+        assert!(format!("{err}").contains("overlaps writable image run"));
+        let err = super::repair_missing_virtual_page_for_fault(
+            &mut uc,
+            &mut kernel,
+            &mut mapped,
+            BASE,
+            Some(owner),
+            &native_pins,
+            &active_guards,
+        )
+        .expect_err("fault repair must refuse before removing its mapped-page record");
+        assert!(format!("{err}").contains("overlaps writable image run"));
+        let err = super::map_guest_range(
+            &mut uc,
+            &mut mapped,
+            BASE - 0x1000,
+            0x2000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "test legacy range",
+            true,
+        )
+        .expect_err("low-level mapper must refuse a partial image overlap");
+        assert!(format!("{err}").contains("overlaps writable image run"));
+        assert!(uc.mem_read(u64::from(BASE - 0x1000), &mut [0; 4]).is_err());
+        assert_eq!(uc.mem_read_as_vec(u64::from(BASE), 4).unwrap(), IMAGE_BYTES);
+        assert_eq!(mapped.ranges, original_ranges);
+        assert_eq!(mapped.virtual_pages, original_virtual_pages);
+        assert_eq!(mapped.heap_generation, original_heap_generation);
+        assert_eq!(mapped.virtual_generation, original_virtual_generation);
+        assert_eq!(kernel.memory.virtual_generation(), vm_generation);
+        assert_eq!(
+            kernel
+                .memory
+                .virtual_allocation(owner, BASE)
+                .unwrap()
+                .initial_bytes[0],
+            0x5a
+        );
+
+        // The mapper's half-open interval leaves the first following page
+        // available; refusal above did not poison a nonoverlapping VA.
+        assert_eq!(
+            super::map_guest_range(
+                &mut uc,
+                &mut mapped,
+                BASE + 0x1000,
+                0x1000,
+                MemoryPerms::READ | MemoryPerms::WRITE,
+                "adjacent legacy page",
+                true,
+            )?,
+            vec![BASE + 0x1000]
+        );
+        uc.mem_write(u64::from(BASE + 0x1000), &[1, 2, 3, 4])
+            .unwrap();
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(BASE + 0x1000), 4).unwrap(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(uc.mem_read_as_vec(u64::from(BASE), 4).unwrap(), IMAGE_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_virtual_page_reclaim_refuses_native_writable_image_before_any_unmap()
+    -> crate::Result<()> {
+        const BASE: u32 = 0x6300_0000;
+        let kernel = phase1_kernel("stale-native-image-reclaim.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        forge_native_writable_image_page(&mut uc, &mut mapped, owner, BASE, [5, 6, 7, 8]);
+        uc.mem_map(u64::from(BASE - 0x1000), 0x1000, Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(BASE - 0x1000), &[1, 2, 3, 4])
+            .unwrap();
+        mapped.ranges.push((BASE - 0x1000, 0x1000));
+        mapped.virtual_pages.extend([BASE, BASE - 0x1000]);
+        let original_ranges = mapped.ranges.clone();
+        let original_virtual_pages = mapped.virtual_pages.clone();
+
+        let err =
+            super::reclaim_stale_virtual_memory_pages(&mut uc, &kernel, &mut mapped, Some(owner))
+                .expect_err("stale virtual-page entry must not unmap a native image");
+        assert!(format!("{err}").contains("stale virtual page"));
+        assert!(format!("{err}").contains("overlaps writable image run"));
+        assert_eq!(mapped.ranges, original_ranges);
+        assert_eq!(mapped.virtual_pages, original_virtual_pages);
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(BASE - 0x1000), 4).unwrap(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(BASE), 4).unwrap(),
+            [5, 6, 7, 8]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_vm_generation_seeds_at_writable_image_end_without_overlap() -> crate::Result<()> {
+        const IMAGE: u32 = 0x6300_f000;
+        const NEXT: u32 = IMAGE + 0x1000;
+        let mut kernel = phase1_kernel("adjacent-native-image-vm.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let base = kernel
+            .memory
+            .virtual_alloc(
+                owner,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                NEXT,
+                0x1000,
+                0x3000,
+                0x04,
+            )
+            .expect("adjacent legacy reservation");
+        assert_eq!(base, NEXT);
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(owner, NEXT, vec![0x3a; 0x1000])
+        );
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        forge_native_writable_image_page(&mut uc, &mut mapped, owner, IMAGE, [9, 8, 7, 6]);
+        let native_pins = super::NativeMappingPins::default();
+        let active_guards = RefCell::new(BTreeMap::new());
+        let mut blobs = Vec::new();
+
+        super::map_kernel_memory_allocations_for_owner(
+            &mut uc,
+            &kernel,
+            &mut mapped,
+            &mut blobs,
+            Some(owner),
+            Some(&native_pins),
+            Some(&active_guards),
+        )?;
+        assert!(mapped.virtual_pages.contains(&NEXT));
+        assert_eq!(uc.mem_read_as_vec(u64::from(NEXT), 4).unwrap(), [0x3a; 4]);
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(IMAGE), 4).unwrap(),
+            [9, 8, 7, 6]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn foreign_birth_private_fault_can_alias_writable_image_va_in_its_own_native_owner()
+    -> crate::Result<()> {
+        const BASE: u32 = 0x6300_0000;
+        let mut kernel = phase1_kernel("foreign-private-image-alias.exe")?;
+        let image_owner = kernel.current_process_birth_key().expect("boot birth");
+        let image_identity =
+            crate::ce::memory::WritableImageRunIdentity::new(image_owner, BASE, 1, BASE)
+                .expect("aligned image run");
+        let image_pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(
+                kernel
+                    .memory
+                    .prepare_writable_image_run(image_identity, &vec![0x5a; 0x1000])
+                    .expect("prepare image run"),
+            )
+            .expect("publish image run");
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\foreign-child.exe".to_owned()), None);
+        let private_owner = kernel
+            .handles
+            .process_birth_key(launch.process_id)
+            .expect("child process birth");
+        let prepared = kernel
+            .memory
+            .prepare_private_vm(
+                private_owner,
+                crate::ce::memory::VirtualAllocationSource::Private,
+                BASE,
+                0x1000,
+                crate::ce::memory::MEM_RESERVE | crate::ce::memory::MEM_COMMIT,
+                0x04,
+            )
+            .expect("foreign-birth private page may reserve this numeric VA");
+        assert_eq!(prepared.result_ptr(), BASE);
+        assert_eq!(
+            kernel.memory.commit_prepared_private_vm(prepared),
+            Some(BASE)
+        );
+        let private_pin = kernel
+            .memory
+            .private_page_pin(private_owner, BASE)
+            .expect("foreign-birth page");
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut mapped = super::KernelMemoryMappings::new(&[]);
+        let native_pins = super::NativeMappingPins::default();
+        let active_guards = RefCell::new(BTreeMap::new());
+
+        assert!(super::repair_missing_virtual_page_for_fault(
+            &mut uc,
+            &mut kernel,
+            &mut mapped,
+            BASE,
+            Some(private_owner),
+            &native_pins,
+            &active_guards,
+        )?);
+        assert!(mapped.private_pages.contains_key(&BASE));
+        uc.mem_write(u64::from(BASE), &[1, 2, 3, 4]).unwrap();
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(BASE), 4).unwrap(),
+            [1, 2, 3, 4]
+        );
+        let mut image_bytes = [0; 4];
+        image_pin
+            .read_bytes(0, &mut image_bytes)
+            .expect("foreign image remains host-readable");
+        assert_eq!(image_bytes, [0x5a; 4]);
+        drop(uc); // Close native pointer owner before releasing its page pins.
+        drop(mapped);
+        drop(active_guards);
+        drop(native_pins);
+        let mut private_bytes = [0; 4];
+        private_pin
+            .read_bytes(0, &mut private_bytes)
+            .expect("closed private page remains host-readable");
+        assert_eq!(private_bytes, [1, 2, 3, 4]);
         Ok(())
     }
 
