@@ -8286,6 +8286,23 @@ impl CeKernel {
         &self,
         active_thread_id: u32,
         now_ms: u32,
+        is_ready: impl FnMut(&SchedulerBlockedWait, &Self) -> bool,
+    ) -> Option<u64> {
+        self.select_ready_blocked_waiter_with_eligibility(
+            active_thread_id,
+            now_ms,
+            |_, _| true,
+            is_ready,
+        )
+    }
+
+    /// Apply a caller's ownership gate before either readiness or timeout
+    /// selects a wait. A readiness-only filter cannot exclude expired waits.
+    pub fn select_ready_blocked_waiter_with_eligibility(
+        &self,
+        active_thread_id: u32,
+        now_ms: u32,
+        mut is_eligible: impl FnMut(&SchedulerBlockedWait, &Self) -> bool,
         mut is_ready: impl FnMut(&SchedulerBlockedWait, &Self) -> bool,
     ) -> Option<u64> {
         self.scheduler
@@ -8293,7 +8310,7 @@ impl CeKernel {
                 active_thread_id,
                 now_ms,
                 |wait| {
-                    if let Some(frame) = wait.frame_ref {
+                    let owner_eligible = if let Some(frame) = wait.frame_ref {
                         // Eligibility precedes readiness and timeout. A stale
                         // generation can never become runnable merely because
                         // its old numeric deadline expired.
@@ -8316,7 +8333,8 @@ impl CeKernel {
                         }
                     } else {
                         true
-                    }
+                    };
+                    owner_eligible && is_eligible(wait, self)
                 },
                 |wait| is_ready(wait, self),
                 |thread_id| self.thread_priority_by_id(thread_id),
@@ -17146,6 +17164,47 @@ mod tests {
         assert_eq!(dispatched.typed_payload_owner, Some(owner));
         assert_eq!(kernel.dispatch_message_w_for_thread(11, dispatched), 0);
         assert!(kernel.message_pointer_payload(owner, ptr).is_none());
+    }
+
+    #[test]
+    fn caller_eligibility_excludes_expired_wait_before_timeout_selection() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (excluded_handle, excluded_thread) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let (eligible_handle, eligible_thread) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let now = kernel.timers.tick_count();
+        let excluded_id = kernel.register_blocked_waiter(
+            excluded_thread,
+            excluded_handle,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Kernel,
+            now,
+            0,
+        );
+        let eligible_id = kernel.register_blocked_waiter(
+            eligible_thread,
+            eligible_handle,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Kernel,
+            now,
+            0,
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(0, now, |_, _| false),
+            Some(excluded_id),
+            "an expired wait is selectable even when is_ready is false"
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter_with_eligibility(
+                0,
+                now,
+                |wait, _| wait.id != excluded_id,
+                |_, _| false,
+            ),
+            Some(eligible_id),
+            "caller eligibility must apply before the independent timeout reason"
+        );
+        assert!(kernel.blocked_waiter(excluded_id).is_some());
+        assert!(kernel.blocked_waiter(eligible_id).is_some());
     }
 
     #[test]
