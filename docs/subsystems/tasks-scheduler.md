@@ -125,12 +125,16 @@ name a frame-owned receiver dispatch, rollback on missing/stale frame or
 failed context transfer, and a checked native-stop provenance witness before
 changing the hook.
 
-The first ignored real-MIPS control now reaches that ordinary A→B path and
-stops with `native staged context has stale or unverified thread birth` after
-B's verified `GetMessageW` wait and A's activation
+Three ignored real-MIPS controls now reach this ordinary cross-thread path
+and stop with `native staged context has stale or unverified thread birth` after
+verified `GetMessageW` waits and A's activation
 ([expected-red receipt](../../evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)).
-It stops before the callback stack, return and retirement assertions; it does
-not reproduce the reciprocal cycle or establish a live-app failure.
+They stop before callback stack, return and retirement assertions; the a03
+control also records a native count stop inside B's WNDPROC. They do not
+reproduce the reciprocal cycle or establish a live-app failure. A separate
+ignored [Kernel control](../../evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
+reproduces an ordinary queued send reaching B-prime after exact B exit and
+numeric TID reuse, without delivering A a failure result.
 
 Candidate connected handoff design, pending source review and red-to-green
 proof:
@@ -177,8 +181,13 @@ For the ordinary blocked-GetMessage source, the smaller connected cut is to
 queue A's send and block A, then let the existing birth-verified
 `try_resume_blocked_get_message_with_active_pc` bridge restore B at the next
 slice/selection boundary. Do not switch to B inside A's import hook. That
-bridge must select the *target birth*, not the first displaced GetMessage
-record when multiple receivers are blocked. A different-thread guest WNDPROC
+bridge must select the *target birth* and exact ready wait ID. The current
+ready-ID lookup can locate a displaced receiver; the two-receiver red is a
+regression gate, not proof of a wrong-first-record bug. The bridge currently
+consumes the send and B's wait before unchecked native register/KData restore;
+make that transfer checked and rollback-safe before consuming either. The
+pre-run active-send callout path must not bypass the designated Get/Peek
+receiver retrieval. A different-thread guest WNDPROC
 must have no fallback that executes on the sender's stack; delete the old
 receiver-context shortcut once the queue/bridge path is complete. A receiver
 not currently blocked keeps its send queued until its own Get/Peek retrieval.
@@ -188,6 +197,14 @@ the local real-MIPS and later CE6 app gates, not that older reference alone,
 decide this implementation's acceptance. A blocked-outgoing-Send receiver is
 not served by GetMessage's bridge and retains a separate source/continuation
 gate.
+
+The sender-side legacy SendMessage return path also currently consumes its
+result/removes its wait before unchecked context restore and ignores a KData
+write error. Restore and validate A's exact native context first, then retire
+only its completed send/wait. Callback return must be keyed to the exact send
+ID and pop one active send only; a nested second completion path may otherwise
+pop an ancestor. These are connected implementation and negative-test gates,
+not green behavior claims.
 
 The first implementation cut must make the ordinary blocked-GetMessage red
 green and add slice-spanning WNDPROC and second-of-two blocked-receiver reds,
