@@ -15149,6 +15149,239 @@ mod tests {
     }
 
     #[test]
+    fn stale_guest_getmessage_filter_preserves_live_b_hit_test_post() -> Result<()> {
+        use crate::ce::gwe::QS_MOUSEBUTTON;
+
+        let (mut kernel, handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        let point = Point { x: 211, y: 223 };
+        assert!(kernel.gwe.show_window(hwnd_a, false));
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_b));
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            handle_b,
+            vec![],
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(hwnd_a),
+                min_msg: WM_LBUTTONDOWN,
+                max_msg: WM_LBUTTONDOWN,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        assert_ne!(wait_id, 0);
+        kernel.timers.sleep_ms(17);
+        let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let stale_filtered =
+            kernel.get_message_w_filtered(thread_id, Some(hwnd_a), WM_LBUTTONDOWN, WM_LBUTTONDOWN);
+
+        assert!(
+            stale_filtered.is_none(),
+            "A's filter cannot consume B's post"
+        );
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        assert_ne!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(birth_b, QS_MOUSEBUTTON),
+            0
+        );
+        assert_ne!(
+            kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+            0
+        );
+        assert!(kernel.scheduler_stats().message_input_wake_candidate_count > wakes_before);
+        let b_message = kernel
+            .get_message_w_filtered(thread_id, Some(hwnd_b), WM_LBUTTONDOWN, WM_LBUTTONDOWN)
+            .expect("B's own filter consumes its queued touch");
+        assert_eq!(b_message.hwnd, hwnd_b);
+        assert_eq!(
+            b_message.mouse_pos_at_post,
+            Some(make_lparam(point.x, point.y))
+        );
+        assert!(kernel.remove_blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn destroyed_host_hint_falls_through_to_live_b_hit_test() -> Result<()> {
+        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        let point = Point { x: 211, y: 223 };
+        assert!(kernel.destroy_window(hwnd_a));
+        assert!(!kernel.gwe.is_window(hwnd_a));
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_b));
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd_a));
+
+        assert_eq!(drain.posted, 1);
+        assert_eq!(drain.target_thread_ids, vec![thread_id]);
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_a),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn live_x_getmessage_filter_does_not_steal_y_touch() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle_x, thread_x) = kernel.create_guest_thread(0x401000, 0, false);
+        let (handle_y, thread_y) = kernel.create_guest_thread(0x402000, 0, false);
+        let birth_x = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_x)
+            .expect("X thread birth");
+        let birth_y = kernel
+            .handles
+            .thread_birth_key_for_handle(handle_y)
+            .expect("Y thread birth");
+        let hwnd_x = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_x,
+                "FILTER_X",
+                "X",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 100, 100),
+            )
+            .expect("X checked window");
+        let hwnd_y = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                birth_y,
+                "TOUCH_Y",
+                "Y",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(200, 200, 100, 100),
+            )
+            .expect("Y checked window");
+        let point = Point { x: 250, y: 250 };
+        assert_eq!(kernel.gwe.get_capture(), None);
+        assert_eq!(kernel.gwe.window_from_point(point), Some(hwnd_y));
+        assert_eq!(
+            kernel.gwe.window_from_point_for_thread(thread_x, point),
+            None
+        );
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel
+            .remote
+            .enqueue_touch("down", point.x, point.y)
+            .unwrap();
+
+        let x_filtered =
+            kernel.get_message_w_filtered(thread_x, Some(hwnd_x), WM_LBUTTONDOWN, WM_LBUTTONDOWN);
+
+        assert!(x_filtered.is_none(), "X's filter cannot consume Y's touch");
+        assert_eq!(kernel.remote.touch_event_count(), 0);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_y,
+            Some(hwnd_y),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        assert!(!kernel.gwe.has_message_filtered_for_birth(
+            birth_x,
+            Some(hwnd_x),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        let y_message = kernel
+            .get_message_w_filtered(thread_y, Some(hwnd_y), WM_LBUTTONDOWN, WM_LBUTTONDOWN)
+            .expect("Y's reader consumes the touch");
+        assert_eq!(y_message.hwnd, hwnd_y);
+        assert_eq!(
+            y_message.mouse_pos_at_post,
+            Some(make_lparam(point.x, point.y))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stale_hint_with_live_b_capture_routes_touch_to_b() -> Result<()> {
+        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        assert_eq!(kernel.set_capture(hwnd_b), None);
+        assert_eq!(kernel.gwe.get_capture(), Some(hwnd_b));
+        kernel.remote.enqueue_touch("down", 31, 37).unwrap();
+
+        let drain = kernel.drain_remote_input_to_thread_window_detailed(thread_id, Some(hwnd_a));
+
+        assert_eq!(drain.posted, 1);
+        assert_eq!(drain.target_thread_ids, vec![thread_id]);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_LBUTTONDOWN,
+            WM_LBUTTONDOWN,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn destroyed_filter_key_follows_live_b_focus() -> Result<()> {
+        use crate::ce::gwe::WM_KEYDOWN;
+
+        let (mut kernel, _handle_b, birth_b, hwnd_a, hwnd_b) = stale_window_remote_input_fixture()?;
+        let thread_id = birth_b.thread_id();
+        assert!(kernel.destroy_window(hwnd_a));
+        assert_eq!(kernel.gwe.get_focus(), Some(hwnd_b));
+        assert_eq!(kernel.gwe.get_active_window(), Some(hwnd_b));
+        kernel.remote.enqueue_key("down", 0x0d).unwrap();
+
+        let stale_filtered =
+            kernel.get_message_w_filtered(thread_id, Some(hwnd_a), WM_KEYDOWN, WM_KEYDOWN);
+
+        assert!(stale_filtered.is_none());
+        assert_eq!(kernel.remote.key_event_count(), 0);
+        assert!(kernel.gwe.has_message_filtered_for_birth(
+            birth_b,
+            Some(hwnd_b),
+            WM_KEYDOWN,
+            WM_KEYDOWN,
+        ));
+        let b_key = kernel
+            .get_message_w_filtered(thread_id, Some(hwnd_b), WM_KEYDOWN, WM_KEYDOWN)
+            .expect("B focus receives the key");
+        assert_eq!(b_key.hwnd, hwnd_b);
+        assert_eq!(b_key.wparam, 0x0d);
+        Ok(())
+    }
+
+    #[test]
     fn remote_input_blocked_thread_target_overrides_stale_active_window() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
