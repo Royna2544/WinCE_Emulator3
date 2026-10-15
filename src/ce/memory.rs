@@ -1686,7 +1686,7 @@ impl MemorySystem {
                     |((hole_owner, hole_base), hole_size)| {
                         *hole_owner == owner && ranges_overlap(base, size, *hole_base, *hole_size)
                     },
-                ) || self.writable_image_guest_range_overlaps(Some(owner), base, size)
+                ) || self.overlaps_writable_image_guest_range_for_owner(owner, base, size)
             } else {
                 self.private_vm_overlaps(owner, base, size)
             };
@@ -3228,6 +3228,17 @@ impl MemorySystem {
         self.writable_image_guest_range_overlaps(None, base, size)
     }
 
+    /// Owner-qualified stable slabs can use the same VA as a foreign image.
+    /// Keep their check narrower than the global LegacySeed exclusion.
+    pub(crate) fn overlaps_writable_image_guest_range_for_owner(
+        &self,
+        owner: ProcessBirthKey,
+        base: u32,
+        size: u32,
+    ) -> bool {
+        self.writable_image_guest_range_overlaps(Some(owner), base, size)
+    }
+
     /// Stable private/view slabs can reuse a foreign birth's VA, while a
     /// LegacySeed allocation cannot: its native page ledger is VA-only.
     fn writable_image_guest_range_overlaps(
@@ -3236,30 +3247,45 @@ impl MemorySystem {
         base: u32,
         size: u32,
     ) -> bool {
+        self.writable_image_guest_range_collision_end(owner, base, size)
+            .is_some()
+    }
+
+    /// Return the farthest conflicting image end so monotonic heap assignment
+    /// can skip a whole active or pin-held retired run before reserving bytes.
+    fn writable_image_guest_range_collision_end(
+        &self,
+        owner: Option<ProcessBirthKey>,
+        base: u32,
+        size: u32,
+    ) -> Option<u32> {
         if size == 0 {
-            return false;
+            return None;
         }
         let start = u64::from(base);
         let end = start + u64::from(size);
         let overlaps = |identity: &WritableImageRunIdentity, run: &StableWritableImageRun| {
             if owner.is_some_and(|owner| identity.owner != owner) {
-                return false;
+                return None;
             }
             let run_start = u64::from(identity.run_base);
             let run_end = run_start + run.len as u64;
-            start < run_end && run_start < end
+            (start < run_end && run_start < end)
+                .then(|| u32::try_from(run_end).ok())
+                .flatten()
         };
         self.writable_image_runs
             .iter()
-            .any(|(identity, run)| overlaps(identity, run))
-            || self
-                .retired_writable_image_pins
-                .iter()
-                .any(|(identity, weak_run)| {
-                    weak_run
-                        .upgrade()
-                        .is_some_and(|run| overlaps(identity, &run))
-                })
+            .filter_map(|(identity, run)| overlaps(identity, run))
+            .chain(
+                self.retired_writable_image_pins
+                    .iter()
+                    .filter_map(|(identity, weak_run)| {
+                        let run = weak_run.upgrade()?;
+                        overlaps(identity, &run)
+                    }),
+            )
+            .max()
     }
 
     /// Retire one exact module load. Wrong or stale generations do nothing.
@@ -3374,6 +3400,21 @@ impl MemorySystem {
             .iter()
             .any(|((owner, base), size)| {
                 *owner == identity.owner && ranges_overlap(identity.run_base, run_len, *base, *size)
+            })
+            || self
+                .heap_high_water_mark(identity.owner)
+                .checked_sub(HEAP_PTR_BASE)
+                .is_some_and(|consumed| {
+                    consumed != 0
+                        && ranges_overlap(identity.run_base, run_len, HEAP_PTR_BASE, consumed)
+                })
+            || self.allocations_for(identity.owner).any(|allocation| {
+                ranges_overlap(
+                    identity.run_base,
+                    run_len,
+                    allocation.ptr,
+                    allocation.actual_size,
+                )
             })
         {
             return None;
@@ -3721,8 +3762,8 @@ impl MemorySystem {
             if next > HEAP_PTR_LIMIT {
                 return None;
             }
-            // Only this birth's private VM reservations and globally mapped
-            // legacy bytes can conflict with its fixed heap window.
+            // This birth's private VM and image backing, plus globally mapped
+            // legacy bytes, can conflict with its fixed heap window.
             let collision_end = self
                 .virtual_allocations
                 .values()
@@ -3740,6 +3781,7 @@ impl MemorySystem {
                             .flatten()
                     },
                 ))
+                .chain(self.writable_image_guest_range_collision_end(Some(owner), ptr, step))
                 .max();
             if let Some(end) = collision_end {
                 ptr = align_up(end, HEAP_ALIGN)?;
@@ -3784,7 +3826,7 @@ impl MemorySystem {
             || self.allocations_for(owner).any(|allocation| {
                 ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
             })
-            || self.writable_image_guest_range_overlaps(Some(owner), base, size)
+            || self.overlaps_writable_image_guest_range_for_owner(owner, base, size)
     }
 
     fn owner_scoped_slab_overlaps(&self, owner: ProcessBirthKey, base: u32, size: u32) -> bool {
@@ -4347,6 +4389,17 @@ mod tests {
                     .expect("foreign slab does not block image"),
             )
             .expect("publish image beside foreign slab");
+        assert!(separate.overlaps_writable_image_guest_range(base, VIRTUAL_ALIGN));
+        assert!(separate.overlaps_writable_image_guest_range_for_owner(
+            image_owner,
+            base,
+            VIRTUAL_ALIGN
+        ));
+        assert!(!separate.overlaps_writable_image_guest_range_for_owner(
+            foreign_owner,
+            base,
+            VIRTUAL_ALIGN
+        ));
         let before_private_refusal = (
             separate.next_virtual_incarnation,
             separate.virtual_generation,
@@ -4455,6 +4508,129 @@ mod tests {
         assert_eq!(
             shared.allocate_shared_view(owner, 7, 0, 0x1000, 0x04, &[0x52; 0x1000], None, None),
             Some(image_base + VIRTUAL_ALIGN)
+        );
+    }
+
+    #[test]
+    fn writable_image_and_birth_heap_cursor_exclude_each_other_until_pin_release() {
+        let (owner, foreign) = two_owners();
+        let base = HEAP_PTR_BASE;
+        let identity = writable_image_identity(owner, base, 1, base);
+        let bytes = vec![0x4d; STABLE_PRIVATE_PAGE_SIZE];
+
+        // Heap preparation advances its birth-local cursor before allocation
+        // publication. A previously prepared image token must recheck it.
+        let mut heap_first = MemorySystem::default();
+        let stale_image = heap_first
+            .prepare_writable_image_run(identity, &bytes)
+            .expect("prepare image before heap bytes are reserved");
+        assert_eq!(
+            heap_first.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base)
+        );
+        let before_rejected_image = (
+            heap_first.heap_high_water_mark(owner),
+            heap_first.heap_generation,
+            heap_first.virtual_generation,
+            heap_first.writable_image_generation,
+            heap_first.allocations_for(owner).count(),
+        );
+        assert!(
+            heap_first
+                .commit_prepared_writable_image_run(stale_image)
+                .is_none()
+        );
+        assert!(
+            heap_first
+                .prepare_writable_image_run(identity, &bytes)
+                .is_none()
+        );
+        assert_eq!(
+            (
+                heap_first.heap_high_water_mark(owner),
+                heap_first.heap_generation,
+                heap_first.virtual_generation,
+                heap_first.writable_image_generation,
+                heap_first.allocations_for(owner).count(),
+            ),
+            before_rejected_image
+        );
+        assert!(!heap_first.has_stable_writable_image_runs());
+
+        // A foreign birth's image is independent of this heap address.
+        let foreign_image = writable_image_identity(foreign, base, 1, base);
+        let _foreign_pin = heap_first
+            .commit_prepared_writable_image_run(
+                heap_first
+                    .prepare_writable_image_run(foreign_image, &bytes)
+                    .expect("foreign image may use this VA"),
+            )
+            .expect("publish foreign image");
+        assert_eq!(
+            heap_first.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base + HEAP_ALIGN)
+        );
+
+        let mut image_first = MemorySystem::default();
+        let pin = image_first
+            .commit_prepared_writable_image_run(
+                image_first
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare image before heap"),
+            )
+            .expect("publish image before heap");
+        assert_eq!(
+            image_first.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base + STABLE_PRIVATE_PAGE_SIZE as u32)
+        );
+        assert_eq!(
+            image_first.heap_alloc(foreign, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base),
+            "foreign heap remains independent at the same VA"
+        );
+        let mut actual = [0; 4];
+        pin.read_bytes(0, &mut actual)
+            .expect("heap assignment must not alter image bytes");
+        assert_eq!(actual, [0x4d; 4]);
+
+        let mut retired = MemorySystem::default();
+        let pin = retired
+            .commit_prepared_writable_image_run(
+                retired
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare image for retirement"),
+            )
+            .expect("publish image for retirement");
+        let native_pin = pin.begin_native_access().expect("retain native image pin");
+        assert_eq!(
+            retired.retire_writable_image_module(owner, base, 1),
+            Some(1)
+        );
+        drop(pin);
+        assert_eq!(
+            retired.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base + STABLE_PRIVATE_PAGE_SIZE as u32),
+            "retired native backing still excludes its old heap VA"
+        );
+        drop(native_pin);
+
+        let mut released = MemorySystem::default();
+        let pin = released
+            .commit_prepared_writable_image_run(
+                released
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare image whose pin will close"),
+            )
+            .expect("publish image whose pin will close");
+        assert_eq!(
+            released.retire_writable_image_module(owner, base, 1),
+            Some(1)
+        );
+        drop(pin);
+        assert_eq!(
+            released.heap_alloc(owner, PROCESS_HEAP_HANDLE, 0, 16),
+            Some(base),
+            "guest VA becomes reusable after the last image pin closes"
         );
     }
 
