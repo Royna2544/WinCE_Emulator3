@@ -754,6 +754,7 @@ function Invoke-GetCapture(
     [int]$Sequence,
     [bool]$SaveBody
 ) {
+    $startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
     $startedUtc = [DateTime]::UtcNow.ToString('O')
     $statusCode = $null
     $body = [byte[]]@()
@@ -779,12 +780,12 @@ function Invoke-GetCapture(
         [System.IO.File]::WriteAllBytes($saved, $body)
     }
     Add-JsonLine $LogPath @{
-        name = $Name; url = $Url; startedUtc = $startedUtc
+        name = $Name; url = $Url; startedUtc = $startedUtc; startedTicks = $startedTicks
         receivedUtc = $receivedUtc; receivedTicks = $receivedTicks
         status = $statusCode; bytes = $body.Length; sha256 = $hash
         savedPath = $saved; error = $errorText
     }
-    return @{ Status = $statusCode; Body = $body; ReceivedTicks = $receivedTicks; ReceivedUtc = $receivedUtc; Hash = $hash }
+    return @{ Status = $statusCode; Body = $body; StartedTicks = $startedTicks; ReceivedTicks = $receivedTicks; ReceivedUtc = $receivedUtc; Hash = $hash }
 }
 
 function Invoke-SummaryCapture(
@@ -980,17 +981,17 @@ function Invoke-Observer([string]$Directory) {
             }
             $nextSlot = $slot + 1
             $isFirstFrame = $null -eq $firstFrameRequestTicks
+            # Request the frame before status and summary: either GET may take
+            # three seconds, hiding an early splash if it runs first.
+            $frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg" 'frame' $log $capture $slot $false
             if ($isFirstFrame) {
-                $firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+                $firstFrameRequestTicks = [long]$frame.StartedTicks
                 if (($firstFrameRequestTicks - $launchTicks) -lt 0 -or
                     ($firstFrameRequestTicks - $launchTicks) -gt (2L * $frequency)) {
                     $coverageIncomplete = $true
                     $coverageIssues.Add('first-frame-request-outside-first-two-seconds')
                 }
             }
-            # Request the frame before status and summary: either GET may take
-            # three seconds, hiding an early splash if it runs first.
-            $frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg" 'frame' $log $capture $slot $false
             if ($frame.Status -eq 200 -and $frame.Hash -ne $frameHash) {
                 $frameHash = $frame.Hash
                 if ($savedFrames -lt 256 -and $frame.Body.Length -le 1MB) {

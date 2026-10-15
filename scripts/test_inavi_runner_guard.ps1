@@ -19,7 +19,8 @@ $definitions = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $true))
 foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
-        'Get-InaviPdbRsds', 'Get-Sha256', 'Read-InaviJson',
+        'Get-InaviPdbRsds', 'Get-Sha256', 'Get-ByteSha256',
+        'Add-JsonLine', 'Invoke-GetCapture', 'Read-InaviJson',
         'Assert-InaviCurrentMountInventory',
         'Get-InaviLedgerEvidenceHashes', 'Get-InaviReconciliationProofHashes',
         'Get-InaviHistoricalRunEvidenceHashes',
@@ -260,14 +261,14 @@ Assert-Guard ($source.Contains("phase = 'prelaunch'") -and
 $observerDefinition = @($definitions | Where-Object Name -eq 'Invoke-Observer')
 if ($observerDefinition.Count -ne 1) { throw 'Expected one observer function.' }
 $observerText = $observerDefinition[0].Extent.Text
-$requestAt = $observerText.IndexOf('$firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()', [StringComparison]::Ordinal)
 $frameAt = $observerText.IndexOf('$frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg"', [StringComparison]::Ordinal)
+$requestAt = $observerText.IndexOf('$firstFrameRequestTicks = [long]$frame.StartedTicks', [StringComparison]::Ordinal)
 $statusAt = $observerText.IndexOf('$status = Invoke-GetCapture $client "$base/api/v1/status"', [StringComparison]::Ordinal)
 $summaryAt = $observerText.IndexOf('$summary = Invoke-SummaryCapture', [StringComparison]::Ordinal)
-Assert-Guard ($requestAt -ge 0 -and $frameAt -gt $requestAt -and
+Assert-Guard ($frameAt -ge 0 -and $requestAt -gt $frameAt -and
     $statusAt -gt $frameAt -and
     $summaryAt -gt $statusAt -and
-    $observerText.Contains('$firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()') -and
+    $observerText.Contains('$firstFrameRequestTicks = [long]$frame.StartedTicks') -and
     $observerText.Contains('($firstFrameRequestTicks - $launchTicks) -gt (2L * $frequency)') -and
     $observerText.Contains('$firstFrameReceivedTicks = [long]$frame.ReceivedTicks') -and
     $observerText.Contains('($firstFrameReceivedTicks - $launchTicks) -gt (2L * $frequency)') -and
@@ -283,6 +284,59 @@ Assert-Guard ($firstFrameBlock.Contains("$" + 'coverageIssues.Add(') -and
 Assert-Guard ($observerText.Contains("coverageStatus = 'pending-first-frame'") -and
     $observerText.Contains('descriptorOutsideTwoSeconds = $coverageIncomplete')) `
     'pre-frame launch receipt does not claim completed coverage'
+$captureDefinition = @($definitions | Where-Object Name -eq 'Invoke-GetCapture')
+$captureText = $captureDefinition[0].Extent.Text
+$captureStartAt = $captureText.IndexOf('$startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()', [StringComparison]::Ordinal)
+$captureGetAt = $captureText.IndexOf('$Client.GetAsync($Url)', [StringComparison]::Ordinal)
+$captureReceivedAt = $captureText.IndexOf('$receivedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()', [StringComparison]::Ordinal)
+Assert-Guard ($captureStartAt -ge 0 -and $captureGetAt -gt $captureStartAt -and
+    $captureReceivedAt -gt $captureGetAt -and
+    $captureText.Contains('startedTicks = $startedTicks') -and
+    $captureText.Contains('StartedTicks = $startedTicks')) `
+    'every generic GET retains and returns a same-Stopwatch request-start tick'
+
+# A relative URL without BaseAddress fails before network I/O. Execute the
+# isolated helper twice to verify failed frame GETs still retain the same
+# monotonic start/receive pair returned to the first-frame receipt caller.
+$frameScratchParent = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+$frameScratch = [System.IO.Path]::GetFullPath((Join-Path $frameScratchParent (
+    'inavi-frame-offline-' + [Guid]::NewGuid().ToString('N'))))
+$frameLog = Join-Path $frameScratch 'observer-get.jsonl'
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$frameClient = [System.Net.Http.HttpClient]::new()
+try {
+    [void][System.IO.Directory]::CreateDirectory($frameScratch)
+    $first = Invoke-GetCapture $frameClient 'relative-frame.jpg' 'frame' `
+        $frameLog $frameScratch 0 $false
+    $later = Invoke-GetCapture $frameClient 'relative-frame.jpg' 'frame' `
+        $frameLog $frameScratch 1 $false
+    $rows = @(Get-Content -LiteralPath $frameLog | ConvertFrom-Json)
+    Assert-Guard ($rows.Count -eq 2 -and
+        $rows[0].name -eq 'frame' -and $rows[1].name -eq 'frame' -and
+        $rows[0].startedTicks -eq $first.StartedTicks -and
+        $rows[0].receivedTicks -eq $first.ReceivedTicks -and
+        $rows[1].startedTicks -eq $later.StartedTicks -and
+        $rows[1].receivedTicks -eq $later.ReceivedTicks -and
+        $rows[0].startedTicks -le $rows[0].receivedTicks -and
+        $rows[1].startedTicks -le $rows[1].receivedTicks -and
+        $rows[0].status -eq $null -and $rows[1].status -eq $null -and
+        -not [string]::IsNullOrWhiteSpace($rows[0].error) -and
+        -not [string]::IsNullOrWhiteSpace($rows[1].error)) `
+        'first and later failed frame GETs retain coherent monotonic clocks'
+} finally {
+    $frameClient.Dispose()
+    if (-not [string]::Equals([System.IO.Path]::GetDirectoryName(
+                [System.IO.Path]::GetFullPath($frameScratch)),
+            $frameScratchParent, [StringComparison]::OrdinalIgnoreCase) -or
+        [System.IO.Path]::GetFileName($frameScratch) -cnotmatch
+            '^inavi-frame-offline-[0-9a-f]{32}$') {
+        throw "Refusing unsafe offline frame scratch cleanup: $frameScratch"
+    }
+    if (Test-Path -LiteralPath $frameScratch -PathType Container) {
+        Remove-Item -LiteralPath $frameScratch -Recurse -Force
+    }
+}
 Assert-Guard ($source.Contains('Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks') -and
     $source.Contains('Stop-InaviPreDescriptorLaunch $runDirectory') -and
     $source.Contains('Stop-InaviSpawnedFallback $Directory $MonitorProcess') -and
