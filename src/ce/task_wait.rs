@@ -272,6 +272,17 @@ mod tests {
     }
 
     #[test]
+    fn task_wait_store_insert_new_rejects_duplicate_without_replacing_or_reindexing() {
+        let mut store = TaskWaitStore::default();
+        store.insert_new(1, wait(1, 7)).unwrap();
+        assert_eq!(store.insert_new(1, wait(1, 8)), Err(wait(1, 8)));
+        assert_eq!(store.get(&1), Some(&wait(1, 7)));
+        assert_eq!(store.legacy_wait_ids_for_thread(7), [1]);
+        assert!(store.legacy_wait_ids_for_thread(8).is_empty());
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
     #[should_panic(expected = "wait record identity mismatch")]
     fn task_wait_store_rejects_record_key_mismatch() {
         TaskWaitStore::default().insert(2, wait(1, 7));

@@ -413,9 +413,9 @@ impl Scheduler {
                 "wait record TID does not match owner birth"
             );
         }
-        // Legacy registration keeps its infallible signature for fixtures;
-        // unlike the old wrapping allocator it cannot replace a live wait.
-        // Native finite Sleep uses the typed path above.
+        // Pre-existing publishers keep their infallible signature in this
+        // bounded cut. Exhaustion stops them instead of wrapping onto a live
+        // wait; finite Sleep uses the typed path above.
         let slot = self
             .try_reserve_wait_slot()
             .expect("scheduler wait ID or sequence exhausted");
@@ -799,7 +799,9 @@ pub fn blocked_wait_timed_out(wait: &SchedulerBlockedWait, now_ms: u32) -> bool 
 
 #[cfg(test)]
 mod tests {
-    use super::{Scheduler, SchedulerBlockedWaitKind, blocked_wait_timed_out};
+    use super::{
+        Scheduler, SchedulerBlockedWaitKind, SchedulerPublishError, blocked_wait_timed_out,
+    };
     use crate::ce::object::{HandleTable, ThreadBirthKey};
 
     fn reused_thread_births(thread_id: u32) -> (ThreadBirthKey, ThreadBirthKey) {
@@ -1495,5 +1497,110 @@ mod tests {
         assert_eq!(stats.yield_count, 1);
         assert_eq!(stats.wait_block_count, 0);
         assert_eq!(stats.wait_wake_count, 0);
+    }
+
+    #[test]
+    fn finite_sleep_selection_rechecks_exact_active_frame_and_phase() {
+        let mut handles = HandleTable::default();
+        let handle = handles.create_thread(7, 0x1000, 0, false);
+        let birth = handles.thread_birth_key_for_handle(handle).unwrap();
+        let mut scheduler = Scheduler::default();
+
+        let first = scheduler
+            .try_register_finite_sleep_wait(
+                handles.preflight_finite_sleep_frame(birth).unwrap(),
+                handle,
+                100,
+                25,
+            )
+            .unwrap();
+        handles.activate_finite_sleep_frame(first).unwrap();
+        handles.begin_finite_sleep_completion(first).unwrap();
+        handles.retire_finite_sleep_frame(first).unwrap();
+
+        // A stale locator remains in this synthetic index. Its older sequence
+        // must not win over the newly active frame for the same exact birth.
+        let second = scheduler
+            .try_register_finite_sleep_wait(
+                handles.preflight_finite_sleep_frame(birth).unwrap(),
+                handle,
+                100,
+                25,
+            )
+            .unwrap();
+        handles.activate_finite_sleep_frame(second).unwrap();
+        let select = |handles: &HandleTable, scheduler: &Scheduler| {
+            scheduler.select_ready_blocked_wait_id_with_eligibility(
+                0,
+                125,
+                |wait| {
+                    wait.frame_ref
+                        .is_some_and(|frame| handles.finite_sleep_frame_is_blocked(frame))
+                },
+                |_| false,
+                |_| 20,
+            )
+        };
+        assert_eq!(select(&handles, &scheduler), Some(second.wait_id()));
+        handles.begin_finite_sleep_completion(second).unwrap();
+        assert_eq!(select(&handles, &scheduler), None, "duplicate selection");
+        scheduler.remove_blocked_wait(first.wait_id()).unwrap();
+        scheduler.remove_blocked_wait(second.wait_id()).unwrap();
+        handles.retire_finite_sleep_frame(second).unwrap();
+    }
+
+    #[test]
+    fn finite_sleep_wait_id_and_sequence_exhaustion_publish_nothing() {
+        let mut handles = HandleTable::default();
+        let handle = handles.create_thread(7, 0x1000, 0, false);
+        let birth = handles.thread_birth_key_for_handle(handle).unwrap();
+        let key = handles.preflight_finite_sleep_frame(birth).unwrap();
+        let mut scheduler = Scheduler::default();
+        scheduler.next_wait_id = u64::MAX;
+        assert_eq!(
+            scheduler.try_register_finite_sleep_wait(key, handle, 100, 25),
+            Err(SchedulerPublishError::WaitIdExhausted)
+        );
+        assert_eq!(scheduler.blocked_waits().count(), 0);
+        assert_eq!(scheduler.stats().waiter_register_count, 0);
+
+        scheduler.next_wait_id = 0;
+        scheduler.next_wait_sequence = u64::MAX;
+        assert_eq!(
+            scheduler.try_register_finite_sleep_wait(key, handle, 100, 25),
+            Err(SchedulerPublishError::WaitSequenceExhausted)
+        );
+        assert_eq!(scheduler.next_wait_id, 0);
+        assert_eq!(scheduler.blocked_waits().count(), 0);
+    }
+
+    #[test]
+    fn finite_sleep_duplicate_wait_id_does_not_replace_original() {
+        let mut handles = HandleTable::default();
+        let handle = handles.create_thread(7, 0x1000, 0, false);
+        let birth = handles.thread_birth_key_for_handle(handle).unwrap();
+        let mut scheduler = Scheduler::default();
+        let original = scheduler.register_legacy_blocked_wait(
+            8,
+            0,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            u32::MAX,
+        );
+        scheduler.next_wait_id = original - 1;
+        let count = scheduler.stats().waiter_register_count;
+        assert_eq!(
+            scheduler.try_register_finite_sleep_wait(
+                handles.preflight_finite_sleep_frame(birth).unwrap(),
+                handle,
+                100,
+                25,
+            ),
+            Err(SchedulerPublishError::DuplicateWaitId { wait_id: original })
+        );
+        assert_eq!(scheduler.stats().waiter_register_count, count);
+        assert_eq!(scheduler.blocked_wait(original).unwrap().thread_id, 8);
+        assert_eq!(scheduler.blocked_wait(original).unwrap().frame_ref, None);
     }
 }
