@@ -4,7 +4,39 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-15 A11b reciprocal Send next-lease expected red (test only)
+## 2026-10-15 A12 reciprocal Send bounded source/test gate (no app run)
+
+The strict birth-owned, same-process plain S→T→S `SendMessageW` shape now has a
+bounded [A12 source seal](evidence/scheduler-source-cut-a12/source-seal.md) and
+[validation receipt](evidence/scheduler-source-cut-a12/validation.production.receipt.md).
+On unchanged formatted `unicorn.rs` SHA-256
+`4A08AFB9FA4AE0072E145DA1588673997D5BBD3D79700B661A2B79EB45E90E07`,
+the 18-group release-feature suite passed **2,047/0/9 ignored** and the
+18-group no-default suite passed **1,482/0/3 ignored**. Post-format focused
+controls passed native same-process **6/6**, native-send-to **4/4**, and
+saved-context **6/6**; `cargo fmt --check` and scoped diff check passed.
+
+The real-MIPS reciprocal control leaves S's outer send/wait parked while T
+wakes from finite Sleep, takes that send through its real `GetMessageW`, and
+issues an inner Send back to S. A blank native lease enters S's WNDPROC on S's
+birth/stack without replay. S returns `0x88` to T's inner Send, T returns
+`0x77` to S's outer Send, and both exact waits/records retire once. The final
+S continuation has the exact import return PC/RA and preserves its SP, S0,
+HI/LO, FPR2 and FCSR; a
+short further lease creates no third send. A separate wrong-parent-birth
+control requires typed pre-entry `Backend` refusal with the two original send
+IDs/results and native/scheduler waits intact. The
+[pre-format focused history](evidence/scheduler-source-cut-a12/validation.focused.receipt.md)
+is separately pinned and is not evidence for the final formatted source.
+
+This is only the strict two-send shape: third concurrent senders, timed or
+result-pointer sends, a second pending callback/deeper nesting and
+cross-process pairs are not supported by this handoff and can fail closed
+with terminal `Backend`. The historical A11b replay is repaired for this
+bounded source path, not proof of full Stage 3, CE parity or live iNavi. The
+user skipped the a04 app run; A12 made no mount backup or guest launch.
+
+## 2026-10-15 Historical A11b reciprocal Send next-lease expected red (test only)
 
 The first [A11 run](evidence/scheduler-source-cut-a11-reciprocal-red/validation.receipt.md)
 used an invalid same-call S-WNDPROC timing assertion and remains preliminary
@@ -20,10 +52,10 @@ outer/inner GWE send IDs 1/2 and matching scheduler/native waits 2/3 intact.
 On one fresh bounded lease, execution resumed T at that same import and made
 third send ID 3 plus duplicate native wait 4, instead of entering S's WNDPROC
 on S's stack. The focused test exited 101 at its exact no-replay assertion;
-the production failure boundary is neither a fixture setup nor same-call
-timing failure. No production repair, broad suite, mount backup or live iNavi
-run followed A11b; the user skipped the a04 app run. A10's prior bounded
-source/test gate remains unchanged.
+the production failure boundary was neither a fixture setup nor same-call
+timing failure. A12 subsequently repaired this bounded next-lease path and
+unignored the full-return control; A11b remains historical red evidence, not
+the current source status. No mount backup or live iNavi run followed A11b.
 
 ## 2026-10-15 Connected A→B Send/GetMessage bounded source gate (no app run)
 
@@ -52,8 +84,9 @@ GetMessage/native wait and saved/live birth before recovery, rejects a known
 stale saved birth before native restore, and resumes A on the next bounded
 lease with its exact reply/wait. Only the runnable-receiver control checks a
 later no-replay slice; the three finite-Sleep controls stop at A's continuation.
-This is not full Stage 3 or live-iNavi acceptance. Reciprocal cross-Send,
-cross-process parked-sender restore, legacy numeric-only HWND ownership,
+This is not full Stage 3 or live-iNavi acceptance. Reciprocal shapes beyond
+A12's strict two-send case, cross-process parked-sender restore, legacy
+numeric-only HWND ownership,
 post-wake MsgWait, `SMF_TIMEOUT` last-error semantics and same-birth orphaned
 GetMessage payloads with a missing scheduler wait remain separate boundaries.
 
@@ -80,8 +113,9 @@ post-build source-hash verification passed
 ([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
 This is a source/test gate, not full Stage 3 or a live-app result. At that seal,
 reciprocal cross-Send after wake and post-wake MsgWait were untested. A11b later
-reproduced a reciprocal source-control no-replay failure; post-wake MsgWait
-remains untested, and neither path has a live-app result. The user skipped the
+reproduced a reciprocal source-control no-replay failure; A12 later repaired
+only its strict two-send source path. Post-wake MsgWait remains untested, and
+neither path has a live-app result. The user skipped the
 a04 run; no new adjacent mount backup or iNavi launch followed this scheduler
 cut.
 
@@ -205,6 +239,12 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show d4263dde:PROGRESS.md`.
+- A12 strict reciprocal same-process Send source/test gate
+  ([receipt](evidence/scheduler-source-cut-a12/validation.production.receipt.md)):
+  post-format release **2,047/0/9 ignored** and no-default **1,482/0/3
+  ignored** across 18 groups each; the no-replay and wrong-parent-birth
+  controls are now normal tests. This does not support broader reciprocal
+  shapes or establish live behavior.
 - Connected A→B Send/GetMessage bounded source/test gate
   ([receipt](evidence/scheduler-source-cut-a10/validation.receipt.md)):
   A10 passed release **2,045/0/9 ignored** and no-default **1,482/0/3 ignored**

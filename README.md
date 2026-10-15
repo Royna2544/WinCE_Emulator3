@@ -35,9 +35,11 @@ remote-control HTTP/WebSocket surface.
   and desktop/no-trace checks, release build and post-build source hashes also
   passed. The initial **1,032/2/6 ignored** release attempt was diagnostic:
   obsolete hidden-message fixtures were repaired and the source was resealed.
-  Reciprocal cross-Send and post-wake MsgWait remain untested. The user skipped
-  the a04 live run; no new mount backup or iNavi run follows from this source
-  gate, and full Stage 3 remains open.
+  Reciprocal cross-Send was untested at that D-010 seal; A11b later reproduced
+  a next-lease replay and A12 closes only its strict two-send source shape.
+  Post-wake MsgWait remains untested. The user skipped the a04 live run; no
+  new mount backup or iNavi run follows from these source gates, and full
+  Stage 3 remains open.
 - The three [real-MIPS cross-thread Send expected reds](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
   are historical pre-repair source controls, not current iNavi failures. The
   connected A→B Send/GetMessage cut now has an exact
@@ -52,9 +54,19 @@ remote-control HTTP/WebSocket surface.
   next bounded lease. Only the runnable-receiver fixture proves a subsequent
   no-replay slice; the three finite-Sleep fixtures stop at A's continuation.
   This is a bounded source/test gate, not full Stage 3 or live-iNavi proof.
-  Reciprocal sends, cross-process parked-sender restore, legacy numeric-only
-  HWNDs, post-wake MsgWait, `SMF_TIMEOUT` semantics and same-birth orphaned
-  GetMessage payloads with a missing scheduler wait remain separate.
+  Reciprocal shapes beyond A12, cross-process parked-sender restore, legacy
+  numeric-only HWNDs, post-wake MsgWait, `SMF_TIMEOUT` semantics and same-birth
+  orphaned GetMessage payloads with a missing scheduler wait remain separate.
+- The strict same-process S→T→S plain-Send path has a bounded
+  [A12 source/test gate](evidence/scheduler-source-cut-a12/validation.production.receipt.md):
+  the post-format 18-group suites passed release **2,047/0/9 ignored** and
+  no-default **1,482/0/3 ignored**. Normal real-MIPS controls cover both
+  replies, exact wait retirement, preserved S context and no third send;
+  a wrong-parent-birth control fails before guest entry. A11b's next-lease
+  replay is historical for this exact shape, not evidence of a live iNavi
+  deadlock. Third sender, timed/result-pointer, deeper nesting and
+  cross-process variants can fail closed with terminal `Backend` and remain
+  live-run risks. No app or writable-mount run was made for A12.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

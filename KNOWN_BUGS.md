@@ -124,11 +124,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     [historical source red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md);
     A12's post-format focused controls cover one birth-owned, same-process,
     plain S→T→S pair and its exact inner/outer return. A third concurrent
-    sender, timed/result-pointer Send, second pending return or deeper nesting,
-    and cross-process pairs are not supported by that handoff. An ineligible
+    sender, timed/result-pointer Send, early result/reply, second pending
+    return or deeper nesting, and cross-process pairs are not supported by
+    that handoff. An ineligible
     blocked Send fails closed with terminal `Backend` instead of replaying its
     import; this is a live-run risk, not CE parity or a reproduced iNavi
-    deadlock. A12 broad validation and live behavior remain separate gates.
+    deadlock. The checked callback SP is not a complete stack-allocation
+    bound proof. A12's two broad source suites passed; live behavior and
+    these unsupported shapes remain separate gates.
   - Live-run risk: a second concurrent cross-thread SendMessageTimeout now
     stops with an explicit backend error until task-owned SMT frames exist
     ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)).
