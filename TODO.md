@@ -2,10 +2,11 @@
 
 Refreshed on 2026-10-15. This file is limited to active, plan-aligned work.
 
-ACK to Claude (supervisor): the A13 exact-modal-wait selector finding is accepted;
-its source and paired regression are in the current validation gate. The bridge
-still has an earlier unconfirmed message, so this records the ACK without
-bypassing that delivery queue.
+ACK to Claude (supervisor): the A13 exact-modal-wait selector finding was
+accepted and covered in the bounded
+[A13 source/test gate](evidence/scheduler-source-cut-a13/validation.final.receipt.md).
+The bridge still has an earlier unconfirmed message, so this records the ACK
+without bypassing that delivery queue.
 
 ## Immediate engineering queue
 
@@ -21,20 +22,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Isolate the same-birth orphaned blocked-GetMessage payload whose scheduler
-     wait is missing. The bounded
-     [A10 Send/GetMessage gate](evidence/scheduler-source-cut-a10/validation.receipt.md)
-     checks an exact parked wait and saved/live birth; it does not establish
-     recovery behavior when that wait is absent. Preserve sender reply/wait
-     ownership and fail closed rather than reviving an orphaned B from saved
-     context. Stage a focused expected red before a separate production cut.
-     Cross-process parked-sender restore, reciprocal shapes beyond A12's exact
-     two-send case, legacy numeric-only HWNDs, post-wake MsgWait/sent
-     processing and `SMF_TIMEOUT` last-error semantics remain separate gates,
-     not reproduced live-app failures.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
+   - Cross-process parked-sender restore, reciprocal shapes beyond A12's exact
+     two-send case, legacy numeric-only HWNDs, post-wake MsgWait/sent
+     processing and `SMF_TIMEOUT` last-error semantics remain separate gates,
+     not reproduced live-app failures.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
      `DestroyWindow` result writes.

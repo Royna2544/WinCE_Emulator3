@@ -55,8 +55,8 @@ remote-control HTTP/WebSocket surface.
   no-replay slice; the three finite-Sleep fixtures stop at A's continuation.
   This is a bounded source/test gate, not full Stage 3 or live-iNavi proof.
   Reciprocal shapes beyond A12, cross-process parked-sender restore, legacy
-  numeric-only HWNDs, post-wake MsgWait, `SMF_TIMEOUT` semantics and same-birth
-  orphaned GetMessage payloads with a missing scheduler wait remain separate.
+  numeric-only HWNDs, post-wake MsgWait and `SMF_TIMEOUT` semantics remain
+  separate.
 - The strict same-process S→T→S plain-Send path has a bounded
   [A12 source/test gate](evidence/scheduler-source-cut-a12/validation.production.receipt.md):
   the post-format 18-group suites passed release **2,047/0/9 ignored** and
@@ -67,6 +67,15 @@ remote-control HTTP/WebSocket surface.
   deadlock. Third sender, timed/result-pointer, deeper nesting and
   cross-process variants can fail closed with terminal `Backend` and remain
   live-run risks. No app or writable-mount run was made for A12.
+- The bounded [A13 GetMessage orphan source gate](evidence/scheduler-source-cut-a13/validation.final.receipt.md)
+  prevents a same-birth blocked import payload from becoming runnable merely
+  because its scheduler wait disappeared, and rejects an orphan selected at
+  native entry before guest execution. Exact live modal-wait provenance still
+  permits the tested button-tap continuation; a missing modal wait fails
+  closed. Focused saved-context **7/7**, integrated orphan **1/1** and modal
+  **11/11** controls passed. The final 18-group suites passed release-feature
+  **2,052/0/9 ignored** and no-default **1,482/0/3 ignored**. This is not
+  full modal, Stage 3 or live-iNavi acceptance; no app or mount run was made.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

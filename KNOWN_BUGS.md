@@ -109,17 +109,6 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     historical pre-repair source red: after B exited and B-prime reused its
     TID, B-prime took B's send without A's failure result
     ([receipt](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)).
-  - A same-birth orphaned blocked-`GetMessageW` saved payload with a missing
-    scheduler wait remains a separate recovery boundary. A10's exact-wait and
-    saved/live-birth guard does not prove this absent-wait case. The bounded
-    [A10 source/test gate](evidence/scheduler-source-cut-a10/validation.receipt.md)
-    passed both broad suites (release **2,045/0/9 ignored**, no-default
-    **1,482/0/3 ignored**) and preserves the sender reply/wait across a safe
-    next-lease handoff. A09's four same-process Send failures and the earlier
-    blocked-GetMessage A→B reds are historical source controls, not current
-    failures or live-iNavi results. Only the runnable-receiver fixture checks
-    a later no-replay slice; the three finite-Sleep controls stop at A's
-    continuation. Full scheduler/Stage 3 and live-app behavior remain open.
   - **Reciprocal Send shape remains narrow:** the A11b next-lease replay is a
     [historical source red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md);
     A12's post-format focused controls cover one birth-owned, same-process,

@@ -47,7 +47,18 @@ first. Totals are passed/failed/ignored for release
 `unicorn,trace,win32-desktop`, then no-feature. Linked receipts identify the
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
-`git show d4263dde:PROGRESS.md`.
+`git show 75dd5560:PROGRESS.md`.
+- A13 same-birth orphaned `GetMessageW` source/test gate
+  ([receipt](evidence/scheduler-source-cut-a13/validation.final.receipt.md)):
+  the test-only expected red is preserved; saved-context recovery now leaves a
+  matching birth-owned blocked payload parked, and a selected payload whose
+  exact scheduler wait vanished fails before guest entry without taking the
+  sender's reply/wait. Modal continuation and parked readiness require the
+  exact live modal wait, including the real-button missing-wait controls.
+  Final-source focused saved-context **7/7**, native orphan **1/1**, and modal
+  **11/11** passed. The 18-group broad suites passed release **2,052/0/9
+  ignored** and no-default **1,482/0/3 ignored**. This is not full Stage 3,
+  live-modal acceptance, or an iNavi run.
 - A12 strict reciprocal same-process Send source/test gate
   ([receipt](evidence/scheduler-source-cut-a12/validation.production.receipt.md)):
   post-format release **2,047/0/9 ignored** and no-default **1,482/0/3
