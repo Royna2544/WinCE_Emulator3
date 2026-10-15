@@ -12901,9 +12901,13 @@ impl UnicornMips {
                     kernel.current_process_id(),
                 ));
                 let return_sp = prepared.receiver_wait.regs.regs[29];
-                pre_entry_try!(return_sp.checked_sub(WNDPROC_CALL_FRAME_BYTES).ok_or_else(|| {
-                    Error::Backend("reciprocal Send receiver stack underflow".to_owned())
-                }));
+                pre_entry_try!(
+                    return_sp
+                        .checked_sub(WNDPROC_CALL_FRAME_BYTES)
+                        .ok_or_else(|| {
+                            Error::Backend("reciprocal Send receiver stack underflow".to_owned())
+                        })
+                );
                 if !write_wndproc_call_registers(
                     &mut uc,
                     prepared.message.hwnd,
@@ -12917,23 +12921,27 @@ impl UnicornMips {
                         "prepare reciprocal Send receiver WNDPROC registers".to_owned()
                     )));
                 }
-                let message = pre_entry_try!(kernel
-                    .take_ready_sent_message_w_filtered_if_id(
-                        prepared.receiver_wait.thread_id,
-                        None,
-                        0,
-                        0,
-                        prepared.inner_send_id,
-                    )
-                    .ok_or_else(|| Error::Backend(format!(
-                        "reciprocal inner send {} changed before exact queue take",
-                        prepared.inner_send_id
-                    ))));
+                let message = pre_entry_try!(
+                    kernel
+                        .take_ready_sent_message_w_filtered_if_id(
+                            prepared.receiver_wait.thread_id,
+                            None,
+                            0,
+                            0,
+                            prepared.inner_send_id,
+                        )
+                        .ok_or_else(|| Error::Backend(format!(
+                            "reciprocal inner send {} changed before exact queue take",
+                            prepared.inner_send_id
+                        )))
+                );
                 if message.hwnd != prepared.message.hwnd
                     || message.msg != prepared.message.msg
                     || message.wparam != prepared.message.wparam
                     || message.lparam != prepared.message.lparam
-                    || kernel.gwe.active_sent_message_id(prepared.receiver_wait.thread_id)
+                    || kernel
+                        .gwe
+                        .active_sent_message_id(prepared.receiver_wait.thread_id)
                         != Some(prepared.inner_send_id)
                 {
                     pre_entry_try!(Err::<(), Error>(Error::Backend(format!(
@@ -12941,41 +12949,43 @@ impl UnicornMips {
                         prepared.inner_send_id
                     ))));
                 }
-                pending_wndproc_returns.borrow_mut().push(PendingWndProcReturn {
-                    source: "BlockedSendMessage/SentMessage",
-                    hwnd: message.hwnd,
-                    msg: message.msg,
-                    wparam: message.wparam,
-                    lparam: message.lparam,
-                    typed_payload_owner: message.typed_payload_owner,
-                    wndproc: prepared.wndproc,
-                    return_pc: prepared.receiver_wait.return_pc,
-                    return_sp,
-                    caller_regs: None,
-                    class_name: Some(prepared.class_name),
-                    api_result: None,
-                    dialog_result_hwnd: None,
-                    finalize_destroy: false,
-                    destroy_root_hwnd: None,
-                    remaining_destroy_callouts: Vec::new(),
-                    send_thread_id: None,
-                    send_timeout_result_ptr: None,
-                    send_restore: Some(SendMessageRestoreContext {
-                        sender_thread_id: active_thread_id,
-                        sender_birth: prepared.sender_birth,
-                        receiver_thread_id: prepared.receiver_wait.thread_id,
-                        receiver_birth: prepared.receiver_birth,
-                        send_id: prepared.inner_send_id,
-                        wait_id: prepared.inner_wait_id,
-                        outer_send_id: prepared.outer_send_id,
-                        outer_wait_id: prepared.outer_wait_id,
-                        receiver_return_sp: return_sp,
-                        receiver_wait_regs: prepared.receiver_wait.regs.clone(),
-                    }),
-                    continuation: None,
-                    resume_import: None,
-                    clear_focus_after_return: None,
-                });
+                pending_wndproc_returns
+                    .borrow_mut()
+                    .push(PendingWndProcReturn {
+                        source: "BlockedSendMessage/SentMessage",
+                        hwnd: message.hwnd,
+                        msg: message.msg,
+                        wparam: message.wparam,
+                        lparam: message.lparam,
+                        typed_payload_owner: message.typed_payload_owner,
+                        wndproc: prepared.wndproc,
+                        return_pc: prepared.receiver_wait.return_pc,
+                        return_sp,
+                        caller_regs: None,
+                        class_name: Some(prepared.class_name),
+                        api_result: None,
+                        dialog_result_hwnd: None,
+                        finalize_destroy: false,
+                        destroy_root_hwnd: None,
+                        remaining_destroy_callouts: Vec::new(),
+                        send_thread_id: None,
+                        send_timeout_result_ptr: None,
+                        send_restore: Some(SendMessageRestoreContext {
+                            sender_thread_id: active_thread_id,
+                            sender_birth: prepared.sender_birth,
+                            receiver_thread_id: prepared.receiver_wait.thread_id,
+                            receiver_birth: prepared.receiver_birth,
+                            send_id: prepared.inner_send_id,
+                            wait_id: prepared.inner_wait_id,
+                            outer_send_id: prepared.outer_send_id,
+                            outer_wait_id: prepared.outer_wait_id,
+                            receiver_return_sp: return_sp,
+                            receiver_wait_regs: prepared.receiver_wait.regs.clone(),
+                        }),
+                        continuation: None,
+                        resume_import: None,
+                        clear_focus_after_return: None,
+                    });
                 current_thread_id.set_verified(prepared.receiver_birth);
                 *running_guest_thread.borrow_mut() = Some(verified_send_running_thread(
                     kernel,
@@ -44395,7 +44405,7 @@ fn preflight_reciprocal_send_handoff(
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> Option<ReciprocalSendHandoff> {
-    use crate::ce::gwe::{WindowDeliveryOwner, SMF_RESULT_READY};
+    use crate::ce::gwe::{SMF_RESULT_READY, WindowDeliveryOwner};
 
     let waits = blocked_waits.borrow();
     let inner = waits.iter().find(|wait| {
@@ -44423,13 +44433,19 @@ fn preflight_reciprocal_send_handoff(
         || inner_sent.receiver_thread_id != receiver_thread_id
         || receiver_birth.thread_id() != receiver_thread_id
         || !kernel.is_live_thread_birth(receiver_birth)
-        || kernel.handles.thread_creation_owner_by_id(receiver_thread_id) != Some(owner)
+        || kernel
+            .handles
+            .thread_creation_owner_by_id(receiver_thread_id)
+            != Some(owner)
         || inner_sent.timeout_ms.is_some()
         || inner_sent.result_ptr.is_some()
         || inner_sent.result.is_some()
         || inner_sent.flags & SMF_RESULT_READY != 0
         || inner_sent.send_timeout_flags != 0
-        || kernel.gwe.active_sent_message_id(receiver_thread_id).is_some()
+        || kernel
+            .gwe
+            .active_sent_message_id(receiver_thread_id)
+            .is_some()
     {
         return None;
     }
@@ -80067,7 +80083,6 @@ mod unicorn_tests {
             .expect("S real outer Send native wait");
         let outer_wait_id = outer.wait_id;
         let outer_return_pc = outer.return_pc;
-        let outer_return_ra = outer.regs.regs[31];
         assert_eq!(outer.regs.regs[29], sender_sp);
         assert_eq!(outer.regs.regs[16], 0xa0a0_0011);
         assert_eq!(outer.regs.hi, 0xa0a0_0022);
@@ -80097,13 +80112,20 @@ mod unicorn_tests {
                 live_pump: true,
             },
         );
-        assert!(pre_deadline.result.is_ok(), "pre-deadline: {:?}", pre_deadline.result);
+        assert!(
+            pre_deadline.result.is_ok(),
+            "pre-deadline: {:?}",
+            pre_deadline.result
+        );
         assert!(
             pre_deadline.report.attempt_id().is_none(),
             "S's blocked outer Send replayed before T's finite Sleep deadline: {:?}",
             pre_deadline.report
         );
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]),
+            outer_ids
+        );
         assert!(kernel.blocked_waiter(sleep_wait_id).is_some());
         assert!(kernel.blocked_waiter(outer_wait_id).is_some());
         assert!(cpu.pending_wndproc_returns.is_empty());
@@ -80294,15 +80316,34 @@ mod unicorn_tests {
                 rejected.report,
             );
             assert!(rejected.report.start_pc().is_none());
-            assert_eq!(cpu.saved_context_pc(), Some(send_trap));
-            assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
-            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
-            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]), inner_ids);
-            assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), None);
-            assert_eq!(kernel.gwe.sent_message(inner_id).and_then(|send| send.result), None);
+            assert_eq!(
+                kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]),
+                outer_ids
+            );
+            assert_eq!(
+                kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]),
+                inner_ids
+            );
+            assert_eq!(
+                kernel
+                    .gwe
+                    .sent_message(outer_id)
+                    .and_then(|send| send.result),
+                None
+            );
+            assert_eq!(
+                kernel
+                    .gwe
+                    .sent_message(inner_id)
+                    .and_then(|send| send.result),
+                None
+            );
             assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
             assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 0);
-            assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(outer_id));
+            assert_eq!(
+                kernel.gwe.active_sent_message_id(receiver_thread),
+                Some(outer_id)
+            );
             assert_eq!(kernel.gwe.active_sent_message_id(sender_thread), None);
             assert_eq!(cpu.pending_wndproc_returns.len(), 1);
             assert!(cpu.pending_wndproc_returns[0].send_restore.is_none());
@@ -80322,11 +80363,15 @@ mod unicorn_tests {
                 vec![outer_wait_id, inner_wait_id],
             );
             assert_eq!(
-                kernel.blocked_waiter(outer_wait_id).and_then(|wait| wait.owner_birth),
+                kernel
+                    .blocked_waiter(outer_wait_id)
+                    .and_then(|wait| wait.owner_birth),
                 Some(sender_birth)
             );
             assert_eq!(
-                kernel.blocked_waiter(inner_wait_id).and_then(|wait| wait.owner_birth),
+                kernel
+                    .blocked_waiter(inner_wait_id)
+                    .and_then(|wait| wait.owner_birth),
                 Some(receiver_birth)
             );
             return Ok(());
@@ -80381,8 +80426,15 @@ mod unicorn_tests {
             receiver_handoff.report,
         );
         assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
-        let sender_callback = &cpu.saved_context.as_ref().expect("S inner WNDPROC context").regs;
-        assert_eq!(sender_callback.regs[29], sender_sp - super::WNDPROC_CALL_FRAME_BYTES);
+        let sender_callback = &cpu
+            .saved_context
+            .as_ref()
+            .expect("S inner WNDPROC context")
+            .regs;
+        assert_eq!(
+            sender_callback.regs[29],
+            sender_sp - super::WNDPROC_CALL_FRAME_BYTES
+        );
         assert_eq!(sender_callback.regs[31], super::WNDPROC_RETURN_STUB_ADDR);
         assert_eq!(sender_callback.regs[16], 0xa0a0_0011);
         assert_eq!(sender_callback.hi, 0xa0a0_0022);
@@ -80392,13 +80444,28 @@ mod unicorn_tests {
         assert_eq!(cpu.pending_wndproc_returns.len(), 2);
         let parent = &cpu.pending_wndproc_returns[0];
         assert_eq!(parent.source, "GetMessageW/SentMessage");
-        assert_eq!(parent.resume_import.as_ref().and_then(|resume| resume.sent_message_id), Some(outer_id));
+        assert_eq!(
+            parent
+                .resume_import
+                .as_ref()
+                .and_then(|resume| resume.sent_message_id),
+            Some(outer_id)
+        );
         let callback = &cpu.pending_wndproc_returns[1];
         assert_eq!(callback.source, "BlockedSendMessage/SentMessage");
-        let token = callback.send_restore.as_ref().expect("reciprocal inner token");
-        assert_eq!((token.outer_send_id, token.outer_wait_id), (outer_id, outer_wait_id));
+        let token = callback
+            .send_restore
+            .as_ref()
+            .expect("reciprocal inner token");
+        assert_eq!(
+            (token.outer_send_id, token.outer_wait_id),
+            (outer_id, outer_wait_id)
+        );
         assert_eq!((token.send_id, token.wait_id), (inner_id, inner_wait_id));
-        assert_eq!((token.receiver_birth, token.sender_birth), (sender_birth, receiver_birth));
+        assert_eq!(
+            (token.receiver_birth, token.sender_birth),
+            (sender_birth, receiver_birth)
+        );
 
         // S replies from its real callback, but its blocked outer Send is not
         // a runnable continuation yet. T's inner Send and the outer parent
@@ -80420,17 +80487,41 @@ mod unicorn_tests {
             inner_reply.report
         );
         assert_eq!(cpu.pending_wndproc_returns.len(), 1);
-        assert_eq!(cpu.pending_wndproc_returns[0].source, "GetMessageW/SentMessage");
+        assert_eq!(
+            cpu.pending_wndproc_returns[0].source,
+            "GetMessageW/SentMessage"
+        );
         assert_eq!(kernel.gwe.active_sent_message_id(sender_thread), None);
-        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(outer_id));
-        assert_eq!(kernel.gwe.sent_message(inner_id).and_then(|send| send.result), Some(0x88));
-        assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), None);
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_thread),
+            Some(outer_id)
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(inner_id)
+                .and_then(|send| send.result),
+            Some(0x88)
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(outer_id)
+                .and_then(|send| send.result),
+            None
+        );
         assert!(kernel.blocked_waiter(inner_wait_id).is_some());
         assert!(kernel.blocked_waiter(outer_wait_id).is_some());
         assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
         assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 1);
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]), inner_ids);
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]),
+            inner_ids
+        );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]),
+            outer_ids
+        );
 
         let inner_resume = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -80452,14 +80543,22 @@ mod unicorn_tests {
         assert_eq!(inner_resume.report.start_pc(), Some(inner_return_pc));
         assert_eq!(cpu.saved_context_pc(), Some(inner_return_pc));
         assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
-        let receiver_continuation = &cpu.saved_context.as_ref().expect("T inner Send return").regs;
+        let receiver_continuation = &cpu
+            .saved_context
+            .as_ref()
+            .expect("T inner Send return")
+            .regs;
         assert_eq!(receiver_continuation.regs[2], 0x88);
         assert_eq!(
             receiver_continuation.regs[29],
             receiver_sp - super::WNDPROC_CALL_FRAME_BYTES - 0x20
         );
         assert!(kernel.blocked_waiter(inner_wait_id).is_none());
-        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != inner_wait_id));
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .all(|wait| wait.wait_id != inner_wait_id)
+        );
         assert!(kernel.gwe.sent_message(inner_id).is_none());
         assert!(kernel.blocked_waiter(outer_wait_id).is_some());
         assert_eq!(cpu.pending_wndproc_returns.len(), 1);
@@ -80484,11 +80583,22 @@ mod unicorn_tests {
         );
         assert!(cpu.pending_wndproc_returns.is_empty());
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
-        assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), Some(0x77));
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(outer_id)
+                .and_then(|send| send.result),
+            Some(0x77)
+        );
         assert!(kernel.blocked_waiter(outer_wait_id).is_some());
         assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
         assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
-        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]).is_empty());
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[sender_hwnd])
+                .is_empty()
+        );
 
         // T must park its resumed GetMessage import before S consumes its
         // ready outer result. This is the same next-lease boundary as A10.
@@ -80534,22 +80644,35 @@ mod unicorn_tests {
         assert_eq!(outer_resume.report.start_pc(), Some(outer_return_pc));
         assert_eq!(cpu.saved_context_pc(), Some(outer_return_pc));
         assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
-        let sender_continuation = &cpu.saved_context.as_ref().expect("S outer Send return").regs;
+        let sender_continuation = &cpu
+            .saved_context
+            .as_ref()
+            .expect("S outer Send return")
+            .regs;
         assert_eq!(sender_continuation.regs[2], 0x77);
         assert_eq!(sender_continuation.regs[29], sender_sp);
-        assert_eq!(sender_continuation.regs[31], outer_return_ra);
+        assert_eq!(sender_continuation.regs[31], outer_return_pc);
         assert_eq!(sender_continuation.regs[16], 0xa0a0_0011);
         assert_eq!(sender_continuation.hi, 0xa0a0_0022);
         assert_eq!(sender_continuation.lo, 0xa0a0_0033);
         assert_eq!(sender_continuation.fprs[2], 0x0000_0000_a0a0_0044);
         assert_eq!(sender_continuation.fcsr, 1);
         assert!(kernel.blocked_waiter(outer_wait_id).is_none());
-        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != outer_wait_id));
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .all(|wait| wait.wait_id != outer_wait_id)
+        );
         assert!(kernel.gwe.sent_message(outer_id).is_none());
         assert!(cpu.pending_wndproc_returns.is_empty());
         assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
         assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
-        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd]).is_empty());
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd])
+                .is_empty()
+        );
 
         let no_replay = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -80561,11 +80684,24 @@ mod unicorn_tests {
                 live_pump: true,
             },
         );
-        assert!(no_replay.result.is_ok(), "reciprocal no-replay: {:?}", no_replay.result);
+        assert!(
+            no_replay.result.is_ok(),
+            "reciprocal no-replay: {:?}",
+            no_replay.result
+        );
         assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
         assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 2);
-        assert!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd]).is_empty());
-        assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != outer_wait_id && wait.wait_id != inner_wait_id));
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[sender_hwnd, receiver_hwnd])
+                .is_empty()
+        );
+        assert!(
+            cpu.blocked_wait_threads
+                .iter()
+                .all(|wait| wait.wait_id != outer_wait_id && wait.wait_id != inner_wait_id)
+        );
         Ok(())
     }
 
