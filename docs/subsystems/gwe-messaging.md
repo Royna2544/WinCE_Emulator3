@@ -95,15 +95,15 @@ parent/owner traversal or numeric sent-message process cleanup. The later
 sender gate narrows the latter, not foreign-link recovery, full teardown or
 live-app/CE6 acceptance.
 
-### Proposed host-exit exact-window-set gate (design; not implemented)
+### Bounded host-exit exact-window-set gate (source-tested)
 
 This Stage 3 cut applies the common [exit-effect ownership](../ARCHITECTURE.md)
 contract to the window-target portion of process exit. The stopped
 `mark_process_launch_exited_*` path verifies a canonical `ProcessBirthKey`;
 the current-process pseudo `terminate_process` path also calls the shared
 cleanup but still needs a captured guest caller lease/frame before its whole
-exit can satisfy the anchor. GWES owns the one live-HWND
-selection and exact-set mutation from each window's frozen creation process
+exit can satisfy the anchor. GWES owns the one live-HWND selection and
+exact-set mutation from each window's frozen creation process
 birth; parent and owner links are not target authority. `LegacyUnknown` with a
 captured process birth remains selectable by that birth, while an unbound
 legacy/system window is not guessed from its numeric PID. Keep guest-requested
@@ -131,27 +131,30 @@ target set at its current GWE call point. Do not freeze that public set before
 Kernel's existing `WM_RENDERALLFORMATS`/`WM_DESTROY` callbacks or omit its
 send wakes and framebuffer behavior. Host exit remains a distinct path with
 no synthesized destroy callbacks. Kernel uses the returned set, not a guessed
-descendant list, for
-payload, shell and timer cleanup and tracing. Kernel's separate frozen-birth
+descendant list, for payload, shell and timer cleanup and tracing. Kernel's
+separate frozen-birth
 backing-store list drives restore/discard even for already-dead HWNDs. An
 unknown/mismatched exit birth fails before mutation; no cross-birth parent or
 owner edge expands the selected set. Preserve the existing sent-message
 sender-exit gate, one-shot cancellation/reply behavior, and guest API return
 behavior; do not add callback synthesis or a scheduling policy in this cut.
 
-Expected-red controls first: strand an A-birth HWND/backing under a recycled
-PID, then create B-birth windows and fixture-only cross-birth **parent** and
-**owner** links from B to A in separate cases. B's real host exit must retire
+The preserved pre-fix expected reds created live A- and B-birth windows with
+fixture-only cross-birth **parent** and **owner** links from B to A in separate
+cases. The earlier independent-window gate covers recycled-PID A/B identity;
+these new controls exercise link traversal. B's real host exit must retire
 B's complete set while A's HWND, frozen owner, backing, A-targeted queued
 work, timers and typed payloads remain unclaimed. A-authored work targeting a
-B window must still be canceled when that receiver is destroyed. A same-birth
-child/owned-window exit
-control must still retire the full B set, and a normal guest `DestroyWindow`
-control must still recurse through its valid same-birth subtree. Check the
-stopped host-exit path, and separately check the pseudo path's exact target
-selection and no-birth refusal without claiming its caller authority; preserve
-the pre-fix red log and then run focused, full release-feature, no-default and
-alternate-feature checks on a frozen source. Tests prove identity isolation,
+B window must still be canceled and its exact SendReply waiter woken when that
+receiver is destroyed. A same-birth child/owned-window exit control retires
+the full B set, including payload, shell and timer state; normal guest
+`DestroyWindow` still recurses through its valid same-birth subtree. The
+pseudo-path control proves exact window selection, not its caller authority.
+The [receipt](../../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
+preserves the parent/owner and SendReply expected reds, source patch, hashes
+and complete final-suite logs. Final 18-block suites passed release
+**2,072/0/9 ignored** and no-default **1,500/0/3 ignored**; Unicorn-only and
+desktop-without-trace checks passed. This proves bounded identity isolation,
 not CE6 permission for a cross-process parent/owner topology.
 
 [O-G4](../DECISIONS.md) remains open for CE6 topology and the fate of a
@@ -163,8 +166,7 @@ stopped path mutates windows/backing before its process-completion step can
 still fail, and ignores framebuffer-restore success. This gate records those
 risks and does not claim atomic whole-process exit or framebuffer rollback;
 they need a separate preflight/recovery gate. This source gate neither accepts
-full Stage 3
-nor authorizes a writable-mount iNavi run.
+full Stage 3 nor authorizes a writable-mount iNavi run.
 
 ### Bounded sender-owned send transaction (source-tested)
 
@@ -190,17 +192,18 @@ remain `SystemNoWait`, without sender wait/result ownership. Host/device
 notifications keep their system origin. The final 18-group suites passed
 release **2,067/0/9 ignored** and no-default **1,495/0/3 ignored**. Direct
 WndProc dispatch, conditional system-origin device broadcasts from storage
-exports, receiver-side cross-process result writes, recursive foreign
-parent/owner traversal, general stale-native mutation safety, full Stage 3
+exports, receiver-side cross-process result writes, general stale-native
+mutation safety, full Stage 3
 and live-app behavior remain separate gates. The local CE6 process-exit
 send-cancellation rule is not established from `C:\WINCE600` or device dumps;
 these controls prove emulator birth-identity safety, not CE6 parity.
 
 Explicit guest `DestroyWindow` still has recursive child/owner semantics.
-Host-exit recursion through a foreign link is a separate target-selection
-question under [O-G4](../DECISIONS.md); a cross-birth parent/owner survival
-fixture is synthetic safety evidence, not CE6 parity. Do not globally remove
-normal `DestroyWindow` recursion to make such a fixture pass.
+The bounded exact-window host-exit gate above protects its tested foreign
+links; [O-G4](../DECISIONS.md) still asks whether such topology is valid in
+CE6 and how a surviving foreign window's link should behave. The cross-birth
+survival fixture is synthetic safety evidence, not CE6 parity. Normal
+`DestroyWindow` recursion was not removed to make it pass.
 
 ## Failure and lifetime rules
 
