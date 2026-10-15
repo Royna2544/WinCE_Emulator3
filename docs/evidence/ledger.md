@@ -1826,6 +1826,31 @@ birth-filter recursive GWE foreign parent/owner traversal or numeric
 sent-message sender cleanup. There was no iNavi run, writable-mount backup or
 guest write, LAN debug session, full Stage 3 acceptance or CE6 parity claim.
 
+## Sender-ownership source gate (2026-10-15, executed offline)
+
+The [expected-red receipt](../../evidence/stage3-sender-birth-20261015/red.receipt.md)
+preserves the test-first queued, active and raw stale-caller failures with
+attempt-numbered hashes. Its first active attempt failed fixture setup; later
+attempts reached the bug. The [final receipt](../../evidence/stage3-sender-birth-20261015/validation.receipt.md)
+seals Git HEAD `e93922f543de4623f7495b904a1655ecda8b4aac` plus one
+uncommitted test-only non-hung timing correction, lists SHA-256 for every
+tested source/test file and every failed/passing raw log, and records the
+three enabled original red controls. Independent producer/fixture/native
+reviews preceded the final validation. Full offline suites passed release
+**2,067/0/9 ignored** and no-default **1,495/0/3 ignored** across 18 groups
+each; native-feature library tests passed **1,074/0/6 ignored**. Earlier
+native, legacy-fixture and near-threshold failures remain in that receipt,
+not overwritten by the final pass.
+
+This bounded gate validates exact sender-birth ownership of queued
+Send/Timeout and pre-entry guards for the identified guest no-wait producers.
+The stranded prior-birth send is synthetic safety evidence, not normal exit
+behavior. Direct WndProc dispatch, conditional system-origin storage/device
+broadcasts, receiver-side cross-process result writes, recursive foreign GWE
+links, CE6 parity, full Stage 3 and live iNavi remain open. There was no
+emulator run, writable-mount operation, LAN session, footprint or latency
+measurement.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

@@ -91,10 +91,12 @@ reciprocal forms, legacy numeric-only HWND ownership, post-wake MsgWait,
 and live-iNavi behavior remain open. Ineligible blocked reciprocal sends fail
 closed with terminal `Backend`, a live-run risk; no app or mount run was made.
 
-The later bounded [host-exit source gate](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
-selects direct HWNDs and backing stores by verified process birth. It does not
+The bounded [host-exit source gate](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+selects direct HWNDs and backing stores by verified process birth. It did not
 birth-filter sent-message sender cleanup or recursive foreign window links;
-the target exit-effect contract below is not implemented by that gate.
+the subsequent [sender-ownership gate](../evidence/stage3-sender-birth-20261015/validation.receipt.md)
+narrows the tested queued-send path only. The complete target exit-effect
+contract below remains open.
 
 ## A1. Machine authority
 

@@ -90,70 +90,38 @@ store to survive B's later exit after PID reuse. The normal reused-PID and
 no-birth controls passed; the 18-group broad suites passed release
 **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**
 ([validation receipt](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
-This does not birth-filter `destroy_window`'s recursive parent/owner traversal
-or numeric sent-message process cleanup. Foreign-link recovery, full host
-teardown, exit capture retirement and live-app/CE6 acceptance remain open.
+The earlier host-exit gate did not birth-filter `destroy_window`'s recursive
+parent/owner traversal or numeric sent-message process cleanup. The later
+sender gate narrows the latter, not foreign-link recovery, full teardown or
+live-app/CE6 acceptance.
 
-### Next proposed gate: sender-owned process-exit send cleanup (not implemented)
+### Bounded sender-owned send transaction (source-tested)
 
-The [A2 exit-effect contract](../ARCHITECTURE.md) requires one canonical
-exiting birth. Today `SentMessage` freezes the receiver birth but stores only
-numeric sender thread/process IDs; `CeKernel::begin_cross_thread_send_message_w`
-queues first and then stamps the mutable selected PID. Host exit verifies its
-process birth for window selection but calls numeric
-`terminate_sent_messages_from_process` and
-`terminate_sent_messages_from_sender`. The earlier independent-window pass
-does not cover those sends.
+The [sender-ownership receipt](../../evidence/stage3-sender-birth-20261015/validation.receipt.md)
+seals the tested Send/Timeout transaction from captured raw/native caller
+birth through atomic GWES publication, exact process/thread-birth exit
+selection, and native wait/result/re-entry checks. `SentMessage` has one
+immutable sender owner: `Birth`, explicit fixture-compatible `LegacyUnknown`,
+or `SystemNoWait`. Numeric sender IDs are derived, not a second owner. An
+invalid captured birth fails before a send ID, queue/status/wake, trace or
+result-pointer effect. Active cleanup detaches the sender result pointer while
+allowing the receiver callback to finish. The synthetic stranded-A queued and
+active fixtures prove B's reused PID cannot cancel A; they do not claim normal
+A exit leaves a stranded send. All three original expected-red controls are
+enabled after the fix.
 
-The owning GWES send record should retain an immutable sender process birth
-obtained at admission from an authenticated caller thread/frame and its
-creation process, not inferred from the latest selected PID or caller-supplied
-TID alone. The native caller has a captured `NativeCurrentThread` birth and
-raw COREDLL dispatch has `CoredllRawContext.caller_birth`; their Send/Timeout
-paths must carry and validate those identities rather than discarding them.
-Kernel/native/API adapters request the checked transition; GWES owns the send
-ID, queue, active-receiver phase and reply/cancellation effects. The production
-admission path must prepare the owner and destination before publishing the
-send, so a missing or mismatched
-caller birth cannot leave an unowned queued send, wake, status bit or result
-pointer. Direct numeric-only fixture/compatibility records remain explicitly
-unknown; [O-G5](../DECISIONS.md) is open rather than guessing their birth.
-
-The connected consumer inventory includes native sent-message authorization
-that still compares only `sender_process_id` with a numeric PID. Birth-stamped
-admission without migrating those result/re-entry checks would leave a stale
-acceptance route, so they must either require exact provenance or fail closed
-in this gate. Raw Send/Timeout and the Kernel helper must share the same
-prepared identity rule; a test-only numeric adapter cannot become production
-authority.
-
-The first fixture in this bounded gate isolates the process selector: queue a
-fixture-created send from A's canonically registered primary thread to a
-separate live receiver. Retire A's canonical thread/process through test-only
-HandleTable operations that deliberately bypass normal GWES cleanup, then
-reuse only A's PID for B with a distinct TID.
-Queue B's send to the same receiver and complete B through normal host exit.
-The expected red is that numeric process cleanup removes both sends; the
-required green preserves A's stranded send and retires B's, without touching
-the receiver HWND. This is a defensive stale-artifact fixture, not a claim
-that ordinary A exit strands sends. Name the raw log before its first run and
-never overwrite or rename it. Add normal same-birth queued cleanup and
-active-receiver detachment controls, including a replied timeout send whose
-result pointer must be detached on owner exit. For the process-selector
-fixture, assert any cancellation, reply or wake by exact send ID: none affects
-stranded A, and each selected B send has at most one such effect. Current GWE
-active-send cleanup marks the sender terminated while allowing the callback
-to finish; queued sends are removed.
-Separately, inject stale A caller birth into raw Send/Timeout after PID/TID
-reuse and require rejection before any B-owned send ID, queue/status/wake,
-trace or result effect. A normal same-birth caller remains a positive control.
-The user expanded this gate to exact sender-birth admission, publication,
-process/thread exit cleanup and native result/re-entry authorization together.
-The active result pointer must be cleared when its sender is detached;
-receiver-side cross-process address-space writes still need a separate gate.
-The local CE6 process-exit send-cancellation rule has not yet been established
-from `C:\WINCE600` or the dumped device binaries; these controls establish
-emulator birth-identity safety, not CE6 cancellation parity.
+The same bounded source gate preflights identified guest-originated no-wait
+producers before raw side effects: accelerator command, delayed clipboard
+render, and time/display/settings/font broadcasts. Their queued messages
+remain `SystemNoWait`, without sender wait/result ownership. Host/device
+notifications keep their system origin. The final 18-group suites passed
+release **2,067/0/9 ignored** and no-default **1,495/0/3 ignored**. Direct
+WndProc dispatch, conditional system-origin device broadcasts from storage
+exports, receiver-side cross-process result writes, recursive foreign
+parent/owner traversal, general stale-native mutation safety, full Stage 3
+and live-app behavior remain separate gates. The local CE6 process-exit
+send-cancellation rule is not established from `C:\WINCE600` or device dumps;
+these controls prove emulator birth-identity safety, not CE6 parity.
 
 Explicit guest `DestroyWindow` still has recursive child/owner semantics.
 Host-exit recursion through a foreign link is a separate target-selection

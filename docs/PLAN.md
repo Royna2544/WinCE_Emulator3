@@ -82,26 +82,19 @@ frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
-Current bounded Stage 3 source gate: the [host-exit receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
-source-tests direct window/backing selection and the no-birth pseudo-exit fence,
-not complete host teardown. The sender-birth cut inventories synchronous
-queued-send admission and cancellation through raw COREDLL, native and Kernel
-paths, identifies the captured canonical caller/lease that can authorize an
-immutable sender birth, and reviews the legacy-unknown policy against
-[anchor A2](ARCHITECTURE.md). Preserved attempt-numbered expected-red controls
-include: (1) a fixture-only stranded A queued send, a later B
-reusing A's PID but not its TID, and B exit, where A's send must remain while
-B's is retired; (2) stale A caller provenance at raw Send/Timeout admission
-after PID/TID reuse, which must publish no B-owned send or wake. Preserve a
-normal same-birth B cleanup control and queued-versus-active behavior,
-including an already-replied active timeout result pointer. The user expanded
-this gate to one coherent sender-owned transaction: captured-birth admission,
-atomic queue ownership, birth-select exit cleanup, and exact native
-result/re-entry authorization must pass together. Legacy numeric fixtures
-remain explicit and cannot authorize a birth-owned send. Receiver-side
-cross-process result writes, foreign window traversal, CE6 cancellation parity,
-and full Stage 3 remain separate gates. Independent design and source review
-precede code; a focused green alone is not acceptance. No live run is approved.
+The bounded [host-exit source gate](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+selects direct windows/backing by process birth and fences a no-birth pseudo-exit.
+The subsequent [sender-ownership source gate](../evidence/stage3-sender-birth-20261015/validation.receipt.md)
+passed captured-birth Send/Timeout admission, atomic birth-owned publication,
+exact sender process/thread exit selection, native wait/result/re-entry checks,
+and pre-entry guards for the identified guest no-wait message producers. The
+three preserved sender expected-red controls are now enabled; release
+**2,067/0/9 ignored** and no-default **1,495/0/3 ignored** passed across 18
+groups each. `LegacyUnknown` remains explicit fixture compatibility, not
+production birth authority. Direct WndProc dispatch, receiver-side
+cross-process result writes, conditional system-origin device broadcasts,
+foreign GWE window traversal, CE6 cancellation parity, full Stage 3 and live
+iNavi remain separate gates. No live run is approved by either source gate.
 
 Stage 7 budgets are a design gate, not values inferred from the current
 splash-only E-38 observation. Before calling memory or responsiveness "small"
@@ -282,9 +275,11 @@ close only their named gates, not Stage 2 or live acceptance.
   controls; release **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**
   across 18 groups each;
   [receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
-  Full owner-filtered host teardown remains open because GWE recursive foreign
-  parent/owner links and numeric sent-message sender cleanup lack birth proof;
-  the broad passes do not establish live-app behavior or CE6 parity.
+  At that earlier host-exit seal, recursive foreign parent/owner links and
+  numeric sent-message sender cleanup lacked birth proof. The later bounded
+  [sender gate](../evidence/stage3-sender-birth-20261015/validation.receipt.md)
+  addresses the tested queued-send path; full owner-filtered host teardown,
+  live-app behavior and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
