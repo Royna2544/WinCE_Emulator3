@@ -4,6 +4,20 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Intermittent host test-thread stack overflow on the direct visible
+  WINDOWPOS payload path:** the release-feature broad attempt 02 reported
+  `guest_thread_stack_tests::direct_visible_message_payload_windowpos_matches_raw_and_mips_reads`
+  overflowing its test-thread stack, then exited `0xc0000005`
+  ([raw log](evidence/stage2-writable-image-native-failure-20261016/broad-release-attempt02.raw.log)).
+  The exact isolated attempt 01, serial broad attempt 03, and default broad
+  retry 04 passed the same test, so neither a deterministic depth nor a
+  cause is established. The test clones a full `CeKernel` for raw Get/Peek
+  comparison and also exercises the shared native callout/payload path;
+  which part consumes the stack is unknown. The existing release EXE's PE
+  header reserves 1 MiB for its main stack, but source-level stack sizing
+  and live-run exposure have not been established. Do not mask the defect by
+  increasing the test stack; isolate its stack demand and remove any
+  unnecessary large by-value or recursive path before live acceptance.
 - **Native memory performance remains a live-run gate:** a synthetic
   8,192-page (32-MiB) fixed heap originally took 78,689.550 ms to map and
   another 75.753 s to close its fresh owner. Fixed private heap/stack pages
