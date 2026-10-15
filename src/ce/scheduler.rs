@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::ce::{
-    object::{ProcessBirthKey, TaskWaitPin, ThreadBirthKey},
+    object::{ProcessBirthKey, TaskFrameKey, TaskFrameRef, TaskWaitPin, ThreadBirthKey},
     task_wait::{TaskWaitRecord, TaskWaitStore, TickDeadline},
 };
 
@@ -116,6 +116,9 @@ pub struct SchedulerBlockedWait {
     /// Exact owner identity when Kernel registered this frame for a live task.
     /// Standalone/host compatibility wait records have no known birth.
     pub owner_birth: Option<ThreadBirthKey>,
+    /// Immutable locator for a canonical Task/Frame. Only migrated finite
+    /// Sleep waits carry one; mutable phase lives in HandleTable.
+    pub frame_ref: Option<TaskFrameRef>,
     pub thread_handle: u32,
     pub wait_handles: Vec<u32>,
     pub wait_keys: Vec<WaitObjectKey>,
@@ -125,6 +128,25 @@ pub struct SchedulerBlockedWait {
     pub kind: SchedulerBlockedWaitKind,
     pub wait_started_ms: u32,
     pub timeout_ms: u32,
+    sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerPublishError {
+    WaitIdExhausted,
+    WaitSequenceExhausted,
+    DuplicateWaitId { wait_id: u64 },
+}
+
+impl std::fmt::Display for SchedulerPublishError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReservedWaitSlot {
+    id: u64,
     sequence: u64,
 }
 
@@ -309,6 +331,57 @@ impl Scheduler {
         )
     }
 
+    /// Publish the first migrated Task/Frame family. The caller preflights
+    /// the canonical frame key and activates the returned reference in
+    /// HandleTable before exposing it to native scheduling.
+    pub(crate) fn try_register_finite_sleep_wait(
+        &mut self,
+        frame_key: TaskFrameKey,
+        thread_handle: u32,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> std::result::Result<TaskFrameRef, SchedulerPublishError> {
+        let slot = self.try_reserve_wait_slot()?;
+        let frame_ref = TaskFrameRef::new(frame_key, slot.id)
+            .expect("checked scheduler ID must be a nonzero TaskFrameRef wait ID");
+        self.insert_wait_record(SchedulerBlockedWait {
+            id: slot.id,
+            thread_id: frame_key.owner_birth().thread_id(),
+            owner_birth: Some(frame_key.owner_birth()),
+            frame_ref: Some(frame_ref),
+            thread_handle,
+            wait_handles: Vec::new(),
+            wait_keys: Vec::new(),
+            pinned_targets: Vec::new(),
+            kind: SchedulerBlockedWaitKind::Sleep,
+            wait_started_ms,
+            timeout_ms,
+            sequence: slot.sequence,
+        });
+        Ok(frame_ref)
+    }
+
+    /// IDs and tie-breaker sequence values are monotonic within this machine
+    /// instance. Exhaustion is a failure, never wrap/replacement of a live ID.
+    fn try_reserve_wait_slot(
+        &mut self,
+    ) -> std::result::Result<ReservedWaitSlot, SchedulerPublishError> {
+        let id = self
+            .next_wait_id
+            .checked_add(1)
+            .ok_or(SchedulerPublishError::WaitIdExhausted)?;
+        let sequence = self
+            .next_wait_sequence
+            .checked_add(1)
+            .ok_or(SchedulerPublishError::WaitSequenceExhausted)?;
+        if self.blocked_waits.contains_key(&id) {
+            return Err(SchedulerPublishError::DuplicateWaitId { wait_id: id });
+        }
+        self.next_wait_id = id;
+        self.next_wait_sequence = sequence;
+        Ok(ReservedWaitSlot { id, sequence })
+    }
+
     /// One insertion transaction; its optional owner is private to the
     /// scheduler so no external producer can silently publish unknown.
     fn insert_blocked_wait_with_keys_and_pins(
@@ -340,13 +413,17 @@ impl Scheduler {
                 "wait record TID does not match owner birth"
             );
         }
-        self.next_wait_id = self.next_wait_id.wrapping_add(1).max(1);
-        self.next_wait_sequence = self.next_wait_sequence.wrapping_add(1);
-        let id = self.next_wait_id;
+        // Legacy registration keeps its infallible signature for fixtures;
+        // unlike the old wrapping allocator it cannot replace a live wait.
+        // Native finite Sleep uses the typed path above.
+        let slot = self
+            .try_reserve_wait_slot()
+            .expect("scheduler wait ID or sequence exhausted");
         let wait = SchedulerBlockedWait {
-            id,
+            id: slot.id,
             thread_id,
             owner_birth,
+            frame_ref: None,
             thread_handle,
             wait_handles,
             wait_keys,
@@ -354,8 +431,17 @@ impl Scheduler {
             kind,
             wait_started_ms,
             timeout_ms,
-            sequence: self.next_wait_sequence,
+            sequence: slot.sequence,
         };
+        self.insert_wait_record(wait)
+    }
+
+    fn insert_wait_record(&mut self, wait: SchedulerBlockedWait) -> u64 {
+        let id = wait.id;
+        self.blocked_waits
+            .insert_new(id, wait)
+            .expect("reserved scheduler wait ID was unexpectedly reused");
+        let wait = self.blocked_waits.get(&id).expect("inserted wait missing");
         for key in &wait.wait_keys {
             self.wait_queues.entry(*key).or_default().push_back(id);
         }
@@ -389,7 +475,6 @@ impl Scheduler {
                 .or_default()
                 .push_back(id);
         }
-        self.blocked_waits.insert(id, wait);
         self.stats.waiter_register_count += 1;
         self.stats.max_registered_waits = self
             .stats

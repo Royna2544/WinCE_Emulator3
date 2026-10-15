@@ -92,6 +92,19 @@ impl<W> Default for TaskWaitStore<W> {
 }
 
 impl<W: TaskWaitRecord> TaskWaitStore<W> {
+    /// Production insertion never replaces an earlier wait (or silently drops
+    /// its target pins). A duplicate returns the uncommitted record intact.
+    pub(crate) fn insert_new(&mut self, wait_id: u64, record: W) -> std::result::Result<(), W> {
+        assert_eq!(wait_id, record.wait_id(), "wait record identity mismatch");
+        if self.owners.contains_key(&wait_id) {
+            return Err(record);
+        }
+        let owner = WaitOwnerKey::for_record(&record);
+        self.tasks.entry(owner).or_default().insert(wait_id, record);
+        self.owners.insert(wait_id, owner);
+        Ok(())
+    }
+
     /// Match the old BTreeMap replacement contract while keeping task indexes
     /// coherent. This does not authorize wait-ID reuse or add ABA protection.
     pub(crate) fn insert(&mut self, wait_id: u64, record: W) -> Option<W> {
