@@ -4,232 +4,41 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-15 A12 reciprocal Send bounded source/test gate (no app run)
+## 2026-10-15 Live-run preparation, historical reds and design refresh
 
-The strict birth-owned, same-process plain S→T→S `SendMessageW` shape now has a
-bounded [A12 source seal](evidence/scheduler-source-cut-a12/source-seal.md) and
-[validation receipt](evidence/scheduler-source-cut-a12/validation.production.receipt.md).
-On unchanged formatted `unicorn.rs` SHA-256
-`4A08AFB9FA4AE0072E145DA1588673997D5BBD3D79700B661A2B79EB45E90E07`,
-the 18-group release-feature suite passed **2,047/0/9 ignored** and the
-18-group no-default suite passed **1,482/0/3 ignored**. Post-format focused
-controls passed native same-process **6/6**, native-send-to **4/4**, and
-saved-context **6/6**; `cargo fmt --check` and scoped diff check passed.
+The A12, A10 and finite-Sleep gates are in the Stage 3 list below. The
+detailed per-section text before this condense is at
+`git show 75dd5560:PROGRESS.md`.
 
-The real-MIPS reciprocal control leaves S's outer send/wait parked while T
-wakes from finite Sleep, takes that send through its real `GetMessageW`, and
-issues an inner Send back to S. A blank native lease enters S's WNDPROC on S's
-birth/stack without replay. S returns `0x88` to T's inner Send, T returns
-`0x77` to S's outer Send, and both exact waits/records retire once. The final
-S continuation has the exact import return PC/RA and preserves its SP, S0,
-HI/LO, FPR2 and FCSR; a
-short further lease creates no third send. A separate wrong-parent-birth
-control requires typed pre-entry `Backend` refusal with the two original send
-IDs/results and native/scheduler waits intact. The
-[pre-format focused history](evidence/scheduler-source-cut-a12/validation.focused.receipt.md)
-is separately pinned and is not evidence for the final formatted source.
-
-This is only the strict two-send shape: third concurrent senders, timed or
-result-pointer sends, a second pending callback/deeper nesting and
-cross-process pairs are not supported by this handoff and can fail closed
-with terminal `Backend`. The historical A11b replay is repaired for this
-bounded source path, not proof of full Stage 3, CE parity or live iNavi. The
-user skipped the a04 app run; A12 made no mount backup or guest launch.
-
-## 2026-10-15 Historical A11b reciprocal Send next-lease expected red (test only)
-
-The first [A11 run](evidence/scheduler-source-cut-a11-reciprocal-red/validation.receipt.md)
-used an invalid same-call S-WNDPROC timing assertion and remains preliminary
-historical evidence. The corrected, ignored real-MIPS
-[A11b next-lease fixture](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
-is a confirmed source-control red, not a live-app result. Its final test-only
-`unicorn.rs` SHA-256 is
-`8C483A6CA78C3D375AF3DC6D3A99AC1B8C62424EA6660293ECB6EBD4A5465A14`;
-the patch against pre-fixture A10 source SHA-256 is
-`F87BE1C54E3DE866DCC1791BE23A6B87201FB59B40B44E5E8E3FA6AA5E0CD15F`.
-The first lease reached T's inner `SendMessageW` trap and stopped safely with
-outer/inner GWE send IDs 1/2 and matching scheduler/native waits 2/3 intact.
-On one fresh bounded lease, execution resumed T at that same import and made
-third send ID 3 plus duplicate native wait 4, instead of entering S's WNDPROC
-on S's stack. The focused test exited 101 at its exact no-replay assertion;
-the production failure boundary was neither a fixture setup nor same-call
-timing failure. A12 subsequently repaired this bounded next-lease path and
-unignored the full-return control; A11b remains historical red evidence, not
-the current source status. No mount backup or live iNavi run followed A11b.
-
-## 2026-10-15 Connected A→B Send/GetMessage bounded source gate (no app run)
-
-The ordinary same-process A→B `SendMessageW` into B's birth-verified blocked
-`GetMessageW` now has a bounded A10 source/test gate. The exact
-[source seal](evidence/scheduler-source-cut-a10/source-seal.md) pins HEAD
-`d6013e7996271be811a95eb6215299089a8f7414` plus a two-file source/test
-patch SHA-256 `AF497AE8FB4B9A0F19D76715FA94FA9E747FD8B21A8848832AAB80D0DB7F8C49`.
-Both 18-group broad suites passed on that source: release-feature **2,045
-passed, 0 failed, 9 ignored** and no-default **1,482 passed, 0 failed,
-3 ignored**. HEAD, patch, Rust source and pinned toolchain hashes matched before
-and after both suites and additional checks. Unicorn-only and desktop/no-trace
-checks and the release build exited 0; selected EXE/PDB copies are SHA-preserved
-in A10 evidence ([validation receipt](evidence/scheduler-source-cut-a10/validation.receipt.md)).
-
-The original A→B expected reds and ordinary queued-send receiver-exit/TID-reuse
-red are historical. A07 broad suites passed on prior source; A08 exposed
-sender-restore corruption and its repair passed focused Send **30/30** and
-Kernel **1/1** on the prior A09 source. The sealed A09 release-feature run
-failed four existing same-process Send controls (**1,048 passed, 4 failed,
-6 ignored**); no-default was not run
-([A09 receipt](evidence/scheduler-source-cut-a09/validation.receipt.md)).
-Strict extra-lease controls then showed that saved-context recovery could
-revive B despite its separate blocked-GetMessage slot. A10 checks the exact
-GetMessage/native wait and saved/live birth before recovery, rejects a known
-stale saved birth before native restore, and resumes A on the next bounded
-lease with its exact reply/wait. Only the runnable-receiver control checks a
-later no-replay slice; the three finite-Sleep controls stop at A's continuation.
-This is not full Stage 3 or live-iNavi acceptance. Reciprocal shapes beyond
-A12's strict two-send case, cross-process parked-sender restore, legacy
-numeric-only HWND ownership,
-post-wake MsgWait, `SMF_TIMEOUT` last-error semantics and same-birth orphaned
-GetMessage payloads with a missing scheduler wait remain separate boundaries.
-
-## 2026-10-15 TaskFrame finite-Sleep scheduler source cut (no app run)
-
-The first machine-owned finite-Sleep `TaskFrameRef` source cut is resealed at
-HEAD `6626e74d`. `ThreadRecord` owns its mutable frame phase; scheduler waits
-and native register payloads carry exact-birth/frame locators. A sleeping
-receiver's same-process sent message stays queued until real guest retrieval:
-real-MIPS `GetMessageW`, `PeekMessageW(PM_REMOVE)` and `GetMessageWNoWait`
-controls enter WNDPROC and return its `0x77` result to the blocked sender.
-Pre-deadline idle reports `NoAttempt` instead of replaying S's send. Focused
-controls passed finite-Sleep **17/17**, native same-process **4/4** and native
-stale-HWND **1/1**; KData activation failures cancel only the new frame/wait,
-and an old birth-owned HWND cannot borrow a replacement TID's frame.
-
-The first release attempt was diagnostic (**1,032/2/6 ignored**): two hidden-
-message fixtures lacked authentic saved-context births; they were repaired
-without relaxing the production guard, then source was resealed. On the
-resealed HEAD, full release passed **2,025/0/9 ignored** and no-default
-**1,472/0/3 ignored** across 18 result blocks each. Unicorn-only and
-Unicorn+desktop/no-trace checks, the release build, format/diff checks and
-post-build source-hash verification passed
-([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
-This is a source/test gate, not full Stage 3 or a live-app result. At that seal,
-reciprocal cross-Send after wake and post-wake MsgWait were untested. A11b later
-reproduced a reciprocal source-control no-replay failure; A12 later repaired
-only its strict two-send source path. Post-wake MsgWait remains untested, and
-neither path has a live-app result. The user skipped the
-a04 run; no new adjacent mount backup or iNavi launch followed this scheduler
-cut.
-
-## 2026-10-15 Historical receiver-context Send expected reds (no app run)
-
-Before the connected cut, three ignored real-MIPS controls reached same-process
-cross-thread send: ordinary A→B after B blocks in verified-birth
-`GetMessageW`; a 64-instruction slice stop *inside* B's WNDPROC; and
-A→displaced C after C and B both block in GetMessage. Each failed at the
-native slice-end guard with
-`Backend("native staged context has stale or unverified thread birth")` before
-receiver-stack/return assertions. The [test-only receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
-preserves distinct a02–a04 source patches, hashes and complete targeted raw
-logs. Historical a01 has an exact patch and excerpt only; its complete raw
-output was not retained and its waiter assertion was corrected in a02. The
-file originally named `expected-red-a01.raw.log` was mislabeled a02 output;
-its exact bytes are retained once under the a02 name, with the move and
-temporary duplicate/removal recorded in the receipt. The
-a03 report confirms a real count stop within B's WNDPROC; a04 proves the
-target C was displaced before A sent, not that the ready-ID bridge selected
-the wrong receiver. Source inspection shows the old in-hook shortcut derives
-callback SP from A's live registers, but no red directly measured B's SP or
-proved a reciprocal deadlock.
-
-Plan-first review selected queue→birth-verified GetMessage resume at a slice
-boundary instead of an in-hook TID/register relabel. At that pre-repair point,
-the connected cut still needed frozen ordinary receiver birth, old-birth exit
-retirement, exact send-ID completion and checked receiver/sender restoration.
-An ignored
-[receiver-exit/TID-reuse Kernel control](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
-failed as expected: B-prime took B's queued send while A had no failure
-result. These receipts preserve historical expected-red evidence, not A10's
-passing source/test status. No reciprocal fixture or iNavi launch was
-established by them.
-
-## 2026-10-15 Architecture and measurement design refresh (no source/run)
-
-The common [Stage 7 plan](docs/PLAN.md) now requires reviewed, device- and
-interaction-grounded footprint/responsiveness budgets before “small” or “fast”
-acceptance; the two-second frame observer currently supplies bounds, not exact
-visual lag. [App evidence](docs/app-evidence-lane.md) and
-[verification](docs/subsystems/verification.md) point to the a04 script-only
-seal and preserve its no-backup/no-run/no-approval limit. The raw-NMEA payload
-is new, not an exact E-38 input match.
-
-The proposed [event-to-frame lineage gate](docs/subsystems/remote-observability.md)
-separates host ACK, machine adoption, guest dispatch/read, and a machine-sequenced
-frame commit; a later changed image alone cannot prove input causation. The
-[finite-Sleep Task/Frame plan](docs/subsystems/tasks-scheduler.md) now uses
-CE-reachable sent-message deferral and GetMessage→WNDPROC→Sleep continuation
-controls. The earlier two-simultaneous-Sleeps-on-one-thread expected red was
-withdrawn after local CE6 source review: positive Sleep blocks its caller and
-does not dispatch a WNDPROC. These are design/test specifications only; no
-Rust/script change, new native test, backup or guest run followed this refresh.
-
-The user then chose to **skip the a04 run and begin the scheduler source cut**
-(reply to `call_49d1b609465a4e668da30a31361beb44`). No new mount backup or
-guest launch was authorized by that choice. Once the cut changes source, a04
-is historical evidence only; any later live attempt needs a fresh source/build
-seal and a new specific approval covering its backups and bounded run.
-
-## 2026-10-15 Live-run preparation and aborted backup (no app run)
-
-The repaired pre-watchdog D: source had a [22-file script-only a02 seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
-(SHA-256 `1DC1537217C621EBD1B8C2D5E682C50B9CFA6FA131D22CC3202F54C7C5651F97`)
-and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
-(SHA-256 `A3746E1729186997CC684030E5E5BA772A1A3038132F49E5BAE9A04C6A21D580`).
-The W-B1c-scoped patch is SHA-256
-`8CF8CA60072D4F0ECDA8B21D5400A6B00F25344671D8082E374145F19CDAD18C`.
-Its [offline script gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-offline-gate.raw.txt)
-passed 123 preflight, 40 runner, 14 backup, 9 observer and atomic JSON overwrite
-controls. Rust/Cargo and `.gitattributes` are unchanged from the prior clean
-build; its preserved EXE/PDB pair and matching RSDS are carried forward, **not
-rebuilt**. A02 and interim a01 are now historical and **not live-usable** because
-the runner has changed again; the earlier
-[21-file seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-and its 97/40/14/9 offline gate remain historical evidence. The pre-run Rust
-telemetry gate passed 1,996/0/9 release and 1,456/0/3 no-default tests, plus
-two alternate feature checks. The narrow guest stable-page budget and
-per-server summary stamp remain source-tested, not live acceptance.
-
-Approval `call_9b35e9d31fdf402ea082a3eb6a40ae16` started an adjacent ZIP
-backup, but the old `File.Replace` helper failed after verifying only the SD
-archive. The [aborted-backup disposition](evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)
-records its 5,973,898,396 bytes and SHA-256
-`6032F822551CFB5F28ED079CB5B41CB02B1585F8AFF16EA303B54A74B0C2C949`;
-no ResidentFlash or EmulatorRoot ZIP, completed triplet, runner or guest launch
-followed. The incomplete SD ZIP remains adjacent and cannot be reused. The
-approval was withdrawn/void; a deny-only `withdrawn` row brought both
-byte-identical ledgers to seven rows (SHA-256
-`53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`).
-See the [ledger](docs/evidence/ledger.md) for the evidence chain and limits.
-A new, distinct approval is required before any further backup or launch.
-The current [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json)
-(SHA-256 `C495AB5324BABB1DCF252B8DCCB6A0B5EC4A58C3D04632E3728D39C6AFFA376C`),
-[full patch](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch)
-(SHA-256 `B9FBE5F1DA42453BE8213D2FD45B4553126B62F9641A2003FEB4D2FC26C35CCB`)
-and [script-only build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
-(SHA-256 `3C84522E0D5DF2B6B0BA7BFD8DA8BB14747E4270BDB93BBA61C058D0F2B1ACFE`)
-bind the unchanged clean-built EXE/PDB to the new scripts. Intermediate a03
-is also superseded, not live-usable. The [a04 offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
-(SHA-256 `759017B61C36897C0FDCE658003AED41E450B0B573894245B2F496DDBE3627BD`)
-passed 123/123 preflight, 73/73 runner, 14/14 backup, 9/9 summary and the
-D: atomic JSON overwrite test. The runner adds an independent `WatchdogWorker`: its exact
-process identity and heartbeat are checked before the launch request, and it
-enforces a monotonic 355-second deadline from the post-mount scan, with
-two-second RSS/raw-log probes and exact-identity cleanup on failure. The
-existing detached monitor's 390-second guard remains. An atomic `launch-began`
-marker precedes guest spawn; an empty WMI search after that marker is unresolved,
-so the watchdog stays active and retries exact cleanup. Independent containment
-assumes the D: evidence/mount volume makes I/O progress; a volume-wide stall
-also stalls guest writes on these mounts. Claude's read-only and peer reviews
-found no concrete source blocker, but did not prove a live dead-driver path or
-authorize a run. No new backup or guest run followed the aborted attempt.
+- Live-run preparation (no app run). Approval
+  `call_9b35e9d31fdf402ea082a3eb6a40ae16` started an adjacent backup, but the
+  old `File.Replace` helper failed after the SD ZIP only (5,973,898,396 bytes,
+  SHA-256 `6032F822…`; [disposition](evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)).
+  No runner or guest launch followed. The approval is `withdrawn` in both
+  byte-identical ledgers (seven rows, SHA-256 `53BAD1AB…`;
+  [ledger](docs/evidence/ledger.md)), and that SD ZIP can't be reused. The
+  repaired scripts were resealed as a04
+  ([seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json)
+  `C495AB53…`, patch `B9FBE5F1…`, offline gate `759017B6…`: 123/73/14/9). a04
+  adds an independent 355-second watchdog worker. The user then chose to skip
+  the a04 run and begin the scheduler cut (`call_49d1b609465a4e668da30a31361beb44`),
+  so a04 is historical and not live-usable. A later run needs a fresh
+  source/build seal and a new specific approval.
+- Historical reds, superseded by the A10/A12 gates:
+  - receiver-context Send a02–a04
+    ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md));
+  - the ordinary queued-send receiver-exit/TID-reuse Kernel red
+    ([receipt](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md));
+  - the preliminary A11 run and the confirmed A11b next-lease reciprocal red,
+    where T's inner Send replayed as send ID 3 / wait 4
+    ([receipt](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)).
+- Design refresh (no source or run):
+  - Stage 7 needs device- and interaction-grounded footprint and
+    responsiveness budgets before calling anything "small" or "fast".
+  - A proposed event-to-frame lineage gate is in
+    [remote-observability](docs/subsystems/remote-observability.md).
+  - The two-Sleeps-on-one-thread red was withdrawn: in CE6 a positive Sleep
+    blocks its caller and dispatches no WNDPROC.
 
 ## 2026-10-15 Stage 3 source gates
 
