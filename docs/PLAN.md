@@ -119,17 +119,23 @@ conditional system-origin device broadcasts, post-preflight whole-exit
 atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
 live iNavi remain separate gates. No live run is approved by these source gates.
 
-Stage 7 budgets are a design gate, not values inferred from the current
+Stage 7 budgets are a design gate, not values inferred from the historical
 splash-only E-38 observation. Before calling memory or responsiveness "small"
 or "fast," record the target device's configured CE RAM and real navigation
 interaction expectations, define which guest/host memory quantities and which
 input-response interval each budget covers, and review the limits with the
-user. A future exact lag claim needs lineage-linked event IDs and stamps on
-one host-monotonic clock at named boundaries, such as actual guest input
-dispatch and publication of a subsequent changed frame. Until those links
-exist, the current two-second frame polling yields only a conservative
-observation bound, which must be labelled as such. Use repeated, phase- and
-input-matched runs for comparisons. The [verification recipe](subsystems/verification.md)
+user. The hash-pinned, read-only [historical E-38 validator](../scripts/analysis/e38_validator.py)
+([receipt](../evidence/stage7-historical-validator-20261016/A01.receipt.md))
+checks 166 successful frame polls/four hash segments, 160 host memory samples
+and 1,714 completed busy slices. Its RSS maximum is sampled, not the true
+continuous peak; frame hashes do not prove image/map content, and current-build
+live readiness remains unknown. A future exact lag claim needs lineage-linked
+event IDs and stamps on one host-monotonic clock at named boundaries, such as
+actual guest input dispatch and publication of a subsequent changed frame.
+Until those links exist, the current two-second frame polling yields only a
+conservative observation bound, which must be labelled as such. Use repeated,
+phase- and input-matched runs for comparisons. The
+[verification recipe](subsystems/verification.md)
 keeps incomplete telemetry and unknown native/backing capacity explicit.
 
 D-008 permitted a narrow private-slab E-18 diagnostic before public owner/clone
