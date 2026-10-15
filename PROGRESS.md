@@ -64,9 +64,15 @@ focused run. Unicorn-only and Unicorn-plus-desktop feature checks also passed
 on that stable source seal. These are source/test results, not an iNavi run,
 a release EXE/PDB seal, a footprint or speed result, O-M3 physical-page
 accounting, or full Stage 2 acceptance.
-Other direct host writes, restore/rebind and exact process-exit/module-
-retirement fences, DLL migration, checkpoint relineage and production
-activation remain open. The
+
+The [synthetic exact-exit/retained-pin gate](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
+passed focused release **18/0/0** and no-default **12/0/0**, with complete
+retry release **2,132/0/9 ignored** and no-default **1,524/0/3 ignored**.
+Only the verified birth retires after D-011 preflight; retired pins refuse
+writes. Attempt 01's full release AV remains unexplained despite the retry.
+
+Other direct host writes, restore/rebind and exact module-retirement fences,
+DLL migration, checkpoint relineage and production activation remain open. The
 intermittent WINDOWPOS stack failure remains under investigation
 ([stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
 [three clean library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md));

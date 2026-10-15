@@ -33,6 +33,13 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   and live-run exposure have not been established. Do not mask the defect by
   increasing the test stack; isolate its stack demand and remove any
   unnecessary large by-value or recursive path before live acceptance.
+- **Unexplained full-release access violation during the synthetic
+  writable-image exit gate:** the first complete release attempt emitted one
+  `FAILED` line for a mixed-native-deadline test, then the harness exited
+  `0xc0000005` before a result block. That line does not establish the fault
+  site or cause. The named test passed in isolation and the next complete
+  release attempt passed, but neither explains or resolves the crash
+  ([receipt](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
 - **Native memory performance remains a live-run gate:** a synthetic
   8,192-page (32-MiB) fixed heap originally took 78,689.550 ms to map and
   another 75.753 s to close its fresh owner. Fixed private heap/stack pages
@@ -98,7 +105,7 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   and native seed/reclaim/fault/map collisions; foreign births may still
   reuse a numeric VA
   ([receipt](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)).
-  Other direct host-write/restore/rebind and exact exit/module-retirement
+  Other direct host-write/restore/rebind and exact module-retirement
   fences, DLL unload/reload, full machine checkpoint relineage, O-M3 guest
   physical accounting and an approved matched app run remain open. The synthetic
   `Unclassified` image backing charges no guest pages and cannot establish

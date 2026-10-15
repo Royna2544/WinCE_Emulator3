@@ -31,11 +31,15 @@ remote-control HTTP/WebSocket surface.
   collision fence also passes; its complete source suites passed release
   **2,127/0/9 ignored** and no-default **1,520/0/3 ignored**
   ([receipt](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)).
+  The [synthetic exact-process-exit/retained-pin gate](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
+  also passes, but its first full release attempt ended in an unexplained
+  access violation; a passing retry does not resolve that failure.
   An intermittent WINDOWPOS test-thread overflow remains unexplained despite
   later clean reruns ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
-  Production SD activation, other host-write/exit fences, DLL ownership and
-  O-M3 guest-memory accounting remain open; no new iNavi run, performance
-  result or full Stage 2/live acceptance follows. Persistent-owner
+  Production SD activation, other direct host-write/restore/rebind and
+  module-retirement fences, DLL ownership and O-M3 guest-memory accounting
+  remain open; no new iNavi run, performance result or full Stage 2/live
+  acceptance follows. Persistent-owner
   architecture is deferred to Stage 8.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send

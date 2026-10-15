@@ -64,8 +64,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    [file-view broad](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md),
    [VM allocation](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md));
    the normal app loader is still copy-backed. Next, fence other direct
-   host-write/restore/rebind paths and exact process-exit/module-retirement
-   races with synthetic controls. Then migrate preloaded and runtime DLLs
+   host-write/restore/rebind paths and exact module-retirement races with
+   synthetic controls. Then migrate preloaded and runtime DLLs
    as separate exact-birth/module-generation cuts with failure/unload tests.
    Settle [O-M3](docs/DECISIONS.md) per-page physical provenance and
    `PrivatePageBudget` timing before guest-budget or live acceptance; do not
@@ -79,6 +79,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    dependence on broader-suite concurrency/state before considering a fix;
    do not treat a larger test stack as a proven repair
    ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
+   Separately diagnose the exit-gate full release attempt's access violation;
+   its passing isolated test and full retry do not establish a cause or fix
+   ([receipt](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-16 and 2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
