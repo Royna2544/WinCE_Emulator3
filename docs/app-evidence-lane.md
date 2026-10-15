@@ -42,57 +42,60 @@ is the latest approved live observation; its one-run approval is spent. New
 writable-mount observations require a separate human approval and fresh
 adjacent, SHA-verified ZIP backups.
 
-### Next live-run preparation (design gate; not authorized or executed)
+### Live-run preparation (historical design; a04 source gate, no live run)
 
-Instrumentation and runner work below require their own source gate; this
-read-only app-evidence lane does not authorize a launch or gate a stage.
+The design requirements below preceded the runner repairs. The current
+[a04 validation receipt](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)
+binds the [22-file source seal](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+[script-only build bridge](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+and [offline safety gate](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt).
+It carries forward the unchanged clean-built EXE/PDB and does not establish a
+new mount backup, guest launch, full CE6 bring-up or one-run approval. This
+read-only app-evidence lane does not itself authorize a launch or gate a stage;
+the current host-workflow boundary is in
+[live-run control](subsystems/live-run-control.md).
 
-**Narrow memory telemetry.** In `src/main.rs::publish_remote_endpoint`, plan a
-`live_guest_stable_page_budget_used_bytes` field in the debug `summary`, read
-from `kernel.memory.private_commit_used_bytes()`. The debug-publisher owner
-must assign a per-run monotonic publication sequence and host-monotonic
-nanoseconds at its accepted publication slot, with UTC for human alignment,
-*in that same body*. A repeated sequence is stale even if the HTTP receipt
-time differs; UTC alone can tie or jump. The observer should fetch the summary
-every 2 s, retaining each response's receive UTC/monotonic clock, HTTP result,
-body SHA-256, embedded publication identity and parsed field;
-retain at most 256 summary bodies of at most 64 KiB each, independently of the
-raw-log limit. Reject an oversized summary while retaining the HTTP failure
-metadata; do not truncate it into an apparently valid sample. The current
-generic capture path accepts much larger responses, so this needs a dedicated
-summary bound and a real 2-s fetch rather than its current every-fifth-slot
-(10-s) cadence. A source control must show reserve-only leaves the field
-unchanged and committing one new stable page through the *public*
-`VirtualAlloc` path adds exactly 4 KiB; also check that shared-view aliases
-charge once, retained pins keep their charge until final release, and O-M2
-heap/stack page commits charge per guest page rather than per 1-MiB native
-mapping block. This is the guest **stable-page budget**: `used_bytes` includes
-charged shared-view pages, detached/native-retained pins and quarantined
-charges,
-but excludes `boot_reserved_bytes` (a separately tracked budget component)
-and other guest backings. It is not total guest commit, guest physical RAM or
-host RSS. Existing heap-live,
+**Narrow memory telemetry (source-gated, live curve pending).** The current
+debug `summary` includes `live_guest_stable_page_budget_used_bytes` from
+`kernel.memory.private_commit_used_bytes()`, plus an accepted-publication
+sequence, host-monotonic nanoseconds and UTC in the same body. A repeated
+sequence is stale even if the HTTP receipt time differs; UTC alone can tie or
+jump. The source-tested observer attempts a summary GET on every nominal 2-s
+slot, retaining each response's receive clocks, HTTP result, body SHA-256,
+embedded publication identity and parsed field. It keeps at most 256 complete
+summary bodies of at most 64 KiB each, independently of the raw-log limit;
+oversized bodies remain explicit failures, not truncated valid samples. The
+public `VirtualAlloc` reserve-only and one-page-commit control showed
+unchanged/+4-KiB accounting. Shared-view aliases, retained pins and O-M2
+heap/stack pages charge the stable-page budget by guest page, not by 1-MiB
+native mapping block. This is a narrow charged **stable-page budget**: it
+includes shared-view pages, detached/native-retained pins and quarantined
+charges, but excludes `boot_reserved_bytes` and other guest backings. It is
+not total guest commit, guest physical RAM or host RSS. Existing heap-live,
 virtual-live and `blob_mb` values remain partial proxies; report any missing
-quantity rather than infer a small CE6 footprint.
+quantity rather than infer a small CE6 footprint
+([remote observability](subsystems/remote-observability.md)).
 
-**Fresh-run manifest and preflight.** Do not reuse
-`scripts/inavi_bounded_e22.ps1` unchanged: it hardcodes the E-37 EXE/PDB,
-2026-10-14 adjacent ZIP hashes, a spent approval and `e37-live-` paths. A
-future parameterized runner must require a unique evidence tag and per-run
-manifest naming and SHA-256-verifying the fresh release EXE and matching PDB
-against a build receipt chained from the W-B1c sealed HEAD `0e06e2c5` and its
-patch/file hashes to the new telemetry/runner source seal. Immediately before
-launch, the recorded source hashes must still match that new seal. The
+**Fresh-run manifest and preflight.** The pre-repair
+`scripts/inavi_bounded_e22.ps1` hardcoded the E-37 EXE/PDB, 2026-10-14
+adjacent ZIP hashes, a spent approval and `e37-live-` paths; those are
+historical inputs, not the a04 runner's current launch authority. The a04
+candidate requires a unique evidence tag and per-run
+manifest naming and SHA-256-verifying the preserved clean-built release EXE
+and matching PDB against its script-only bridge, fixed W-B1c parent
+`0e06e2c5` and a04 scoped patch/file hashes. Immediately before launch, the
+recorded source hashes must still match that seal. The
 EXE↔PDB RSDS GUID+age must match, not merely their separate hashes; any crash
-analysis must verify the actually loaded PDB. The new source must pass its own
-focused controls and sealed full release/no-feature/alternate-feature gate
-before that EXE can be used. The manifest also records current
+analysis must verify the actually loaded PDB. The unchanged Rust/Cargo inputs
+retain the prior clean-build release/no-feature/alternate-feature gate, while
+the changed a04 scripts passed their process-free offline gate; this is not a
+new Rust build or live acceptance. The manifest also records current
 `registry.reg`, `serial_devices.json`, `mounts.toml` and target-app hashes,
 the exact fresh backup manifest and all three adjacent
 SD/ResidentFlash/EmulatorRoot ZIP paths and hashes, plus the
 human one-run approval reference. Validate these relationships and hashes
 before launch, including that `mounts.toml`'s three writable roots are exactly
-the three backup source roots. Reject E-37 paths, missing fields or an
+the three backup source roots. Reject stale E-37 inputs, missing fields or an
 existing evidence tag. The monitor worker must independently revalidate the
 sealed manifest hash and executable provenance immediately before its actual
 `Start-Process`, not rely only on the parent process's earlier check.
@@ -120,27 +123,32 @@ atomic snapshot if a mount changes mid-backup: require the three mount trees
 to stay quiescent through inventory/verification, compare a post-backup
 content-hash inventory to the source manifests, and fail closed on any detected
 mismatch.
-Just before spawn, compare a cheap size/mtime inventory against that
-post-backup inventory and reject another detected emulator process using the
-mounts; if process identity cannot be checked, fail closed. These checks
-narrow but cannot close the later-write window or prove the absence of every
+Just before spawn, the a04 monitor compares current mount **content hashes**,
+types, counts, sizes, timestamps and attributes against the post-backup
+inventory, and rejects another detected emulator process using the mounts;
+if process identity cannot be checked, fail closed. These checks narrow the
+risk but cannot close the later-write window or prove the absence of every
 external writer.
 Preserve the four slow-boot marker guard without deleting markers, the
 no-reparse checks, pre/post mount inventories, 330 s app cap, independent
-390 s watchdog, 2 GiB RSS cap and 512 MiB raw-log cap.
+355 s post-scan watchdog and separate 390 s monitor guard, 2 GiB RSS cap and
+512 MiB raw-log cap. The watchdog's independent containment assumes D: volume
+I/O progress; a volume-wide stall also stalls guest writes to these original
+mounts. Unconfirmed cleanup remains unresolved and denies another launch.
 
-The expected-red controls are an absent/repeated-sequence summary publication
-and reserve-only versus public one-page accounting, plus stale E-37/approval/ZIP,
-already-spent approval, interrupted ledger reservation, bad-hash and
-duplicate-tag manifests that must reject before process spawn.
-Review the metric semantics, manifest schema and failure boundaries
-independently **before implementation**; acceptance then needs those focused
-source/parser controls green and a source-bound build/test receipt. Tests of
-the parser and negative manifests must not launch the app or touch mounts.
-This design gate itself neither backs up mounts nor spends a run approval.
+The staged expected-red controls for absent/repeated-sequence summary
+publication, reserve-only versus public one-page accounting and invalid
+manifest/ledger inputs became bounded source/offline gates. The a04 gate also
+checks the independent watchdog, bracketed mount path, pre-spawn marker and
+empty-process-search uncertainty. These process-free controls do not prove a
+live dead-driver path. The source-only gate itself neither backs up mounts nor
+spends a run approval; the next writable-mount attempt needs fresh human
+approval and a complete new adjacent ZIP triplet.
 
-For a separately approved live run, keep the comparable raw-NMEA feed and one
-input-ready-relative tap. Record HTTP ACK, remote drain/post, actual guest
+For a separately approved live run, use the a04 raw-NMEA feed and one
+input-ready-relative tap. Its nominal protocol/timing is comparable, but the
+runner marks this payload `NEW, not matched`: it is not an exact E-38 input
+match or a causal speed baseline. Record HTTP ACK, remote drain/post, actual guest
 WNDPROC entry/return and subsequent frame hashes as different milestones.
 E-38 tap delivery predates W-B1b/W-B1c, so establish that new routing still
 reaches the intended iNavi window; a poll interval only bounds lag unless

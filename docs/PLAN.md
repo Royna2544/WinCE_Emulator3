@@ -66,7 +66,7 @@ and the durable status files.
 | 4 Continuation ownership | Raw-native vs synthesized frames; nested callback/wait state | One complete continuation family, removing old duplicate authority | Native wait→callback→resume/exit, FPU/HI/LO/branch correctness, cancellation and debugger exactness |
 | 5 Outcomes and scheduler | Explicit count/yield/deadline/error, ready indexes, CE6 priorities/quantum | Replace false timeout inference and policy heuristics together | Native errors hard-fail, equal-priority RR, higher-priority preemption, blocked/suspended eligibility; no starvation |
 | 6 One guest clock | CPU/time conversion; live-first mode plus opt-in fast-idle (D-002) | Replace hybrid offsets; idle advancement only with established events | No double time, finite/infinite/zero waits, wrap projection, timer ordering, external GPS/input pacing |
-| 7 Runtime bring-up | Phase-aligned GPS/tap/frame/memory recipe and readiness definition | Integrate validated subsystems, no forced app behavior | Several clean 330 s+ runs; genuine map presentation and navigation response; memory/lag and busy guest work reported |
+| 7 Runtime bring-up | Phase-aligned GPS/tap/frame/memory recipe, readiness definition and reviewed footprint/responsiveness budgets | Integrate validated subsystems, no forced app behavior | Several clean 330 s+ runs; genuine map presentation and navigation response; phase-matched memory, correlated input-to-frame responsiveness and busy guest work measured against the reviewed budgets |
 | 8 Persistent engines (deferred swap) | Engine/cache/hook/FlatView lifetime, stable hook rebinding, translation-arena budget and commit-tail handler proof | Process-owned engines behind the CPU interface, after Stage 5 outcomes | Long stable/churn/map-churn controls; independent contexts; the 650 workload clean over several 330 s+ runs; measured speed or memory gain over fresh engines |
 
 Stages may have parallel design lanes but their implementation dependencies are
@@ -76,6 +76,19 @@ than invent another PID/TID registry; scheduler/clock work must consume real
 frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
+
+Stage 7 budgets are a design gate, not values inferred from the current
+splash-only E-38 observation. Before calling memory or responsiveness "small"
+or "fast," record the target device's configured CE RAM and real navigation
+interaction expectations, define which guest/host memory quantities and which
+input-response interval each budget covers, and review the limits with the
+user. A future exact lag claim needs lineage-linked event IDs and stamps on
+one host-monotonic clock at named boundaries, such as actual guest input
+dispatch and publication of a subsequent changed frame. Until those links
+exist, the current two-second frame polling yields only a conservative
+observation bound, which must be labelled as such. Use repeated, phase- and
+input-matched runs for comparisons. The [verification recipe](subsystems/verification.md)
+keeps incomplete telemetry and unknown native/backing capacity explicit.
 
 D-008 permitted a narrow private-slab E-18 diagnostic before public owner/clone
 acceptance. E25 reached that historical diagnostic milestone on the corrected

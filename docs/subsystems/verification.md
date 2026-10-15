@@ -126,13 +126,19 @@ Report primary native-start owner separately from helpers and end-of-slice selec
 
 Track whole-host RSS/private/virtual/CPU peaks and phase samples alongside logical blob length/capacity, allocation live/reserved extents, native regions/context/translation residency and retained queue/snapshot storage. Missing capacity/native-engine metrics remain missing. One active cached PID bracket is not whole-machine memory, an atomic epoch or proof of ownership. The 650 growth recorded in ledger E-2 requires investigation before a memory acceptance claim.
 
-### Bounded iNavi measurement contract (source-tested, live result pending)
+### Bounded iNavi measurement contract (a04 source-tested, live result pending)
 
-The [new source/build seal](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-and [offline runner gate](../../evidence/stage3-live-evidence-20261015/final-offline-safety-gate-receipt.md)
-prepare this measurement path; neither is a new application run. A future
-approved run uses the monitor's actual process-launch monotonic tick as `t0`,
-not the run tag, observer startup or first HTTP response. The observer starts
+The current [a04 validation receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)
+binds its [source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+[script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+and [offline runner gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt).
+It carries forward the unchanged clean-built EXE/PDB. The earlier 21-file
+source/build seal and runner gate are historical, not the current runner
+identity. The a04 gate has no new mount backup, guest run, live dead-driver proof or
+one-run approval; CE6 boot delay, full footprint and responsiveness remain
+unmeasured. A future separately approved run uses the monitor's actual
+process-launch monotonic tick as `t0`, not the run tag, observer startup or first
+HTTP response. The observer starts
 before launch and records when it sees the process descriptor, then requests
 the first frame before status/summary. Its first request and response must
 fall within launch +2 s for the early-frame coverage check; failure remains
