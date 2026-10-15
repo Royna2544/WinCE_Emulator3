@@ -943,9 +943,7 @@ fn message_read_sent_source_for_ordinal(ordinal: Option<u32>) -> Option<&'static
 fn is_message_read_sent_source(source: &str) -> bool {
     matches!(
         source,
-        "GetMessageW/SentMessage"
-            | "GetMessageWNoWait/SentMessage"
-            | "PeekMessageW/SentMessage"
+        "GetMessageW/SentMessage" | "GetMessageWNoWait/SentMessage" | "PeekMessageW/SentMessage"
     )
 }
 
@@ -40245,6 +40243,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs.clone(),
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
 
         let hwnd =
             kernel.create_window_ex_w(active_thread_id, "hidden_receiver", "", None, 0, 0, 0);
@@ -40289,7 +40288,11 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
         let active_thread_id = 7;
-        let active_thread_handle = 0x107;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let active_thread_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cd98, 0, false)
+            .expect("active thread");
         let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
         let process_id = 1;
         let active_pc = 0x0031_cd98;
@@ -40308,6 +40311,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs,
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -56577,6 +56581,26 @@ fn try_enter_send_message_callout<D>(
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
+    if let crate::ce::gwe::WindowDeliveryOwner::Birth { thread, process } = window.delivery_owner()
+        && (!kernel.is_live_thread_birth(thread)
+            || !kernel.handles.process_execution_live_by_birth(process)
+            || kernel
+                .handles
+                .live_thread_creation_owner_by_id(window.thread_id)
+                != Some(process))
+    {
+        // A reused numeric TID can make an old HWND look like a same-thread
+        // send. Reject it before choosing any direct/receiver WNDPROC path or
+        // borrowing the replacement thread's native frame.
+        stop_native_opaque_wait_error(
+            uc,
+            current_thread_id,
+            terminal_error,
+            active_thread_id,
+            format!("SendMessage targets stale birth-owned HWND 0x{hwnd:08x}"),
+        );
+        return true;
+    }
     let wndproc = window.wndproc;
     let target_thread_id = window.thread_id;
     let target_process_id = window.process_id;
@@ -77906,8 +77930,8 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn native_same_process_get_message_no_wait_delivers_after_receiver_sleep_timeout(
-    ) -> crate::Result<()> {
+    fn native_same_process_get_message_no_wait_delivers_after_receiver_sleep_timeout()
+    -> crate::Result<()> {
         native_same_process_sleep_send_fixture(true, NativeSleepSendRetrieval::GetMessageWNoWait)
     }
 
@@ -78289,8 +78313,7 @@ mod unicorn_tests {
                 .last_imports;
             assert!(
                 imports.windows(2).any(|pair| {
-                    pair[0].ordinal == Some(retrieval_ordinal)
-                        && pair[1].ordinal == Some(ORD_SLEEP)
+                    pair[0].ordinal == Some(retrieval_ordinal) && pair[1].ordinal == Some(ORD_SLEEP)
                 }),
                 "T must issue a real finite Sleep after nonblocking {retrieval_name} before S resumes: {imports:?}"
             );
@@ -78514,6 +78537,192 @@ mod unicorn_tests {
             .expect("direct SendMessageW should preserve caller registers");
         assert_eq!(caller_regs.regs[16], 0x7777_0010);
         assert_eq!(caller_regs.regs[30], 0x1234_5678);
+    }
+
+    #[test]
+    fn stale_birth_owned_hwnd_native_send_stops_before_reused_tid_wndproc()
+    -> crate::error::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (old_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("old thread birth");
+        let stale_hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                old_birth,
+                "STALE_NATIVE_SEND",
+                "old",
+                None,
+                None,
+                0,
+                0,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 20, 20),
+            )
+            .expect("old birth-owned HWND");
+        assert!(
+            kernel
+                .gwe
+                .set_window_long(stale_hwnd, GWL_WNDPROC, 0x0001_3570)
+                .is_some()
+        );
+        assert!(kernel.mark_guest_thread_exited_by_birth(old_birth, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, thread_id, 0x0040_4000, 0, false)?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("reused thread birth");
+        assert_ne!(old_birth, new_birth);
+        let live_hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                new_birth,
+                "LIVE_NATIVE_SEND",
+                "new",
+                None,
+                None,
+                0,
+                0,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 20, 20),
+            )
+            .expect("new birth-owned HWND");
+        assert!(
+            kernel
+                .gwe
+                .set_window_long(live_hwnd, GWL_WNDPROC, 0x0001_3570)
+                .is_some()
+        );
+        assert!(kernel.gwe.is_window(stale_hwnd));
+        assert!(kernel.gwe.is_window(live_hwnd));
+
+        let (neighbor_handle, _neighbor_thread) = kernel.create_guest_thread(0x0040_5000, 0, false);
+        let neighbor_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(neighbor_handle)
+            .expect("neighbor birth");
+        let neighbor_frame = kernel
+            .try_publish_finite_sleep_wait_for_birth(
+                neighbor_birth,
+                neighbor_handle,
+                kernel.timers.tick_count(),
+                60_000,
+            )
+            .expect("neighbor finite Sleep frame");
+        let scheduler_before = kernel.scheduler_stats();
+
+        for ordinal in [
+            crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W,
+            crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT,
+        ] {
+            let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+            let original_regs = [
+                (RegisterMIPS::PC, 0x0040_1080_u64),
+                (RegisterMIPS::RA, 0x0040_1090_u64),
+                (RegisterMIPS::V0, 0x7777_0022_u64),
+                (RegisterMIPS::A0, 0x8888_0033_u64),
+            ];
+            for &(register, value) in &original_regs {
+                uc.reg_write(register, value).unwrap();
+            }
+            let current_thread_id =
+                Rc::new(super::NativeCurrentThread::new(thread_id, Some(new_birth)));
+            let running_thread = Rc::new(RefCell::new(Some((thread_id, new_handle))));
+            let blocked_waits = Rc::new(RefCell::new(Vec::new()));
+            let pending = Rc::new(RefCell::new(Vec::new()));
+            let parked = Rc::new(RefCell::new(VecDeque::new()));
+            let cross_process_send_yield = Rc::new(RefCell::new(None));
+            let terminal_error = RefCell::new(None);
+            assert!(super::try_enter_send_message_callout(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                crate::emulator::imports::ImportModuleKind::Coredll,
+                Some(ordinal),
+                &[stale_hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, 0, 1000, 0],
+                thread_id,
+                &[],
+                &current_thread_id,
+                &running_thread,
+                &blocked_waits,
+                &pending,
+                &parked,
+                &cross_process_send_yield,
+                &terminal_error,
+            ));
+            assert!(matches!(
+                terminal_error.borrow().as_ref(),
+                Some(Error::Backend(reason)) if reason.contains("stale birth-owned HWND")
+            ));
+            assert_eq!(current_thread_id.get(), (thread_id, None));
+            for &(register, value) in &original_regs {
+                assert_eq!(uc.reg_read(register).unwrap(), value);
+            }
+            assert_eq!(*running_thread.borrow(), Some((thread_id, new_handle)));
+            assert!(blocked_waits.borrow().is_empty());
+            assert!(pending.borrow().is_empty());
+            assert!(cross_process_send_yield.borrow().is_none());
+            assert!(!kernel.gwe.in_send_message(thread_id));
+            assert!(
+                kernel
+                    .gwe
+                    .sent_message_ids_for_windows(&[stale_hwnd, live_hwnd])
+                    .is_empty()
+            );
+            assert_eq!(kernel.scheduler_stats(), scheduler_before);
+            assert_eq!(
+                kernel.handles.active_finite_sleep_frame(neighbor_birth),
+                Some(neighbor_frame)
+            );
+            assert!(kernel.blocked_waiter(neighbor_frame.wait_id()).is_some());
+        }
+
+        // The same numeric TID still reaches a WNDPROC through its live HWND.
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_1090).unwrap();
+        let current_thread_id =
+            Rc::new(super::NativeCurrentThread::new(thread_id, Some(new_birth)));
+        let running_thread = Rc::new(RefCell::new(Some((thread_id, new_handle))));
+        let blocked_waits = Rc::new(RefCell::new(Vec::new()));
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let cross_process_send_yield = Rc::new(RefCell::new(None));
+        let terminal_error = RefCell::new(None);
+        assert!(super::try_enter_send_message_callout(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
+            &[live_hwnd, crate::ce::gwe::WM_USER + 2, 0, 0],
+            thread_id,
+            &[],
+            &current_thread_id,
+            &running_thread,
+            &blocked_waits,
+            &pending,
+            &parked,
+            &cross_process_send_yield,
+            &terminal_error,
+        ));
+        assert!(terminal_error.borrow().is_none());
+        assert_eq!(current_thread_id.get(), (thread_id, Some(new_birth)));
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x0001_3570);
+        assert_eq!(pending.borrow().len(), 1);
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(neighbor_birth),
+            Some(neighbor_frame)
+        );
+        Ok(())
     }
 
     #[test]
