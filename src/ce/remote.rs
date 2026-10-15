@@ -753,10 +753,39 @@ mod tests {
         assert_eq!(remote.touch_event_count(), 2);
         assert_eq!(remote.key_event_count(), 1);
         assert_eq!(remote.serial_byte_count(), 3);
-        let touch_events = remote.drain_touch_events();
-        assert_eq!(touch_events[0].message, WM_LBUTTONDOWN);
-        assert_eq!(touch_events[1].message, WM_LBUTTONUP);
-        assert!(touch_events[1].enqueued_at_ms > touch_events[0].enqueued_at_ms);
+        let events = remote.drain_input_events();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events[0].payload,
+            RemoteInputPayload::Touch(TouchEvent {
+                message: WM_LBUTTONDOWN,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events[1].payload,
+            RemoteInputPayload::Touch(TouchEvent {
+                message: WM_LBUTTONUP,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events[2].payload,
+            RemoteInputPayload::Key(KeyEvent {
+                message: WM_KEYDOWN,
+                ..
+            })
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(events[1].enqueued_at_ms() > events[0].enqueued_at_ms());
+        assert_eq!(remote.touch_event_count(), 0);
+        assert_eq!(remote.key_event_count(), 0);
         assert_eq!(remote.read_serial_bytes(2), b"ab");
         assert_eq!(remote.status("COM7:").gps_target, "COM7:");
     }
@@ -814,15 +843,21 @@ mod tests {
         // "down" enqueues WM_KEYDOWN
         assert!(remote.enqueue_key("down", 0x26).is_ok());
         assert_eq!(remote.key_event_count(), 1);
-        let events = remote.drain_key_events();
-        assert_eq!(events[0].message, WM_KEYDOWN);
-        assert_eq!(events[0].vk, 0x26);
+        let events = remote.drain_input_events();
+        let RemoteInputPayload::Key(event) = events[0].payload else {
+            panic!("expected key event");
+        };
+        assert_eq!(event.message, WM_KEYDOWN);
+        assert_eq!(event.vk, 0x26);
 
         // "up" enqueues WM_KEYUP
         assert!(remote.enqueue_key("up", 0x41).is_ok());
-        let events = remote.drain_key_events();
-        assert_eq!(events[0].message, WM_KEYUP);
-        assert_eq!(events[0].vk, 0x41);
+        let events = remote.drain_input_events();
+        let RemoteInputPayload::Key(event) = events[0].payload else {
+            panic!("expected key event");
+        };
+        assert_eq!(event.message, WM_KEYUP);
+        assert_eq!(event.vk, 0x41);
 
         // invalid phase → error, nothing enqueued
         assert!(remote.enqueue_key("held", 0x41).is_err());
@@ -842,8 +877,101 @@ mod tests {
 
         assert!(remote.enqueue_touch("move", 100, 200).is_ok());
         assert_eq!(remote.touch_event_count(), 1);
-        let events = remote.drain_touch_events();
-        assert_eq!(events[0].message, WM_MOUSEMOVE);
+        let events = remote.drain_input_events();
+        let RemoteInputPayload::Touch(event) = events[0].payload else {
+            panic!("expected touch event");
+        };
+        assert_eq!(event.message, WM_MOUSEMOVE);
+    }
+
+    #[test]
+    fn mixed_input_fifo_preserves_admission_order_and_status_counts() {
+        let mut remote = CeRemote::default();
+        remote.set_framebuffer_size(800, 480);
+
+        remote.enqueue_key("down", 0x26).unwrap();
+        remote.enqueue_touch("down", 10, 20).unwrap();
+        remote.enqueue_key("up", 0x26).unwrap();
+        remote.enqueue_touch("tap", 30, 40).unwrap();
+        assert_eq!(remote.touch_event_count(), 3);
+        assert_eq!(remote.key_event_count(), 2);
+        let status = remote.status("COM7:");
+        assert_eq!(status.queued_touch_events, 3);
+        assert_eq!(status.queued_key_events, 2);
+
+        let events = remote.drain_input_events();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| match event.payload {
+                    RemoteInputPayload::Touch(event) => event.message,
+                    RemoteInputPayload::Key(event) => event.message,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                WM_KEYDOWN,
+                WM_LBUTTONDOWN,
+                WM_KEYUP,
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP
+            ]
+        );
+        assert!(events[4].enqueued_at_ms() > events[3].enqueued_at_ms());
+        assert_eq!(remote.touch_event_count(), 0);
+        assert_eq!(remote.key_event_count(), 0);
+
+        remote.enqueue_key("down", 0x41).unwrap();
+        assert_eq!(remote.drain_input_events()[0].sequence, 6);
+    }
+
+    #[test]
+    fn tap_sequence_exhaustion_rejects_entire_gesture_without_queue_or_log_effect() {
+        let mut remote = CeRemote::default();
+        remote.set_framebuffer_size(800, 480);
+        remote.last_input_sequence = u64::MAX - 1;
+        let logs_before = remote.recent_log_lines(4096);
+
+        assert_eq!(
+            remote.enqueue_touch("tap", 10, 20),
+            Err(RemoteError::InputSequenceExhausted)
+        );
+        assert_eq!(remote.last_input_sequence, u64::MAX - 1);
+        assert_eq!(remote.touch_event_count(), 0);
+        assert_eq!(remote.key_event_count(), 0);
+        assert!(remote.drain_input_events().is_empty());
+        assert_eq!(remote.recent_log_lines(4096), logs_before);
+
+        remote.enqueue_key("down", 0x26).unwrap();
+        assert_eq!(remote.drain_input_events()[0].sequence, u64::MAX);
+        assert_eq!(
+            remote.enqueue_touch("down", 10, 20),
+            Err(RemoteError::InputSequenceExhausted)
+        );
+        assert_eq!(remote.touch_event_count(), 0);
+    }
+
+    #[test]
+    fn invalid_input_does_not_consume_admission_sequence() {
+        let mut remote = CeRemote::default();
+        assert_eq!(
+            remote.enqueue_touch("tap", 10, 20),
+            Err(RemoteError::FramebufferUnavailable)
+        );
+        assert_eq!(
+            remote.enqueue_key("down", 0),
+            Err(RemoteError::InvalidVirtualKey(0))
+        );
+        assert_eq!(remote.last_input_sequence, 0);
+        assert!(remote.recent_log_lines(4096).is_empty());
+        remote.enqueue_key("down", 0x41).unwrap();
+        assert_eq!(remote.drain_input_events()[0].sequence, 1);
     }
 
     #[test]

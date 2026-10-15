@@ -34,7 +34,7 @@ use wince_emulation_v3::{
             win32_thread_priority_to_ce,
         },
         registry::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
-        remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
+        remote::{RemoteInputPayload, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
         scheduler::SchedulerBlockedWaitKind,
         thread::{
             ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, TLS_MINIMUM_AVAILABLE, ThreadSystem,
@@ -8732,8 +8732,13 @@ fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
     assert!(remote.enqueue_key("down", 0x41).is_ok());
     assert!(remote.enqueue_key("up", 0x41).is_ok());
     assert_eq!(remote.key_event_count(), 2);
-    let events = remote.drain_key_events();
+    let events = remote.drain_input_events();
     assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|event| matches!(event.payload, RemoteInputPayload::Key(_)))
+    );
     assert_eq!(remote.key_event_count(), 0); // drained
 
     // enqueue_touch without framebuffer size → FramebufferUnavailable.
@@ -8744,8 +8749,13 @@ fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
     // Set framebuffer size, then touch works.
     remote.set_framebuffer_size(320, 240);
     assert!(remote.enqueue_touch("tap", 10, 10).is_ok());
-    let touch_events = remote.drain_touch_events();
-    assert!(!touch_events.is_empty());
+    let touch_events = remote.drain_input_events();
+    assert_eq!(touch_events.len(), 2);
+    assert!(
+        touch_events
+            .iter()
+            .all(|event| matches!(event.payload, RemoteInputPayload::Touch(_)))
+    );
     assert_eq!(remote.touch_event_count(), 0);
 
     // inject_serial_bytes / read_serial_bytes / serial_byte_count.

@@ -16023,7 +16023,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: W-B1c mixed touch/key admission order"]
     fn remote_key_before_focus_changing_down_preserves_cross_type_enqueue_order() -> Result<()> {
         use crate::ce::gwe::{MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, WM_KEYDOWN};
 
@@ -16087,12 +16086,13 @@ mod tests {
             .remote
             .enqueue_touch("down", point.x, point.y)
             .unwrap();
-        assert_eq!(kernel.remote.key_event_count(), 1);
+        kernel.remote.enqueue_key("down", 0x42).unwrap();
+        assert_eq!(kernel.remote.key_event_count(), 2);
         assert_eq!(kernel.remote.touch_event_count(), 1);
 
         let drain = kernel.drain_remote_input_to_active_window_detailed();
 
-        assert_eq!(drain.posted, 2);
+        assert_eq!(drain.posted, 3);
         assert_eq!(kernel.remote.key_event_count(), 0);
         assert_eq!(kernel.remote.touch_event_count(), 0);
         let key = kernel
@@ -16121,14 +16121,21 @@ mod tests {
         assert_eq!(down.hwnd, hwnd_b);
         assert_eq!(down.mouse_pos_at_post, Some(make_lparam(point.x, point.y)));
         assert_eq!(down.source, MSGSRC_SOFTWARE_POST);
+        let later_key = kernel
+            .gwe
+            .peek_message_filtered_for_birth(
+                birth_b,
+                Some(hwnd_b),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::REMOVE,
+            )
+            .expect("key admitted after B DOWN must reach newly focused B Birth");
+        assert_eq!(later_key.hwnd, hwnd_b);
+        assert_eq!(later_key.wparam, 0x42);
+        assert_eq!(later_key.source, MSGSRC_HARDWARE_KEYBOARD);
         assert_eq!(kernel.gwe.get_focus(), Some(hwnd_b));
         assert_eq!(drain.target_thread_ids, vec![thread_a, thread_b]);
-        assert!(!kernel.gwe.has_message_filtered_for_birth(
-            birth_b,
-            Some(hwnd_b),
-            WM_KEYDOWN,
-            WM_KEYDOWN,
-        ));
         assert!(!kernel.gwe.has_message_filtered_for_birth(
             birth_a,
             Some(hwnd_a),
@@ -16145,6 +16152,7 @@ mod tests {
             vec![
                 ("remote_key_target", Some(hwnd_a), thread_a),
                 ("remote_touch_target", Some(hwnd_b), thread_b),
+                ("remote_key_target", Some(hwnd_b), thread_b),
             ]
         );
         Ok(())
