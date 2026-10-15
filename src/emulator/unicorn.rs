@@ -77,15 +77,16 @@ struct NativeStopEvidence {
     hook_stop_reason: Option<NativeHookStopReason>,
 }
 
-/// One guest self-exit observed at an import stop. This remains CPU-local
-/// until the native owner is closed and the framebuffer exit preflight passes.
+/// One guest self-exit observed at an import or decoded kernel-call stop.
+/// This remains CPU-local until the native owner is closed and the framebuffer
+/// exit preflight passes.
 #[cfg(feature = "unicorn")]
 #[derive(Clone, Copy, Debug)]
-struct NativePseudoSelfExit {
+struct StoppedPseudoSelfExit {
     caller: crate::ce::object::ThreadBirthKey,
     owner: crate::ce::object::ProcessBirthKey,
     exit_code: u32,
-    return_pc: u32,
+    stop_pc: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -6130,16 +6131,16 @@ impl UnicornMips {
         Ok(true)
     }
 
-    /// Commit a native pseudo-handle self-exit only after the guest CPU has
-    /// stopped and its native owner has closed. The import hook did not touch
-    /// Kernel process state, so a rejected framebuffer preflight leaves the
-    /// exact process birth available for checkpoint recovery.
+    /// Commit a pseudo-handle self-exit only after the guest CPU has stopped,
+    /// its exact caller and stop PC are verified, and its native owner has
+    /// closed. Neither the import hook nor the decoded-call detector touches
+    /// Kernel process state before this framebuffer preflight.
     #[cfg(feature = "unicorn")]
-    fn complete_native_pseudo_self_exit(
+    fn complete_stopped_pseudo_self_exit(
         &mut self,
         kernel: &mut CeKernel,
         framebuffer: &mut dyn Framebuffer,
-        intent: NativePseudoSelfExit,
+        intent: StoppedPseudoSelfExit,
     ) -> Result<()> {
         if kernel.checked_guest_process_caller_for_birth(intent.caller) != Some(intent.owner) {
             return Err(Error::HostExitAuthorityRecoveryRequired {
@@ -10480,7 +10481,7 @@ impl UnicornMips {
         // launch on the next slice.
         let deferred_process_launch = Rc::new(Cell::new(false));
         let deferred_process_launch_hook = Rc::clone(&deferred_process_launch);
-        let pseudo_self_exit_intent = Rc::new(Cell::new(None::<NativePseudoSelfExit>));
+        let pseudo_self_exit_intent = Rc::new(Cell::new(None::<StoppedPseudoSelfExit>));
         let pseudo_self_exit_intent_hook = Rc::clone(&pseudo_self_exit_intent);
         let deferred_process_dll_search_dirs = process_dll_search_dirs.clone();
         let import_traps_live = Rc::new(RefCell::new(self.import_traps.clone()));
@@ -12486,11 +12487,11 @@ impl UnicornMips {
                         memory.uc.emu_stop().map_err(|err| Error::Backend(format!(
                             "stop native pseudo-exit CPU: {err:?}"
                         )))?;
-                        Ok(NativePseudoSelfExit {
+                        Ok(StoppedPseudoSelfExit {
                             caller,
                             owner,
                             exit_code: args.get(1).copied().unwrap_or(0),
-                            return_pc: raw_caller_pc,
+                            stop_pc: raw_caller_pc,
                         })
                     })();
                     match stop {
@@ -14208,118 +14209,113 @@ impl UnicornMips {
                 )),
             });
         }
-        if let Err(err) = result {
-            if let Some(exit) = decoded_kernel_exit
-                .clone()
-                .filter(|_| post_native_state_ready)
+        // A decoded direct kernel call is an exit only with this attempt's
+        // exact PC-zero stop, caller birth and callsite. Run it before generic
+        // native-error/interrupt handling, but never let a generic fault alone
+        // authorize process retirement.
+        if let Some(exit) = decoded_kernel_exit
+            .as_ref()
+            .filter(|_| post_native_state_ready)
+            .cloned()
+        {
+            let caller_owner = Self::checked_decoded_self_exit_caller(
+                kernel,
+                &exit,
+                staged_context_thread_birth,
+                native_owner_birth,
+            );
+            let observed_callsite = self.last_debug.as_ref().is_some_and(|snapshot| {
+                snapshot.pc == 0
+                    && snapshot.ra.checked_sub(8) == Some(exit.caller)
+                    && snapshot.a0 == exit.process
+                    && snapshot.a1 == exit.exit_code
+            });
+            let stopped_on_call = matches!(report.raw_stop_pc, AttemptObservation::Value(0))
+                && staged_saved_context.as_ref().is_some_and(|saved| saved.pc == 0)
+                && matches!(report.count_stop_query, AttemptObservation::Value(false))
+                && matches!(report.timeout_query, AttemptObservation::Value(false))
+                && observed_callsite;
+            let Some((caller, owner)) = caller_owner else {
+                reject_private_attempt!(
+                    Error::HostExitAuthorityRecoveryRequired {
+                        reason: "decoded pseudo-exit caller does not own its CPU lease",
+                    },
+                    NativeSliceOutcome::BackendError,
+                    "decoded pseudo-exit caller authority"
+                );
+            };
+            if !stopped_on_call
+                || native_stop_thread != (caller.thread_id(), Some(caller))
+                || native_owner_pid != owner.process_id()
             {
-                if diagnostic_private {
-                    if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(
-                        &mut uc,
-                        kernel,
-                        native_owner_pid,
-                        &sealed_host_write_guard,
-                    ) {
-                        reject_private_attempt!(
-                            err,
-                            NativeSliceOutcome::BackendError,
-                            "sync decoded-exit file mapping views"
-                        );
-                    }
-                    if let Some(err) = sealed_host_write_guard.poison_error() {
-                        reject_private_attempt!(
-                            err,
-                            NativeSliceOutcome::BackendError,
-                            "sealed host write"
-                        );
-                    }
-                    if let Err(err) = uc.finish() {
-                        self.private_slab_attempt_poisoned = true;
-                        self.saved_context = None;
-                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                        report.failure_operation = Some("finish decoded process exit");
-                        self.persist_run_state_handles(&run_state);
-                        return Err(Error::Backend(format!(
-                            "finish owner-bound process exit: {err:?}"
-                        )));
-                    }
-                    if !Self::terminate_decoded_kernel_process(
-                        kernel,
-                        &exit,
-                        staged_context_thread_birth,
-                        native_owner_birth,
-                    ) {
-                        self.private_slab_attempt_poisoned = true;
-                        self.saved_context = None;
-                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                        report.failure_operation = Some("terminate decoded process exit");
-                        self.persist_run_state_handles(&run_state);
-                        return Err(Error::Backend(format!(
-                            "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
-                            exit.process, exit.exit_code
-                        )));
-                    }
-                    if let Some(snapshot) = self.last_debug.as_mut() {
-                        snapshot.encoded_kernel_exit = Some(exit);
-                    }
-                    self.saved_context = staged_saved_context.clone();
-                    self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
-                    self.persist_run_state(&run_state, kernel);
-                    self.private_slab_attempt_poisoned = false;
-                    return Ok(());
-                }
-                if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(
-                    &mut uc,
-                    kernel,
-                    native_owner_pid,
-                    &sealed_host_write_guard,
-                ) {
-                    report.failure_operation = Some("sync decoded-exit file mapping views");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(match uc.abort_close() {
-                        Ok(()) => err,
-                        Err(cleanup) => Error::Backend(format!(
-                            "{err}; abort failed decoded CE process exit: {cleanup:?}"
-                        )),
-                    });
-                }
-                if let Some(err) = sealed_host_write_guard.poison_error() {
-                    reject_private_attempt!(
-                        err,
-                        NativeSliceOutcome::BackendError,
-                        "sealed host write"
-                    );
-                }
-                if let Err(err) = uc.finish() {
-                    report.failure_operation = Some("finish decoded process exit");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(Error::Backend(format!(
-                        "finish decoded CE process exit: {err:?}"
-                    )));
-                }
-                if !Self::terminate_decoded_kernel_process(
-                    kernel,
-                    &exit,
-                    staged_context_thread_birth,
-                    native_owner_birth,
-                ) {
-                    report.failure_operation = Some("terminate decoded process exit");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(Error::Backend(format!(
-                        "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
-                        exit.process, exit.exit_code
-                    )));
-                }
-                if let Some(snapshot) = self.last_debug.as_mut() {
-                    snapshot.encoded_kernel_exit = Some(exit);
-                }
-                self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
-                self.persist_run_state(&run_state, kernel);
-                return Ok(());
+                reject_private_attempt!(
+                    Error::HostExitAuthorityRecoveryRequired {
+                        reason: "decoded pseudo-exit lost its exact stop/callsite witness",
+                    },
+                    NativeSliceOutcome::BackendError,
+                    "decoded pseudo-exit stop witness"
+                );
             }
+            if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(
+                &mut uc,
+                kernel,
+                native_owner_pid,
+                &sealed_host_write_guard,
+            ) {
+                reject_private_attempt!(
+                    err,
+                    NativeSliceOutcome::BackendError,
+                    "sync decoded-exit file mapping views"
+                );
+            }
+            if let Some(err) = sealed_host_write_guard.poison_error() {
+                reject_private_attempt!(err, NativeSliceOutcome::BackendError, "sealed host write");
+            }
+            if let Err(err) = uc.finish() {
+                self.private_slab_attempt_poisoned = true;
+                self.saved_context = None;
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                report.failure_operation = Some("finish decoded process exit");
+                self.persist_run_state_handles(&run_state);
+                return Err(Error::Backend(format!(
+                    "finish owner-bound process exit: {err:?}"
+                )));
+            }
+            self.saved_context = staged_saved_context;
+            self.saved_context_thread_birth = staged_context_thread_birth;
+            self.saved_worker_exit_birth = staged_worker_exit_birth;
+            self.persist_run_state_handles(&run_state);
+            let intent = StoppedPseudoSelfExit {
+                caller,
+                owner,
+                exit_code: exit.exit_code,
+                stop_pc: 0,
+            };
+            let completion = if self.saved_context_pc() == Some(intent.stop_pc)
+                && self.last_debug.as_ref().map(|snapshot| snapshot.pc) == Some(intent.stop_pc)
+                && self.saved_context_thread_birth == Some(intent.caller)
+            {
+                self.complete_stopped_pseudo_self_exit(kernel, framebuffer, intent)
+            } else {
+                Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "decoded pseudo-exit stop lost its exact CPU/caller witness",
+                })
+            };
+            if let Err(error) = completion {
+                self.private_slab_attempt_poisoned = true;
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                report.failure_operation = Some("complete decoded pseudo self-exit");
+                return Err(error);
+            }
+            if let Some(snapshot) = self.last_debug.as_mut() {
+                snapshot.encoded_kernel_exit = Some(exit);
+            }
+            self.private_slab_attempt_poisoned = false;
+            self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
+            *outcome_before_handoff = Some(NativeSliceOutcome::GuestProcessExit);
+            return Ok(());
+        }
+        if let Err(err) = result {
             let snapshot = self
                 .last_debug
                 .as_ref()
@@ -14407,114 +14403,6 @@ impl UnicornMips {
             .as_ref()
             .is_some_and(|snapshot| snapshot.interrupt_probe.is_some())
         {
-            if let Some(exit) = decoded_kernel_exit.filter(|_| post_native_state_ready) {
-                if diagnostic_private {
-                    if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(
-                        &mut uc,
-                        kernel,
-                        native_owner_pid,
-                        &sealed_host_write_guard,
-                    ) {
-                        reject_private_attempt!(
-                            err,
-                            NativeSliceOutcome::BackendError,
-                            "sync decoded-exit file mapping views"
-                        );
-                    }
-                    if let Some(err) = sealed_host_write_guard.poison_error() {
-                        reject_private_attempt!(
-                            err,
-                            NativeSliceOutcome::BackendError,
-                            "sealed host write"
-                        );
-                    }
-                    if let Err(err) = uc.finish() {
-                        self.private_slab_attempt_poisoned = true;
-                        self.saved_context = None;
-                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                        report.failure_operation = Some("finish decoded process exit");
-                        self.persist_run_state_handles(&run_state);
-                        return Err(Error::Backend(format!(
-                            "finish owner-bound process exit: {err:?}"
-                        )));
-                    }
-                    if !Self::terminate_decoded_kernel_process(
-                        kernel,
-                        &exit,
-                        staged_context_thread_birth,
-                        native_owner_birth,
-                    ) {
-                        self.private_slab_attempt_poisoned = true;
-                        self.saved_context = None;
-                        self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                        report.failure_operation = Some("terminate decoded process exit");
-                        self.persist_run_state_handles(&run_state);
-                        return Err(Error::Backend(format!(
-                            "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
-                            exit.process, exit.exit_code
-                        )));
-                    }
-                    if let Some(snapshot) = self.last_debug.as_mut() {
-                        snapshot.encoded_kernel_exit = Some(exit);
-                    }
-                    self.saved_context = staged_saved_context.clone();
-                    self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
-                    self.persist_run_state(&run_state, kernel);
-                    self.private_slab_attempt_poisoned = false;
-                    return Ok(());
-                }
-                if let Err(err) = sync_file_mapping_views_from_unicorn_guarded(
-                    &mut uc,
-                    kernel,
-                    native_owner_pid,
-                    &sealed_host_write_guard,
-                ) {
-                    report.failure_operation = Some("sync decoded-exit file mapping views");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(match uc.abort_close() {
-                        Ok(()) => err,
-                        Err(cleanup) => Error::Backend(format!(
-                            "{err}; abort failed decoded CE process exit: {cleanup:?}"
-                        )),
-                    });
-                }
-                if let Some(err) = sealed_host_write_guard.poison_error() {
-                    reject_private_attempt!(
-                        err,
-                        NativeSliceOutcome::BackendError,
-                        "sealed host write"
-                    );
-                }
-                if let Err(err) = uc.finish() {
-                    report.failure_operation = Some("finish decoded process exit");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(Error::Backend(format!(
-                        "finish decoded CE process exit: {err:?}"
-                    )));
-                }
-                if !Self::terminate_decoded_kernel_process(
-                    kernel,
-                    &exit,
-                    staged_context_thread_birth,
-                    native_owner_birth,
-                ) {
-                    report.failure_operation = Some("terminate decoded process exit");
-                    self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-                    self.persist_run_state(&run_state, kernel);
-                    return Err(Error::Backend(format!(
-                        "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
-                        exit.process, exit.exit_code
-                    )));
-                }
-                if let Some(snapshot) = self.last_debug.as_mut() {
-                    snapshot.encoded_kernel_exit = Some(exit);
-                }
-                self.last_native_slice_outcome = NativeSliceOutcome::GuestProcessExit;
-                self.persist_run_state(&run_state, kernel);
-                return Ok(());
-            }
             let snapshot = self
                 .last_debug
                 .as_ref()
@@ -14755,11 +14643,11 @@ impl UnicornMips {
                 self.persist_run_state_handles(&run_state);
                 let witness_valid = native_owner_birth == Some(intent.owner)
                     && self.saved_context_thread_birth == Some(intent.caller)
-                    && self.saved_context_pc() == Some(intent.return_pc)
+                    && self.saved_context_pc() == Some(intent.stop_pc)
                     && self.last_debug.as_ref().map(|snapshot| snapshot.pc)
-                        == Some(intent.return_pc);
+                        == Some(intent.stop_pc);
                 let completion = if witness_valid {
-                    self.complete_native_pseudo_self_exit(kernel, framebuffer, intent)
+                    self.complete_stopped_pseudo_self_exit(kernel, framebuffer, intent)
                 } else {
                     Err(Error::HostExitAuthorityRecoveryRequired {
                         reason: "native pseudo-exit stop lost its exact CPU/caller witness",
@@ -14911,18 +14799,23 @@ impl UnicornMips {
         Ok(())
     }
 
-    fn terminate_decoded_kernel_process(
-        kernel: &mut CeKernel,
+    /// Classify a decoded self-exit without changing Kernel state. The stopped
+    /// CPU finalizer is the only path allowed to retire its canonical birth.
+    fn checked_decoded_self_exit_caller(
+        kernel: &CeKernel,
         exit: &EncodedKernelExit,
         caller_birth: Option<crate::ce::object::ThreadBirthKey>,
         native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
-    ) -> bool {
+    ) -> Option<(
+        crate::ce::object::ThreadBirthKey,
+        crate::ce::object::ProcessBirthKey,
+    )> {
         let (Some(caller_birth), Some(native_owner_birth)) = (caller_birth, native_owner_birth)
         else {
-            return false;
+            return None;
         };
         if kernel.checked_guest_process_caller_for_birth(caller_birth) != Some(native_owner_birth) {
-            return false;
+            return None;
         }
         // A decoded self-PID is a process identity, not a public handle
         // number. Classify it before handle lookup so a numeric collision
@@ -14930,9 +14823,9 @@ impl UnicornMips {
         if exit.process != crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
             && exit.process != native_owner_birth.process_id()
         {
-            return false;
+            return None;
         }
-        kernel.terminate_current_process_for_caller_birth(caller_birth, exit.exit_code)
+        Some((caller_birth, native_owner_birth))
     }
 
     #[cfg(feature = "unicorn")]
@@ -14956,6 +14849,17 @@ impl UnicornMips {
         })()
         .or_else(|| {
             let probe = snapshot.indirect_call_probe.as_ref()?;
+            // The probe is attempt-local but may name an earlier indirect
+            // transfer. Require the stopped RA/SP and the currently mapped
+            // JALR callsite to describe this exact call into PC zero.
+            let call_pc = snapshot.ra.checked_sub(8)?;
+            if probe.pc != call_pc
+                || probe.sp != snapshot.sp
+                || decode_jalr_register(probe.instruction) != Some(probe.register)
+                || self.read_mapped_u32(call_pc) != Some(probe.instruction)
+            {
+                return None;
+            }
             Some((probe.target, probe.pc))
         })?;
         let decoded = decode_old_mips_kernel_call(decoded_call.0)?;
@@ -80246,15 +80150,24 @@ mod unicorn_tests {
 
     #[test]
     fn decodes_old_mips_terminate_process_from_indirect_probe() {
-        let emulator = super::UnicornMips::new().unwrap();
+        let mut emulator = super::UnicornMips::new().unwrap();
+        let base = 0x0001_3d00;
+        let mut bytes = vec![0; 0x80];
+        bytes[0x64..0x68].copy_from_slice(&0x0100_f809_u32.to_le_bytes());
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "indirect-exit-callsite".to_owned(),
+            base,
+            bytes: bytes.into(),
+        });
         let snapshot = super::UnicornDebugSnapshot {
             pc: 0,
-            ra: 0x0001_3d6c,
+            ra: base + 0x6c,
+            sp: 0x7ffd_ff90,
             a0: 0x42,
             a1: 0,
             indirect_call_probe: Some(super::UnicornIndirectCallProbe {
-                pc: 0x0001_3d64,
-                ra: 0x0001_3d6c,
+                pc: base + 0x64,
+                ra: base + 0x6c,
                 sp: 0x7ffd_ff90,
                 instruction: 0x0100_f809,
                 register: 8,
@@ -80271,11 +80184,42 @@ mod unicorn_tests {
         assert_eq!(exit.method, 2);
         assert_eq!(exit.process, 0x42);
         assert_eq!(exit.exit_code, 0);
-        assert_eq!(exit.caller, 0x0001_3d64);
+        assert_eq!(exit.caller, base + 0x64);
     }
 
     #[test]
-    fn decoded_current_process_terminate_marks_current_process_exited() {
+    fn stale_indirect_exit_probe_cannot_decode_unrelated_pc_zero_stop() {
+        let mut emulator = super::UnicornMips::new().unwrap();
+        let base = 0x0001_3d00;
+        let mut bytes = vec![0; 0x80];
+        bytes[0x64..0x68].copy_from_slice(&0x0100_f809_u32.to_le_bytes());
+        emulator.mapped_blobs.push(super::MappedBlob {
+            name: "stale-indirect-callsite".to_owned(),
+            base,
+            bytes: bytes.into(),
+        });
+        let snapshot = super::UnicornDebugSnapshot {
+            pc: 0,
+            ra: base + 0x70, // An unrelated later call owns this return address.
+            sp: 0x7ffd_ff90,
+            a0: crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            indirect_call_probe: Some(super::UnicornIndirectCallProbe {
+                pc: base + 0x64,
+                ra: base + 0x6c,
+                sp: 0x7ffd_ff90,
+                instruction: 0x0100_f809,
+                register: 8,
+                register_name: "t0",
+                target: 0xffff_f3fa,
+                stack_words: Vec::new(),
+            }),
+            ..Default::default()
+        };
+        assert!(emulator.decode_encoded_kernel_exit(&snapshot).is_none());
+    }
+
+    #[test]
+    fn decoded_current_process_classification_has_no_exit_effects() {
         let config = crate::config::RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         // A selected numeric PID alone is not an exit authority. Mirror the
@@ -80306,18 +80250,18 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert!(super::UnicornMips::terminate_decoded_kernel_process(
-            &mut kernel,
+        assert_eq!(super::UnicornMips::checked_decoded_self_exit_caller(
+            &kernel,
             &exit,
             Some(caller_birth),
             Some(process_birth),
-        ));
-        assert_eq!(kernel.current_process_state().exit_code, 3);
-        assert!(kernel.current_process_state().signaled);
+        ), Some((caller_birth, process_birth)));
+        assert_eq!(kernel.current_process_state().exit_code, crate::ce::kernel::STILL_ACTIVE);
+        assert!(!kernel.current_process_state().signaled);
     }
 
     #[test]
-    fn decoded_self_pid_collision_exits_caller_not_foreign_handle_target() {
+    fn decoded_self_pid_collision_classifies_caller_not_foreign_handle_target() {
         let config = crate::config::RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let foreign_process_id = 0x4000;
@@ -80358,17 +80302,17 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert!(super::UnicornMips::terminate_decoded_kernel_process(
-            &mut kernel,
+        assert_eq!(super::UnicornMips::checked_decoded_self_exit_caller(
+            &kernel,
             &exit,
             Some(caller_birth),
             Some(caller_process),
-        ));
-        assert_eq!(kernel.current_process_state().exit_code, 0x77);
-        assert!(kernel.current_process_state().signaled);
+        ), Some((caller_birth, caller_process)));
+        assert_eq!(kernel.current_process_state().exit_code, crate::ce::kernel::STILL_ACTIVE);
+        assert!(!kernel.current_process_state().signaled);
         assert_eq!(
             kernel.process_exit_code_for_handle(caller_handle),
-            Some(0x77)
+            Some(crate::ce::kernel::STILL_ACTIVE)
         );
         assert_eq!(
             kernel.process_exit_code_for_handle(foreign_handle),
@@ -80408,12 +80352,12 @@ mod unicorn_tests {
 
         // A is still live but does not own B's native CPU lease.
         assert!(kernel.is_live_thread_birth(foreign_caller));
-        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
-            &mut kernel,
+        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
+            &kernel,
             &exit,
             Some(foreign_caller),
             Some(selected_birth),
-        ));
+        ).is_none());
         assert_eq!(kernel.current_process_state(), selected_before);
         assert_eq!(
             kernel.process_exit_code_for_handle(selected_handle),
@@ -80423,12 +80367,12 @@ mod unicorn_tests {
         // Retirement also invalidates a captured A birth while B stays selected.
         assert!(kernel.mark_guest_thread_exited_by_id(1, 0x11));
         assert!(!kernel.is_live_thread_birth(foreign_caller));
-        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
-            &mut kernel,
+        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
+            &kernel,
             &exit,
             Some(foreign_caller),
             Some(selected_birth),
-        ));
+        ).is_none());
         assert_eq!(kernel.current_process_state(), selected_before);
         assert_eq!(
             kernel.process_exit_code_for_handle(selected_handle),
@@ -80467,12 +80411,12 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
-            &mut kernel,
+        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
+            &kernel,
             &exit,
             None,
             Some(selected_birth),
-        ));
+        ).is_none());
         assert_eq!(kernel.current_process_state(), state_before);
         assert_eq!(
             kernel.process_exit_code(process_handle),
