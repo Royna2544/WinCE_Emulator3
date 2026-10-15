@@ -16,6 +16,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
+   - Use the ignored real-MIPS
+     [A11b reciprocal expected red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
+     to plan a birth-checked next-lease handoff into S's own WNDPROC/stack
+     while S's outer Send wait and T's pending GetMessage parent stay intact.
+     The current next lease replays T's inner Send, creating send ID 3 and
+     duplicate wait 4; do not consume/replay either original send or wait.
+     Require the inner and outer replies to unwind exactly once before
+     unignoring the fixture, then reseal and run both broad suites. This is a
+     source-control red, not a live-app result or approved new iNavi run.
    - Isolate the same-birth orphaned blocked-GetMessage payload whose scheduler
      wait is missing. The bounded
      [A10 Send/GetMessage gate](evidence/scheduler-source-cut-a10/validation.receipt.md)
@@ -23,8 +32,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      recovery behavior when that wait is absent. Preserve sender reply/wait
      ownership and fail closed rather than reviving an orphaned B from saved
      context. Stage a focused expected red before a separate production cut.
-     Then test reciprocal T→S after finite Sleep while S remains blocked
-     sending to T. Cross-process parked-sender restore, legacy numeric-only
+     Cross-process parked-sender restore, legacy numeric-only
      HWNDs, post-wake MsgWait/sent processing and `SMF_TIMEOUT` last-error
      semantics remain separate gates, not reproduced live-app failures.
    - Owner-filtered host teardown, full exit capture retirement and implicit

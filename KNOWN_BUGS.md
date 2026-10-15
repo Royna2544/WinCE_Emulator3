@@ -120,14 +120,16 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     failures or live-iNavi results. Only the runnable-receiver fixture checks
     a later no-replay slice; the three finite-Sleep controls stop at A's
     continuation. Full scheduler/Stage 3 and live-app behavior remain open.
-  - **UNTESTED / inferred risk (not a reproduced bug):** after a finite-Sleep
-    receiver T wakes, it could call `SendMessage` to sender S while S remains
-    blocked in its outgoing `SendMessage` to T. No reciprocal cross-Send native
-    fixture covers this cycle. CE can process incoming sent messages while a
-    thread waits in an outgoing send, so continuation provenance and native
-    stack handling here remain source-inferred; deadlock is possible but has
-    not been observed. The bounded one-way Get/Peek/NoWait controls do not
-    establish reciprocal delivery.
+  - **Reproduced source-control failure, not a live-app deadlock:** the ignored
+    real-MIPS [A11b reciprocal fixture](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
+    has S's outer send to T and T's inner send back to S after a finite Sleep.
+    At the safe first stop, send IDs 1/2 and exact scheduler/native waits 2/3
+    remain intact. On the next bounded lease T replays its inner Send import,
+    creating third send ID 3 and duplicate native wait 4 instead of entering
+    S's WNDPROC on S's own stack. The earlier same-call A11 timing assertion
+    was invalid and is historical only. No production repair, broad suite or
+    end-to-end reciprocal return is established; the one-way A10 gate does not
+    close this nested receiver boundary.
   - Live-run risk: a second concurrent cross-thread SendMessageTimeout now
     stops with an explicit backend error until task-owned SMT frames exist
     ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)).

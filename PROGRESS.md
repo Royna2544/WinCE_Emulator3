@@ -4,22 +4,26 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-15 A11 reciprocal Send expected red (test only; no app run)
+## 2026-10-15 A11b reciprocal Send next-lease expected red (test only)
 
-The first real-MIPS reciprocal S→T→S send control is an intentionally ignored,
-test-only [expected red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.receipt.md).
-It was sealed at HEAD `cc1a6d101991e8c68fdeaed2f8ca8bd8d3be896d` with
-`src/emulator/unicorn.rs` SHA-256
-`4C1BFEEFE60D8F293A5CA8BA887069BE05D0E59EC5E7E854BA0D829162F75194`
-and test-only patch SHA-256
-`64C1BCFDBBB6378BBD5B946E08CF913E850F3BA29656E7FA050C378413E0DDED`.
-The selected test exited 101 at the intended S callback boundary, after real
-MIPS Sleep, S's outer Send, T's GetMessage callback entry and T's inner Send.
-Both exact send IDs and scheduler/native waits remained present, but execution
-stayed on T's saved PC rather than entering S's WNDPROC on S's stack. This is a
-reproduced source-control failure, not a live-app deadlock or a fixture
-precondition failure. No production repair or broad suite followed A11; it
-does not change A10's passed bounded source/test gate or authorize an iNavi run.
+The first [A11 run](evidence/scheduler-source-cut-a11-reciprocal-red/validation.receipt.md)
+used an invalid same-call S-WNDPROC timing assertion and remains preliminary
+historical evidence. The corrected, ignored real-MIPS
+[A11b next-lease fixture](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
+is a confirmed source-control red, not a live-app result. Its final test-only
+`unicorn.rs` SHA-256 is
+`8C483A6CA78C3D375AF3DC6D3A99AC1B8C62424EA6660293ECB6EBD4A5465A14`;
+the patch against pre-fixture A10 source SHA-256 is
+`F87BE1C54E3DE866DCC1791BE23A6B87201FB59B40B44E5E8E3FA6AA5E0CD15F`.
+The first lease reached T's inner `SendMessageW` trap and stopped safely with
+outer/inner GWE send IDs 1/2 and matching scheduler/native waits 2/3 intact.
+On one fresh bounded lease, execution resumed T at that same import and made
+third send ID 3 plus duplicate native wait 4, instead of entering S's WNDPROC
+on S's stack. The focused test exited 101 at its exact no-replay assertion;
+the production failure boundary is neither a fixture setup nor same-call
+timing failure. No production repair, broad suite, mount backup or live iNavi
+run followed A11b; the user skipped the a04 app run. A10's prior bounded
+source/test gate remains unchanged.
 
 ## 2026-10-15 Connected A→B Send/GetMessage bounded source gate (no app run)
 
@@ -74,10 +78,12 @@ resealed HEAD, full release passed **2,025/0/9 ignored** and no-default
 Unicorn+desktop/no-trace checks, the release build, format/diff checks and
 post-build source-hash verification passed
 ([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
-This is a source/test gate, not full Stage 3 or a live-app result. Reciprocal
-cross-Send after receiver wake and post-wake MsgWait remain untested; neither
-is a reproduced failure. The user skipped the a04 run; no new adjacent mount
-backup or iNavi launch followed this scheduler cut.
+This is a source/test gate, not full Stage 3 or a live-app result. At that seal,
+reciprocal cross-Send after wake and post-wake MsgWait were untested. A11b later
+reproduced a reciprocal source-control no-replay failure; post-wake MsgWait
+remains untested, and neither path has a live-app result. The user skipped the
+a04 run; no new adjacent mount backup or iNavi launch followed this scheduler
+cut.
 
 ## 2026-10-15 Historical receiver-context Send expected reds (no app run)
 
