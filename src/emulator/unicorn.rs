@@ -81,7 +81,7 @@ struct NativeStopEvidence {
 /// This remains CPU-local until the native owner is closed and the framebuffer
 /// exit preflight passes.
 #[cfg(feature = "unicorn")]
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct StoppedPseudoSelfExit {
     caller: crate::ce::object::ThreadBirthKey,
     owner: crate::ce::object::ProcessBirthKey,
@@ -6142,6 +6142,17 @@ impl UnicornMips {
         framebuffer: &mut dyn Framebuffer,
         intent: StoppedPseudoSelfExit,
     ) -> Result<()> {
+        // Both import and decoded paths must present the same stopped CPU
+        // witness before any window, Task, or VM retirement can begin.
+        if self.saved_context_pc() != Some(intent.stop_pc)
+            || self.last_debug.as_ref().map(|snapshot| snapshot.pc) != Some(intent.stop_pc)
+            || self.saved_context_thread_birth != Some(intent.caller)
+            || self.current_thread_id != intent.caller.thread_id()
+        {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "stopped pseudo-exit lost its exact CPU/caller witness",
+            });
+        }
         if kernel.checked_guest_process_caller_for_birth(intent.caller) != Some(intent.owner) {
             return Err(Error::HostExitAuthorityRecoveryRequired {
                 reason: "stopped pseudo-exit caller no longer owns the selected process",
@@ -14231,7 +14242,9 @@ impl UnicornMips {
                     && snapshot.a1 == exit.exit_code
             });
             let stopped_on_call = matches!(report.raw_stop_pc, AttemptObservation::Value(0))
-                && staged_saved_context.as_ref().is_some_and(|saved| saved.pc == 0)
+                && staged_saved_context
+                    .as_ref()
+                    .is_some_and(|saved| saved.pc == 0)
                 && matches!(report.count_stop_query, AttemptObservation::Value(false))
                 && matches!(report.timeout_query, AttemptObservation::Value(false))
                 && observed_callsite;
@@ -14291,16 +14304,7 @@ impl UnicornMips {
                 exit_code: exit.exit_code,
                 stop_pc: 0,
             };
-            let completion = if self.saved_context_pc() == Some(intent.stop_pc)
-                && self.last_debug.as_ref().map(|snapshot| snapshot.pc) == Some(intent.stop_pc)
-                && self.saved_context_thread_birth == Some(intent.caller)
-            {
-                self.complete_stopped_pseudo_self_exit(kernel, framebuffer, intent)
-            } else {
-                Err(Error::HostExitAuthorityRecoveryRequired {
-                    reason: "decoded pseudo-exit stop lost its exact CPU/caller witness",
-                })
-            };
+            let completion = self.complete_stopped_pseudo_self_exit(kernel, framebuffer, intent);
             if let Err(error) = completion {
                 self.private_slab_attempt_poisoned = true;
                 self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -14632,7 +14636,7 @@ impl UnicornMips {
                     "finish owner-bound native slice: {err:?}"
                 )));
             }
-            if let Some(intent) = pseudo_self_exit_intent.get() {
+            if let Some(intent) = pseudo_self_exit_intent.take() {
                 // Keep only CPU-local continuation state until the full
                 // stopped-exit framebuffer preflight has succeeded. Ordinary
                 // orphan/send/wait maintenance below can mutate Kernel state
@@ -14641,16 +14645,11 @@ impl UnicornMips {
                 self.saved_context_thread_birth = staged_context_thread_birth;
                 self.saved_worker_exit_birth = staged_worker_exit_birth;
                 self.persist_run_state_handles(&run_state);
-                let witness_valid = native_owner_birth == Some(intent.owner)
-                    && self.saved_context_thread_birth == Some(intent.caller)
-                    && self.saved_context_pc() == Some(intent.stop_pc)
-                    && self.last_debug.as_ref().map(|snapshot| snapshot.pc)
-                        == Some(intent.stop_pc);
-                let completion = if witness_valid {
+                let completion = if native_owner_birth == Some(intent.owner) {
                     self.complete_stopped_pseudo_self_exit(kernel, framebuffer, intent)
                 } else {
                     Err(Error::HostExitAuthorityRecoveryRequired {
-                        reason: "native pseudo-exit stop lost its exact CPU/caller witness",
+                        reason: "native pseudo-exit stop lost its exact process owner",
                     })
                 };
                 if let Err(error) = completion {
@@ -80250,13 +80249,19 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert_eq!(super::UnicornMips::checked_decoded_self_exit_caller(
-            &kernel,
-            &exit,
-            Some(caller_birth),
-            Some(process_birth),
-        ), Some((caller_birth, process_birth)));
-        assert_eq!(kernel.current_process_state().exit_code, crate::ce::kernel::STILL_ACTIVE);
+        assert_eq!(
+            super::UnicornMips::checked_decoded_self_exit_caller(
+                &kernel,
+                &exit,
+                Some(caller_birth),
+                Some(process_birth),
+            ),
+            Some((caller_birth, process_birth))
+        );
+        assert_eq!(
+            kernel.current_process_state().exit_code,
+            crate::ce::kernel::STILL_ACTIVE
+        );
         assert!(!kernel.current_process_state().signaled);
     }
 
@@ -80302,13 +80307,19 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert_eq!(super::UnicornMips::checked_decoded_self_exit_caller(
-            &kernel,
-            &exit,
-            Some(caller_birth),
-            Some(caller_process),
-        ), Some((caller_birth, caller_process)));
-        assert_eq!(kernel.current_process_state().exit_code, crate::ce::kernel::STILL_ACTIVE);
+        assert_eq!(
+            super::UnicornMips::checked_decoded_self_exit_caller(
+                &kernel,
+                &exit,
+                Some(caller_birth),
+                Some(caller_process),
+            ),
+            Some((caller_birth, caller_process))
+        );
+        assert_eq!(
+            kernel.current_process_state().exit_code,
+            crate::ce::kernel::STILL_ACTIVE
+        );
         assert!(!kernel.current_process_state().signaled);
         assert_eq!(
             kernel.process_exit_code_for_handle(caller_handle),
@@ -80352,12 +80363,15 @@ mod unicorn_tests {
 
         // A is still live but does not own B's native CPU lease.
         assert!(kernel.is_live_thread_birth(foreign_caller));
-        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
-            &kernel,
-            &exit,
-            Some(foreign_caller),
-            Some(selected_birth),
-        ).is_none());
+        assert!(
+            super::UnicornMips::checked_decoded_self_exit_caller(
+                &kernel,
+                &exit,
+                Some(foreign_caller),
+                Some(selected_birth),
+            )
+            .is_none()
+        );
         assert_eq!(kernel.current_process_state(), selected_before);
         assert_eq!(
             kernel.process_exit_code_for_handle(selected_handle),
@@ -80367,12 +80381,15 @@ mod unicorn_tests {
         // Retirement also invalidates a captured A birth while B stays selected.
         assert!(kernel.mark_guest_thread_exited_by_id(1, 0x11));
         assert!(!kernel.is_live_thread_birth(foreign_caller));
-        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
-            &kernel,
-            &exit,
-            Some(foreign_caller),
-            Some(selected_birth),
-        ).is_none());
+        assert!(
+            super::UnicornMips::checked_decoded_self_exit_caller(
+                &kernel,
+                &exit,
+                Some(foreign_caller),
+                Some(selected_birth),
+            )
+            .is_none()
+        );
         assert_eq!(kernel.current_process_state(), selected_before);
         assert_eq!(
             kernel.process_exit_code_for_handle(selected_handle),
@@ -80411,12 +80428,15 @@ mod unicorn_tests {
             caller: 0x0048_fa90,
         };
 
-        assert!(super::UnicornMips::checked_decoded_self_exit_caller(
-            &kernel,
-            &exit,
-            None,
-            Some(selected_birth),
-        ).is_none());
+        assert!(
+            super::UnicornMips::checked_decoded_self_exit_caller(
+                &kernel,
+                &exit,
+                None,
+                Some(selected_birth),
+            )
+            .is_none()
+        );
         assert_eq!(kernel.current_process_state(), state_before);
         assert_eq!(
             kernel.process_exit_code(process_handle),
@@ -80548,6 +80568,13 @@ mod unicorn_tests {
                 live_pump: false,
             },
         );
+        eprintln!(
+            "DECODED_POSITIVE native={:?} raw_stop={:?} fault={:?}",
+            attempt.report.native_result(),
+            attempt.report.raw_stop_pc(),
+            cpu.last_debug_snapshot()
+                .and_then(|snapshot| snapshot.memory_fault.as_ref())
+        );
         attempt.result?;
         assert_eq!(
             attempt.report.final_outcome(),
@@ -80621,7 +80648,10 @@ mod unicorn_tests {
         assert!(kernel.handles.thread_execution_live_by_id(
             kernel.handles.thread_id(worker_handle).expect("worker TID")
         ));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert_eq!(
             kernel
@@ -80631,6 +80661,70 @@ mod unicorn_tests {
         );
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(incompatible.pixels(), pixels_before.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn forged_ra_branch_to_zero_cannot_complete_decoded_child_exit() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("decoded-forged-ra.exe")?;
+        let launch = kernel.queue_process_launch(Some("\\Test\\decoded-forged-ra.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("child birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+
+        let entry = 0x0040_1000_u32;
+        let return_pc = entry + 0x24;
+        let mut bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x2405_0003,                        // addiu a1,zero,3
+            0x2404_0042,                        // addiu a0,zero,66
+            0x3c1f_0000 | (return_pc >> 16),   // forge RA high
+            0x37ff_0000 | (return_pc & 0xffff), // forge RA low
+            0x0000_0008,                        // jr zero, never reach JALR below
+            0,
+            0x2408_f3fa, // exit-shaped addiu t0,zero,-3078
+            0x0100_f809, // exit-shaped jalr t0, never executed
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes("decoded-forged-ra.exe", &bytes)?;
+        assert_eq!(image.entry_point_va(), entry);
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.owned_process_launch = Some(launch.clone());
+        cpu.set_initial_thread_id(launch.thread_id);
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[29] = cpu.stack_top.expect("fixture stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.running_guest_thread = Some((launch.thread_id, launch.thread_handle));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        eprintln!(
+            "FORGED_RA native={:?} raw_stop={:?} fault={:?}",
+            attempt.report.native_result(),
+            attempt.report.raw_stop_pc(),
+            cpu.last_debug_snapshot()
+                .and_then(|snapshot| snapshot.memory_fault.as_ref())
+        );
+        assert!(attempt.result.is_err(), "forged RA must not authorize exit");
+        assert!(!cpu.active_process_execution_completed());
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
         Ok(())
     }
 
