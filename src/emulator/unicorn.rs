@@ -21530,6 +21530,42 @@ fn try_resume_blocked_modal_message_box<D>(
     let Some(modal) = existing_modal else {
         return false;
     };
+    // A ready dialog result is consumed when read. Prove the still-published
+    // modal wait's exact live owner before taking that result or restoring a
+    // native register image, so a reused numeric TID cannot inherit it.
+    let modal_birth = kernel.blocked_waiter(modal.wait_id).and_then(|wait| {
+        if wait.thread_id != modal.thread_id
+            || wait.thread_handle != modal.thread_handle
+            || !matches!(
+                wait.kind,
+                crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd }
+                    if dialog_hwnd == modal.modal_state.dialog_hwnd()
+            )
+        {
+            return None;
+        }
+        let birth = wait.owner_birth?;
+        (kernel.is_live_thread_birth(birth)
+            && (modal.thread_handle == crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE
+                || kernel
+                    .handles
+                    .thread_birth_key_for_handle(modal.thread_handle)
+                    == Some(birth)))
+        .then_some(birth)
+    });
+    let Some(modal_birth) = modal_birth else {
+        let wait_id = modal.wait_id;
+        let thread_id = modal.thread_id;
+        *blocked_modal.borrow_mut() = Some(modal);
+        current_thread_id.fail_backend(
+            thread_id,
+            format!(
+                "modal MessageBox wait {wait_id} has no exact live owner for thread {thread_id}"
+            ),
+        );
+        let _ = uc.emu_stop();
+        return true;
+    };
     kernel.pump_timers_to_gwe(modal.thread_id);
     let Some(result) = ready_modal_message_box_result(&modal, kernel) else {
         *blocked_modal.borrow_mut() = Some(modal);
@@ -21592,7 +21628,7 @@ fn try_resume_blocked_modal_message_box<D>(
         let _ = uc.emu_stop();
         return true;
     }
-    current_thread_id.set_unverified(modal.thread_id);
+    current_thread_id.set_verified(modal_birth);
     let _ = update_user_kdata_current_ids(uc, modal.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((modal.thread_id, modal.thread_handle));
     true
