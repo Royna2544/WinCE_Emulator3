@@ -77938,6 +77938,25 @@ mod unicorn_tests {
     #[test]
     #[ignore = "expected red: Stage 3 receiver-context SendMessage must enter the blocked receiver's own MIPS stack and birth"]
     fn native_send_to_get_message_blocked_receiver_uses_receiver_stack() -> crate::Result<()> {
+        native_get_message_blocked_receiver_send_fixture(false, false)
+    }
+
+    #[test]
+    #[ignore = "expected red: Stage 3 receiver-context SendMessage must survive a native count-stop inside the receiver WNDPROC"]
+    fn native_send_to_get_message_blocked_receiver_spans_native_slice() -> crate::Result<()> {
+        native_get_message_blocked_receiver_send_fixture(true, false)
+    }
+
+    #[test]
+    #[ignore = "Stage 3 two-receiver exact-birth selection gate pending receiver-context repair"]
+    fn native_send_to_second_get_message_blocked_receiver_uses_exact_birth() -> crate::Result<()> {
+        native_get_message_blocked_receiver_send_fixture(false, true)
+    }
+
+    fn native_get_message_blocked_receiver_send_fixture(
+        spans_callback_slice: bool,
+        two_receivers: bool,
+    ) -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_GET_MESSAGE_W, ORD_SEND_MESSAGE_W};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 
@@ -77976,8 +77995,25 @@ mod unicorn_tests {
                 write_vec_u32(&mut image_bytes, offset + index * 4, word);
             }
         }
-        for (index, word) in [0x2402_0066, 0x03e0_0008, 0].into_iter().enumerate() {
-            write_vec_u32(&mut image_bytes, 0x2a0 + index * 4, word);
+        if spans_callback_slice {
+            // The raw .text already has room for 72 straight-line instructions;
+            // keep the section's virtual extent honest for an in-callback count stop.
+            write_vec_u32(&mut image_bytes, 0x178 + 8, 0x200);
+            for index in 0..72 {
+                write_vec_u32(&mut image_bytes, 0x2a0 + index * 4, 0x2508_0001);
+            }
+            for (index, word) in [0x2402_0066, 0x03e0_0008, 0].into_iter().enumerate() {
+                write_vec_u32(&mut image_bytes, 0x2a0 + (72 + index) * 4, word);
+            }
+        } else {
+            for (index, word) in [0x2402_0066, 0x03e0_0008, 0].into_iter().enumerate() {
+                write_vec_u32(&mut image_bytes, 0x2a0 + index * 4, word);
+            }
+        }
+        if two_receivers {
+            // B executes the same real GetMessage import from a distinct PC,
+            // so the first stop cannot accidentally halt C before it blocks.
+            image_bytes.copy_within(0x200..0x228, 0x230);
         }
         let image = crate::pe::PeImage::parse_bytes("get-blocked-native-send.exe", &image_bytes)?;
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
@@ -78003,9 +78039,11 @@ mod unicorn_tests {
         }
         super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
         let entry = cpu.entry.expect("fixture entry");
+        let middle_entry = entry + 0x30;
         let sender_entry = entry + 0x60;
         let wndproc = entry + 0xa0;
         let receiver_sp = cpu.stack_top.expect("fixture stack") - 0x100;
+        let middle_sp = receiver_sp - 0x2000;
         let sender_sp = receiver_sp - 0x3000;
         let hwnd = kernel.create_window_ex_w(
             receiver_thread,
@@ -78038,7 +78076,79 @@ mod unicorn_tests {
             crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
         ));
 
-        // A is ready, not CE-suspended; it runs only after B blocks in GetMessageW.
+        let mut middle_wait_id = None;
+        if two_receivers {
+            // C is the boot receiver. Let C block first, then B; B occupies
+            // the primary slot and C is displaced when A finally sends to C.
+            let (middle_handle, middle_thread) = kernel.create_guest_thread(middle_entry, 0, false);
+            let middle_birth = kernel
+                .live_thread_birth_key_by_id(middle_thread)
+                .expect("middle receiver birth");
+            let middle_hwnd = kernel.create_window_ex_w(
+                middle_thread,
+                "OTHER_GET_BLOCKED_NATIVE_SEND",
+                "",
+                None,
+                0,
+                0,
+                0,
+            );
+            assert_ne!(middle_hwnd, hwnd);
+            assert_eq!(
+                kernel
+                    .gwe
+                    .window_thread_process_id(hwnd)
+                    .map(|owner| owner.0),
+                Some(receiver_thread)
+            );
+            assert_eq!(
+                kernel
+                    .gwe
+                    .window_thread_process_id(middle_hwnd)
+                    .map(|owner| owner.0),
+                Some(middle_thread)
+            );
+            let mut middle_regs = super::MipsGuestContext::zero();
+            middle_regs.regs[16] = 0xc0c0_0011;
+            middle_regs.regs[29] = middle_sp;
+            middle_regs.hi = 0xc0c0_0022;
+            middle_regs.lo = 0xc0c0_0033;
+            middle_regs.fprs[0] = 0x0000_0000_c0c0_0044;
+            cpu.suspended_guest_thread = Some(super::SuspendedGuestThread {
+                thread_id: middle_thread,
+                thread_birth: Some(middle_birth),
+                thread_handle: Some(middle_handle),
+                regs: middle_regs,
+                pc: middle_entry,
+            });
+            let mut first_framebuffer = VirtualFramebuffer::default_primary()?;
+            let first_block = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut first_framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: Some(middle_entry),
+                    live_pump: true,
+                },
+            );
+            assert!(
+                first_block.result.is_ok(),
+                "C GetMessageW → B activation failed before second receiver blocked: {:?}",
+                first_block.result
+            );
+            assert_eq!(cpu.saved_context_pc(), Some(middle_entry));
+            assert_eq!(cpu.saved_context_thread_birth, Some(middle_birth));
+            assert_eq!(
+                cpu.blocked_guest_thread
+                    .as_ref()
+                    .map(|thread| thread.thread_id),
+                Some(receiver_thread)
+            );
+            assert!(cpu.displaced_blocked_get_messages.is_empty());
+        }
+
+        // A is ready, not CE-suspended; it runs only after the last receiver blocks.
         let (sender_handle, sender_thread) = kernel.create_guest_thread(sender_entry, 0, false);
         let sender_birth = kernel
             .live_thread_birth_key_by_id(sender_thread)
@@ -78089,23 +78199,81 @@ mod unicorn_tests {
             .expect("B must be blocked in real GetMessageW before A sends");
         assert_eq!(get_wait.owner_birth, Some(receiver_birth));
         let get_wait_id = get_wait.id;
+        if two_receivers {
+            let middle = cpu
+                .blocked_guest_thread
+                .as_ref()
+                .expect("B primary GetMessage slot");
+            assert_ne!(middle.thread_id, receiver_thread);
+            assert_eq!(middle.regs.regs[29], middle_sp);
+            assert_eq!(middle.regs.regs[16], 0xc0c0_0011);
+            let displaced = cpu
+                .displaced_blocked_get_messages
+                .iter()
+                .find(|thread| thread.thread_id == receiver_thread)
+                .expect("C displaced GetMessage continuation");
+            assert_eq!(displaced.wait_id, get_wait_id);
+            assert_eq!(displaced.regs.regs[29], receiver_sp);
+            let other_wait = kernel
+                .blocked_waiter(middle.wait_id)
+                .expect("B GetMessage scheduler wait");
+            assert_eq!(other_wait.thread_id, middle.thread_id);
+            assert_eq!(
+                other_wait.owner_birth,
+                kernel.live_thread_birth_key_by_id(middle.thread_id)
+            );
+            assert_ne!(middle.wait_id, get_wait_id);
+            middle_wait_id = Some(middle.wait_id);
+        } else {
+            assert_eq!(
+                cpu.blocked_guest_thread
+                    .as_ref()
+                    .map(|thread| thread.thread_id),
+                Some(receiver_thread)
+            );
+        }
 
         let callback = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
-                instruction_limit: 128,
+                instruction_limit: if spans_callback_slice { 64 } else { 128 },
                 wall_clock_limit_ms: 500,
-                stop_pc: Some(wndproc),
+                stop_pc: if spans_callback_slice {
+                    None
+                } else {
+                    Some(wndproc)
+                },
                 live_pump: true,
             },
         );
         assert!(
             callback.result.is_ok(),
-            "A SendMessageW → B WNDPROC failed after B's GetMessageW wait: {:?}",
-            callback.result
+            "A SendMessageW → target WNDPROC native slice failed after GetMessageW wait (spans_slice={spans_callback_slice}, two_receivers={two_receivers}): {:?}; report={:?}",
+            callback.result,
+            callback.report
         );
-        assert_eq!(cpu.saved_context_pc(), Some(wndproc));
+        if spans_callback_slice {
+            assert_eq!(callback.report.limits().stop_pc, None);
+            assert_eq!(callback.report.start_thread_id(), Some(sender_thread));
+            assert_eq!(callback.report.end_thread_id(), Some(receiver_thread));
+            assert_eq!(
+                callback.report.final_outcome(),
+                super::NativeSliceOutcome::CountLimit
+            );
+            assert_eq!(
+                callback.report.count_stop_query(),
+                &super::AttemptObservation::Value(true)
+            );
+            let stopped_pc = cpu.saved_context_pc().expect("B in-callback count-stop PC");
+            assert!(
+                (wndproc..wndproc + 72 * 4).contains(&stopped_pc),
+                "count stop must land inside B's straight-line WNDPROC, got {stopped_pc:#x}"
+            );
+            assert_ne!(stopped_pc, 0);
+        } else {
+            assert_eq!(cpu.saved_context_pc(), Some(wndproc));
+        }
         assert_eq!(cpu.current_thread_id, receiver_thread);
         assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
         let callback_regs = &cpu.saved_context.as_ref().expect("B WNDPROC context").regs;
@@ -78125,6 +78293,18 @@ mod unicorn_tests {
         // A sent WNDPROC interrupts B's GetMessage import. The scheduler wait
         // is retired at queue take; the parent remains in ResumeImportAfterWndProc.
         assert!(kernel.blocked_waiter(get_wait_id).is_none());
+        if let Some(other_wait_id) = middle_wait_id {
+            let other_wait = kernel
+                .blocked_waiter(other_wait_id)
+                .expect("B GetMessage wait must be unaffected by A sending to C");
+            assert_ne!(other_wait.thread_id, receiver_thread);
+            assert_eq!(
+                cpu.blocked_guest_thread
+                    .as_ref()
+                    .map(|thread| thread.wait_id),
+                Some(other_wait_id)
+            );
+        }
         assert_eq!(cpu.pending_wndproc_returns.len(), 1);
         let pending = &cpu.pending_wndproc_returns[0];
         assert_eq!(pending.source, "GetMessageW/SentMessage");
