@@ -8138,6 +8138,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             )))
         }
         ORD_SEND_NOTIFY_MESSAGE_W => {
+            // Native callers carry their captured birth. Reject a stale frame
+            // before publishing even a no-wait notification; `None` remains
+            // the explicit legacy raw-fixture compatibility path.
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Bool(false));
+            }
             let ok = kernel.send_notify_message_w(
                 thread_id,
                 raw_arg(args, 0),
@@ -32718,9 +32724,8 @@ fn begin_cross_thread_send_message_for_raw_caller(
                 birth, hwnd, msg, wparam, lparam, timeout_ms,
             ),
         Some(_) => None,
-        None => kernel.begin_cross_thread_send_message_w(
-            thread_id, hwnd, msg, wparam, lparam, timeout_ms,
-        ),
+        None => kernel
+            .begin_cross_thread_send_message_w(thread_id, hwnd, msg, wparam, lparam, timeout_ms),
     }
 }
 
@@ -64668,14 +64673,7 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     }
     if hwnd == crate::ce::gwe::HWND_BROADCAST {
         return send_message_timeout_broadcast_raw(
-            kernel,
-            context,
-            thread_id,
-            msg,
-            wparam,
-            lparam,
-            flags,
-            timeout_ms,
+            kernel, context, thread_id, msg, wparam, lparam, flags, timeout_ms,
         );
     }
     let Some(target_thread) = kernel
@@ -73429,6 +73427,159 @@ mod tests {
     }
 
     #[test]
+    fn stale_raw_send_notify_and_default_proc_cannot_mutate_reused_tid() {
+        let mut kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("load default config"));
+        let process = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .expect("receiver birth");
+        let (a_handle, sender_tid) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let a_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(a_handle)
+            .expect("A sender birth");
+        assert!(kernel.mark_guest_thread_exited_by_birth(a_birth, 0));
+        assert!(kernel.close_handle(a_handle).expect("close A handle"));
+        let b_handle = kernel
+            .handles
+            .try_create_thread_in_birth(process, sender_tid, 0x0040_4000, 0, false)
+            .expect("reuse sender TID");
+        let b_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(b_handle)
+            .expect("B sender birth");
+        assert_ne!(a_birth, b_birth);
+
+        let notify_hwnd =
+            kernel.create_window_ex_w(receiver_tid, "NOTIFY_BIRTH", "", None, 0, 0, 0);
+        let direct_hwnd =
+            kernel.create_window_ex_w(sender_tid, "DIRECT_BIRTH", "before", None, 0, 0, 0);
+        let table = CoredllExportTable::default();
+        let mut memory = UnitGuestMemory::default();
+        let stale = CoredllRawContext {
+            thread_id: sender_tid,
+            caller_birth: Some(a_birth),
+            ..Default::default()
+        };
+        let current = CoredllRawContext {
+            thread_id: sender_tid,
+            caller_birth: Some(b_birth),
+            ..Default::default()
+        };
+        const SENTINEL_ERROR: u32 = 0x5151_8690;
+        kernel.threads.set_last_error(sender_tid, SENTINEL_ERROR);
+        let before_status = kernel
+            .gwe
+            .peek_queue_status_for_birth(receiver_birth, crate::ce::gwe::QS_SENDMESSAGE);
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                stale.clone(),
+                ORD_SEND_NOTIFY_MESSAGE_W,
+                [notify_hwnd, crate::ce::gwe::WM_USER + 0x86, 1, 2],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert!(
+            kernel
+                .gwe
+                .sent_message_ids_for_windows(&[notify_hwnd])
+                .is_empty()
+        );
+        assert!(
+            !kernel
+                .gwe
+                .has_pending_sent_message_for_birth(receiver_birth)
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .peek_queue_status_for_birth(receiver_birth, crate::ce::gwe::QS_SENDMESSAGE),
+            before_status
+        );
+        assert_eq!(kernel.threads.get_last_error(sender_tid), SENTINEL_ERROR);
+
+        let text_ptr = 0x0002_8690;
+        memory.write_wide_z(text_ptr, "after");
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                stale,
+                ORD_DEF_WINDOW_PROC_W,
+                [direct_hwnd, crate::ce::gwe::WM_SETTEXT, 0, text_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.gwe.get_window_text(direct_hwnd, 32).as_deref(),
+            Some("before")
+        );
+        assert_eq!(kernel.threads.get_last_error(sender_tid), SENTINEL_ERROR);
+
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                current.clone(),
+                ORD_SEND_NOTIFY_MESSAGE_W,
+                [notify_hwnd, crate::ce::gwe::WM_USER + 0x86, 1, 2],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        let ids = kernel.gwe.sent_message_ids_for_windows(&[notify_hwnd]);
+        assert_eq!(ids.len(), 1);
+        let sent = kernel.gwe.sent_message(ids[0]).expect("B notification");
+        assert_eq!(
+            sent.sender_owner,
+            crate::ce::gwe::SentMessageSenderOwner::SystemNoWait
+        );
+        assert_eq!(sent.sender_thread_id(), None);
+        assert!(
+            kernel
+                .gwe
+                .has_pending_sent_message_for_birth(receiver_birth)
+        );
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                current,
+                ORD_DEF_WINDOW_PROC_W,
+                [direct_hwnd, crate::ce::gwe::WM_SETTEXT, 0, text_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.gwe.get_window_text(direct_hwnd, 32).as_deref(),
+            Some("after")
+        );
+    }
+
+    #[test]
     fn send_message_timeout_block_prepare_declines_zero_timeout_cross_thread() {
         let config = RuntimeConfig::load_default().expect("load default config");
         let mut kernel = CeKernel::boot(config);
@@ -73492,7 +73643,7 @@ mod tests {
             .gwe
             .sent_message(prepared.send_id)
             .expect("prepared sent message");
-        assert_eq!(sent.sender_thread_id, Some(sender_thread));
+        assert_eq!(sent.sender_thread_id(), Some(sender_thread));
         assert_eq!(sent.receiver_thread_id, receiver_thread);
         assert_eq!(sent.message.msg, crate::ce::gwe::WM_USER + 2);
         assert_eq!(sent.send_timeout_flags, SMTO_BLOCK | SMTO_ABORTIFHUNG);
