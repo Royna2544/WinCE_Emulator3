@@ -446,10 +446,14 @@ RAM page would charge when committed; a proven shared ROM/XIP page would
 charge only for a private replacement when one is made.
 These are proposed accounting cases, not a claim that the current loader can
 classify them. Unknown provenance must not be silently treated as either
-free XIP or committed RAM in a new charged path; retain the old explicit
-copy-backed path or refuse the migration until classification and charging
-are defined. Guest charges, host RSS and native TCG reservation remain
-separate measures. See [O-M3](../DECISIONS.md) for the open decision.
+free XIP or committed RAM in a new charged path. The user selected the
+copy-backed production-image path on 2026-10-16 until classification and
+charging are defined; do not adopt production EXE/DLL images into pinned
+backing under an "unclassified, not yet charged" status. Synthetic pinned
+ownership controls may continue without changing the ordinary SD-app loader.
+This is a migration staging decision, not an O-M3 accounting result. Guest
+charges, host RSS and native TCG reservation remain separate measures. See
+[O-M3](../DECISIONS.md) for the open accounting question.
 
 The current mount configuration does establish a narrower file-origin fact:
 the app EXE is loaded from the writable/removable `\SDMMC Disk` host mount,

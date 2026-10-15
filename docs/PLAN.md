@@ -186,8 +186,10 @@ remains copy-backed. The later [synthetic exact-process-exit/retained-pin gate](
 retires only a verified birth's image runs after D-011 framebuffer preflight
 and refuses writes through retained retired pins; its native control covers
 the after-owner-close case, not exit while an engine remains mapped. The
-next connected sequence is production writable main-image integration,
-preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
+next connected sequence is synthetic host-write/pin ownership and O-M3
+physical-page accounting. Only after accounting is established may production
+writable main-image integration proceed, followed by preloaded DLLs and
+dynamic DLL load/unload/reload; do not treat byte
 persistence through the old copy path as the ownership proof. Each cut needs
 real-MIPS bytes, exact birth/module-generation pins, native copy/readback
 exclusion and failure controls. The tested second-run `mem_map_ptr` collision
@@ -198,7 +200,9 @@ injected. The
 [memory](subsystems/guest-memory.md) and [loader](subsystems/pe-loader.md)
 plans detail those gates. [O-M3](DECISIONS.md)
 keeps ROM/XIP versus RAM page provenance and `GlobalMemoryStatus` charge timing
-open before guest-budget or live acceptance. A writable-mount run still needs
+open. The user chose to keep production images copy-backed until that
+accounting is known; synthetic pinned controls are not production adoption.
+A writable-mount run still needs
 a distinct approval and fresh verified adjacent backups.
 
 ### Parallel lanes (never gate a stage)

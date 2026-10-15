@@ -73,23 +73,27 @@ completion route (`unicorn.rs:19639-19724,19759-19775`); pending launches
 before their first child CPU have no modal slot.
 The pseudo self-exit path already fails closed for both modal types.
 
-The first connected safety cut is **fail-closed**, not invented restoration:
-before calling Kernel's exit finalizer or changing framebuffer/window/wait/CPU
-state, every stopped active, parked or just-returned child CPU completion path
-(requested or natural, child or boot) checks that CPU's blocked MessageBox and popup modal
-slots. Either present slot yields typed
-`HostExitRecoveryRequired`; preserve the stopped CPU, modal/wait/queue and
-process, framebuffer bytes and dirty regions, and leave the monitor in its
-recovery hold. This is conservative even if a MessageBox rectangle might be
-restorable. It does not infer authority from selected PID or numeric HWND;
-the unchanged-state promise applies to the refused exact-birth target, not
-to earlier children already completed in one parked-prune batch. The caller
-must still retain all unprocessed parked CPUs after that refusal. Future
-restoration needs the captured modal wait/thread birth to match the
-terminating process birth. `BlockedModalMessageBox` currently stores numeric
-thread ID/handle/wait ID, not a birth; the existing exact-wait verifier
-(`unicorn.rs:22830`) is the starting point. An unowned or stale modal must
-never authorize teardown.
+The first connected safety cut is **fail-closed**, not invented restoration.
+After exact-birth authority selects an exit target, preflight the stopped CPU
+and every parked CPU in each subtree that completion would discard: this
+includes same-birth active duplicates and nested foreign-birth descendants.
+The descendant's modal presence blocks disposal; its numeric PID/TID does
+not authorize the parent's exit. Before Kernel finalization or destructive
+tree pruning, a blocked MessageBox or popup in that affected set yields typed
+`HostExitRecoveryRequired`. Preserve the refused target's stopped CPU,
+modal/wait state, queued descendants, process, framebuffer bytes and dirty
+regions, and leave the monitor in recovery hold. This applies to requested
+and natural active, parked and just-returned child completions. Duplicate
+pruning before finalization must retain a modal-bearing parked subtree rather
+than silently discard it. The rule is conservative even if a MessageBox
+rectangle might be restorable. It does not infer authority from selected PID
+or numeric HWND. Unchanged-state and queue-order claims apply to the refused
+target and still-unprocessed parked CPUs, not to earlier children already
+completed in one prune batch. Future restoration needs the captured modal
+wait/thread birth to match the terminating process birth.
+`BlockedModalMessageBox` currently stores numeric thread ID/handle/wait ID,
+not a birth; the existing exact-wait verifier (`unicorn.rs:22830`) is the
+starting point. An unowned or stale modal must never authorize teardown.
 
 The later checked-restoration cut must collect the exact modal state and
 Kernel's frozen-birth GWE stores and preflight **all** against one held
@@ -106,9 +110,16 @@ restoring an earlier checkpoint remains the recovery path.
 
 Stage expected-red active and parked completion controls first: a blocked
 rendered MessageBox (synthetic) and a blocked popup (production-reachable)
-must both refuse before process/window/wait/CPU/pixel/dirty mutation. Include
-a GWE-plus-modal late-target control to prove no early GWE restore. Then keep
-existing GWE-only D-011 controls green in release and no-default builds.
+must both refuse before exit-owned process/window/wait/CPU/pixel/dirty
+mutation. Include active no-modal/same-birth parked-modal duplicates,
+popup-only duplicate retention before finalization, and a foreign-birth modal
+descendant under an affected parked root. Include a GWE-plus-modal later
+target within one completion to prove no earlier GWE restore for that target;
+this does not promise rollback of previously completed siblings in a prune
+batch. Then keep existing GWE-only D-011 controls green in release and
+no-default builds. Successful completion with nonmodal descendant CPU queues
+still needs a separate ownership/hoisting gate; this modal-presence cut does
+not solve it.
 Pending launches with no CPU/modal still use the GWE-only preflight. Include
 the initial-child `ChildProcessRunOutcome::Exited` finalizer in the guarded
 source/test review before claiming every child path is covered.
