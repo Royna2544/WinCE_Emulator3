@@ -1959,9 +1959,30 @@ fn publish_remote_endpoint(
         if publish_framebuffer {
             server.publish_framebuffer(framebuffer);
         }
-        if !server.claim_debug_publish_slot(remote_debug_publish_interval()) {
-            return;
-        }
+        let publication = match server.claim_debug_publish_slot(remote_debug_publish_interval()) {
+            Ok(Some(publication)) => publication,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::error!(target: "ce.remote", "debug publication slot failed: {err}");
+                return;
+            }
+        };
+        // This is one cached debug body with its own freshness identity, not a
+        // coherent epoch for status, frames or the other debug keys.
+        server.publish_debug_text(
+            "summary",
+            format!(
+                "  publication_sequence: {}\n  publication_host_monotonic_ns: {}\n  publication_utc_unix_ms: {}\n  live_guest_stable_page_budget_used_bytes: {}\n  last_stop_snapshot: {}\n{}",
+                publication.sequence,
+                publication.host_monotonic_ns,
+                publication.utc_unix_ms,
+                kernel.memory.private_commit_used_bytes(),
+                snapshot
+                    .map(|snapshot| snapshot.summary())
+                    .unwrap_or_else(|| "none".to_owned()),
+                live_kernel_waits_text(kernel)
+            ),
+        );
         server.publish_debug_text("windows", live_kernel_windows_text(kernel));
         server.publish_debug_text("messages", live_kernel_messages_text(kernel));
         server.publish_debug_text("queues", kernel.gwe.queue_debug_text());
@@ -1978,16 +1999,6 @@ fn publish_remote_endpoint(
             server.publish_debug_text("blobs", live_mapped_blob_ranges_text(cpu));
             server.publish_debug_text("trampolines", cpu.trampoline_debug_text());
         }
-        server.publish_debug_text(
-            "summary",
-            format!(
-                "  last_stop_snapshot: {}\n{}",
-                snapshot
-                    .map(|snapshot| snapshot.summary())
-                    .unwrap_or_else(|| "none".to_owned()),
-                live_kernel_waits_text(kernel)
-            ),
-        );
         server.publish_debug_text("sends", kernel.gwe.sent_message_debug_text());
         if let Some(snapshot) = snapshot {
             server.publish_debug_text("processes", monitor_trace_text(snapshot, "processes"));

@@ -97,7 +97,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Condvar, Mutex, mpsc},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use image::{ColorType, ImageEncoder, codecs::jpeg::JpegEncoder, codecs::png::PngEncoder};
@@ -153,6 +153,22 @@ pub struct RemoteServer {
     local_addr: SocketAddr,
 }
 
+/// Identity of one accepted debug-cache publication slot on this server.
+/// Other status, frame and debug keys are still published independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebugPublicationStamp {
+    pub sequence: u64,
+    pub host_monotonic_ns: u128,
+    pub utc_unix_ms: u64,
+}
+
+#[derive(Debug)]
+struct DebugPublishState {
+    origin: Instant,
+    last_accepted: Option<Instant>,
+    sequence: u64,
+}
+
 #[derive(Debug)]
 struct RemoteServerState {
     config: RemoteServerConfig,
@@ -162,7 +178,7 @@ struct RemoteServerState {
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
     latest_debug: Mutex<BTreeMap<String, String>>,
-    latest_debug_publish: Mutex<Option<Instant>>,
+    debug_publish: Mutex<DebugPublishState>,
     recent_logs: Mutex<VecDeque<String>>,
     audio: Mutex<RemoteAudioState>,
 }
@@ -232,7 +248,11 @@ impl RemoteServer {
                 })),
                 latest_framebuffer: Mutex::new(None),
                 latest_debug: Mutex::new(BTreeMap::new()),
-                latest_debug_publish: Mutex::new(None),
+                debug_publish: Mutex::new(DebugPublishState {
+                    origin: Instant::now(),
+                    last_accepted: None,
+                    sequence: 0,
+                }),
                 recent_logs: Mutex::new(VecDeque::new()),
                 audio: Mutex::new(RemoteAudioState {
                     chunks: VecDeque::new(),
@@ -359,21 +379,43 @@ impl RemoteServer {
             .insert(key.into(), text.into());
     }
 
-    pub fn claim_debug_publish_slot(&self, interval: Duration) -> bool {
-        if interval.is_zero() {
-            return true;
-        }
-        let now = Instant::now();
-        let mut latest = self
+    pub fn claim_debug_publish_slot(
+        &self,
+        interval: Duration,
+    ) -> Result<Option<DebugPublicationStamp>> {
+        let mut publisher = self
             .state
-            .latest_debug_publish
+            .debug_publish
             .lock()
             .expect("remote debug publish mutex");
-        if latest.is_some_and(|last| now.duration_since(last) < interval) {
-            return false;
+        // Sample after acquiring publication ownership so sequence and host
+        // monotonic time cannot be reversed by competing publisher threads.
+        let now = Instant::now();
+        if !interval.is_zero()
+            && publisher
+                .last_accepted
+                .is_some_and(|last| now.duration_since(last) < interval)
+        {
+            return Ok(None);
         }
-        *latest = Some(now);
-        true
+        let sequence = publisher
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| Error::Backend("debug publication sequence exhausted".to_owned()))?;
+        let utc_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| Error::Backend(format!("debug publication UTC: {err}")))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| Error::Backend("debug publication UTC overflow".to_owned()))?;
+        let stamp = DebugPublicationStamp {
+            sequence,
+            host_monotonic_ns: now.duration_since(publisher.origin).as_nanos(),
+            utc_unix_ms,
+        };
+        publisher.last_accepted = Some(now);
+        publisher.sequence = sequence;
+        Ok(Some(stamp))
     }
 
     pub fn publish_recent_logs(&self, lines: impl IntoIterator<Item = String>) {
@@ -1925,6 +1967,82 @@ mod tests {
         assert!(response.contains("200 OK"));
         assert!(response.contains(r#""guestWidth":800"#));
         assert!(response.contains(r#""guestHeight":480"#));
+    }
+
+    #[test]
+    fn remote_debug_publication_stamp_is_server_local_and_monotone() {
+        let first_server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        let second_server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let first = first_server
+            .claim_debug_publish_slot(Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        let second = first_server
+            .claim_debug_publish_slot(Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        let third = first_server
+            .clone()
+            .claim_debug_publish_slot(Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        let independent = second_server
+            .claim_debug_publish_slot(Duration::ZERO)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!([first.sequence, second.sequence, third.sequence], [1, 2, 3]);
+        assert_eq!(independent.sequence, 1);
+        assert!(first.host_monotonic_ns <= second.host_monotonic_ns);
+        assert!(second.host_monotonic_ns <= third.host_monotonic_ns);
+        assert!(first.utc_unix_ms <= second.utc_unix_ms);
+        assert!(second.utc_unix_ms <= third.utc_unix_ms);
+        assert!(first.utc_unix_ms > 0);
+    }
+
+    #[test]
+    fn remote_debug_throttle_and_cached_gets_do_not_consume_publication_ids() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        let first = server
+            .claim_debug_publish_slot(Duration::from_secs(3600))
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.sequence, 1);
+        assert!(
+            server
+                .claim_debug_publish_slot(Duration::from_secs(3600))
+                .unwrap()
+                .is_none()
+        );
+
+        let body = format!("publication_sequence={}\n", first.sequence);
+        server.publish_debug_text("summary", body.clone());
+        let request = "GET /api/v1/debug/summary.txt HTTP/1.1\r\nHost: local\r\n\r\n";
+        let first_get = http_request(server.local_addr(), request);
+        let cached_get = http_request(server.local_addr(), request);
+        assert!(first_get.contains("200 OK"));
+        assert!(first_get.ends_with(body.as_str()));
+        assert_eq!(first_get, cached_get);
+
+        let second = server
+            .claim_debug_publish_slot(Duration::ZERO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.sequence, 2);
+        assert!(second.host_monotonic_ns >= first.host_monotonic_ns);
     }
 
     #[test]
