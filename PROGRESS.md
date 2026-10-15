@@ -30,6 +30,21 @@ cross-Send after receiver wake and post-wake MsgWait remain untested; neither
 is a reproduced failure. The user skipped the a04 run; no new adjacent mount
 backup or iNavi launch followed this scheduler cut.
 
+## 2026-10-15 Receiver-context cross-thread Send expected red (no app run)
+
+A new ignored real-MIPS control first puts receiver B in a verified-birth
+`GetMessageW` wait, then runs sender A's `SendMessageW` toward B. B's wait and
+A's activation pass; the second native attempt fails before B's WNDPROC
+assertions with `Backend("native staged context has stale or unverified thread
+birth")`. The [test-only receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
+preserves the exact 196-line patch, source hash and targeted 1-failed/1-ignored
+results. Source inspection also shows the receiver-context shortcut derives
+callback SP from A's live registers, but the red did **not** observe B's stack
+or prove a reciprocal deadlock. No production fix, reciprocal fixture, full
+suite reseal, mount backup or iNavi launch occurred. The next design gate is
+a checked, exact-birth receiver-frame handoff; one-return/send-wait cleanup
+remains to be tested after callback entry is repaired.
+
 ## 2026-10-15 Architecture and measurement design refresh (no source/run)
 
 The common [Stage 7 plan](docs/PLAN.md) now requires reviewed, device- and

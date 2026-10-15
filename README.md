@@ -38,6 +38,11 @@ remote-control HTTP/WebSocket surface.
   Reciprocal cross-Send and post-wake MsgWait remain untested. The user skipped
   the a04 live run; no new mount backup or iNavi run follows from this source
   gate, and full Stage 3 remains open.
+- A later [ignored real-MIPS cross-thread Send control](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
+  reproduces an unverified native-context stop after B blocks in `GetMessageW`
+  and A sends to B. This is a source-test red, not an iNavi failure. Receiver
+  stack and completion assertions remain behind that stop; no production fix
+  or current-source broad reseal has followed.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
