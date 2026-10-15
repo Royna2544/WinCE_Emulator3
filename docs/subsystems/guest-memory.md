@@ -328,6 +328,11 @@ continuation can be reused. It does not inject a native owner-close failure
 or prove all protect/unmap failures. Already-live guest writes are not
 promised rollback.
 
+The [synthetic stopped-exit gate](../../evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
+retires only the verified process birth's writable-image runs after D-011
+preflight and rejects writes through retained retired pins. Its native
+control runs after fresh-owner closure, not while an engine remains mapped.
+
 Guest physical accounting is a separate **unresolved policy gate**. The
 device reports 195,350,528 B total and 164,368,384 B available at boot in
 the synced `SYSTEM.TXT`; current `PrivatePageBudget` subtracts boot-reserved
@@ -378,7 +383,7 @@ is a synthetic source gate, not production image adoption. Retain real-MIPS
 fresh-owner and zero image
 copy-in/readback assertions, the native `mem_map_ptr` failure/abort and
 file-view overlap controls, and add other direct host-write/restore/rebind
-and exact exit/module-retirement fences, A/B same-VA isolation, IAT patch,
+and exact module-retirement fences, A/B same-VA isolation, IAT patch,
 stale birth/generation and native-write-guard refusal.
 The current synthetic map helper excludes adopted pages from ordinary blob
 copy mapping; the production map/sync cut must preserve that exclusion.

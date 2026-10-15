@@ -2008,6 +2008,18 @@ each; six Rust source hashes matched through the four attempts despite a
 backup-only HEAD advance during the first focused run. Unicorn-only and
 Unicorn-plus-desktop feature checks also passed on the same source seal.
 
+The [synthetic exact-process-exit/retained-pin gate](../../evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
+passed focused release **18/0/0** and no-default **12/0/0** controls. After
+verified exact-birth completion and D-011 framebuffer preflight, only that
+birth's image runs retire; retained pins reject host writes but preserve
+diagnostic readback after owner close. Default-harness complete retry suites
+passed release **2,132/0/9 ignored** and no-default **1,524/0/3 ignored**;
+alternate Unicorn feature checks passed. The first full release attempt had
+one named `FAILED` line, then exited `0xc0000005` without a result block. A
+passing isolated named test and complete retry do not explain that access
+violation or prove its cause. The native fixture covers after-owner-close
+retirement, not exit during an active mapped engine.
+
 The transient WINDOWPOS stack issue remains independently open:
 an [isolated direct-EXE probe](../../evidence/stage2-windowpos-stack-20261016/validation.receipt.md)
 passed at requested 128 KiB but overflowed at 64 KiB, while
@@ -2018,7 +2030,7 @@ later full-suite observation on changed source, not part of that earlier
 three-run cohort. Neither denominator establishes cause or production stack
 safety.
 
-Other direct host-write/restore/rebind and exact exit/module-retirement
+Other direct host-write/restore/rebind and exact module-retirement
 fences, machine checkpoint relineage, DLL migration and production activation
 remain separate gates. No app, mount, LAN, RSS, throughput, map-readiness or
 full Stage 2 result follows.

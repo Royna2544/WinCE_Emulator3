@@ -182,14 +182,17 @@ and [legacy file-view overlap](../evidence/stage2-writable-image-file-view-20261
 synthetic gates pass. The later [VM-allocation overlap gate](../evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
 also fences LegacySeed, same-birth stable/private/shared and heap allocation,
 and native seed/reclaim/fault/map collisions, but normal SD-app loading
-remains copy-backed. The
+remains copy-backed. The later [synthetic exact-process-exit/retained-pin gate](../evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
+retires only a verified birth's image runs after D-011 framebuffer preflight
+and refuses writes through retained retired pins; its native control covers
+the after-owner-close case, not exit while an engine remains mapped. The
 next connected sequence is production writable main-image integration,
 preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
 persistence through the old copy path as the ownership proof. Each cut needs
 real-MIPS bytes, exact birth/module-generation pins, native copy/readback
 exclusion and failure controls. The tested second-run `mem_map_ptr` collision
-retains pins through checked abort-close; direct host-write/restore/rebind
-paths and exact exit/module-retirement effects still need synthetic fences
+retains pins through checked abort-close; other direct host-write/restore/rebind
+paths and exact module-retirement effects still need synthetic fences
 before production activation. A native owner-close failure itself was not
 injected. The
 [memory](subsystems/guest-memory.md) and [loader](subsystems/pe-loader.md)

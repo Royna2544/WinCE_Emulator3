@@ -224,10 +224,12 @@ but normal SD-app loading remains copy-backed. The later bounded
 [native-map failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
 and [legacy file-view overlap](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
 and [VM-allocation overlap](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
+and [exact-process-exit/retained-pin](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)
 synthetic gates pass; the intermittent WINDOWPOS test-thread stack overflow
-is not resolved. Other host-write/exit fences, preloaded/runtime DLL
-ownership and O-M3 `PrivatePageBudget` treatment are the immediate Stage 2
-priority ahead of any live acceptance or next MsgWait gate.
+and a separate full-suite access violation remain unexplained. Other direct
+host-write/restore/rebind and module-retirement fences, preloaded/runtime DLL
+ownership and O-M3 `PrivatePageBudget` treatment remain Stage 2 priorities
+ahead of live acceptance or the next MsgWait gate.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in
