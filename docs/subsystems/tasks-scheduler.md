@@ -148,8 +148,14 @@ proof:
    receiver source wait/frame and full saved PC/RA/SP/S0/HI/LO/FPU context;
    checked-capture the sender's complete context. A missing or mismatched
    receiver source is a typed failure, not permission to run its WNDPROC on
-   the sender stack. Keep sender birth, receiver birth, source wait, new send
-   and sender wait IDs in the return token.
+   the sender stack. `SentMessage` itself must freeze receiver birth at queue
+   time from the HWND owner, including ordinary sends (today only finite-Sleep
+   sends carry that indirectly). A queued send must be invisible to a later
+   incarnation reusing the numeric TID and must fail/reply once when its
+   original receiver exits. Keep sender birth, receiver birth, source wait,
+   new send and sender wait IDs in the return token. Legacy numeric-only
+   windows remain an explicit fixture boundary, not an inferred production
+   owner.
 3. Commit one send and sender wait, then cross a checked native-context
    transfer boundary before WNDPROC entry. Restore the receiver's saved
    registers and KData; derive call SP from that receiver SP, and mark its
@@ -160,13 +166,33 @@ proof:
    preserve unrelated waits and sends.
 4. On callback return, verify receiver birth, expected call SP, active send
    ID and exact sender wait/birth before completing the result and restoring
-   the sender's complete context. Retire each send/wait once, avoid a second
+   the sender's complete context. Sent-message retrieval and callback
+   completion must select by receiver birth and exact send ID, not whichever
+   send is active for a reused numeric TID. Retire each send/wait once, avoid a second
    active-send-stack pop, and defer timeout result-pointer writes until the
    sender return is validated. A post-execution restore failure is terminal
    with partial-effects evidence, never a fabricated CE success.
 
+For the ordinary blocked-GetMessage source, the smaller connected cut is to
+queue A's send and block A, then let the existing birth-verified
+`try_resume_blocked_get_message_with_active_pc` bridge restore B at the next
+slice/selection boundary. Do not switch to B inside A's import hook. That
+bridge must select the *target birth*, not the first displaced GetMessage
+record when multiple receivers are blocked. A different-thread guest WNDPROC
+must have no fallback that executes on the sender's stack; delete the old
+receiver-context shortcut once the queue/bridge path is complete. A receiver
+not currently blocked keeps its send queued until its own Get/Peek retrieval.
+This matches the documented CE-family retrieval boundary
+([CE 5.0 SendMessage reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms939980%28v%3Dmsdn.10%29));
+the local real-MIPS and later CE6 app gates, not that older reference alone,
+decide this implementation's acceptance. A blocked-outgoing-Send receiver is
+not served by GetMessage's bridge and retains a separate source/continuation
+gate.
+
 The first implementation cut must make the ordinary blocked-GetMessage red
-green and add its one-return/parent-continuation negatives before the
+green and add slice-spanning WNDPROC and second-of-two blocked-receiver reds,
+plus receiver-exit/TID-reuse, two-senders/one-receiver, checked-restore
+failure, and one-return/parent-continuation negatives, before the
 reciprocal blocked-Send case. This design does not claim those transitions
 are already implemented.
 
