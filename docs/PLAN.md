@@ -100,10 +100,13 @@ The subsequent bounded [guest pseudo-exit caller gate](../evidence/stage3-pseudo
 source-tested captured thread and native process-lease admission plus decoded
 self-PID collision safety; release **2,081/0/9 ignored** and no-default
 **1,502/0/3 ignored** passed. It does not prove immediate native CPU stop,
-canonical Task retirement or whole-exit atomicity.
+canonical Task retirement or whole-exit atomicity. The later bounded
+[D-011 framebuffer gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+rejects an un-restorable saved backing before stopped-exit effects and
+propagates recovery through tested scheduler paths.
 Direct WndProc dispatch, receiver-side cross-process result writes,
-conditional system-origin device broadcasts, D-011 stopped-exit framebuffer
-preflight/recovery, CE6 foreign-link/cancellation parity, full Stage 3 and
+conditional system-origin device broadcasts, post-preflight whole-exit
+atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
 live iNavi remain separate gates. No live run is approved by these source gates.
 
 Stage 7 budgets are a design gate, not values inferred from the current
@@ -295,8 +298,11 @@ close only their named gates, not Stage 2 or live acceptance.
   `DestroyWindow` recursion. The later
   [pseudo-caller gate](../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
   source-tests native COREDLL and decoded self-exit caller/owner preflight,
-  but not immediate CPU stop or D-011 framebuffer recovery. Full exit-effect
-  authority, live-app behavior and CE6 parity remain open.
+  but not immediate CPU stop. The later bounded
+  [D-011 gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+  checks saved-backing restore feasibility before stopped-exit effects and
+  propagates a typed recovery refusal. Post-preflight whole-exit atomicity,
+  full exit-effect authority, live-app behavior and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates

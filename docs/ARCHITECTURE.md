@@ -100,9 +100,12 @@ prevents foreign parent/owner links from expanding host-exit window targets
 and wakes an exact sender waiting on a retired receiver HWND. The bounded
 [guest pseudo-exit caller gate](../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
 then source-tested captured thread/process-lease admission for native COREDLL
-and decoded self-exit; it did not establish immediate CPU stop, Task retirement
-or whole-exit atomicity. The complete target exit-effect contract below,
-including unimplemented D-011 framebuffer preflight, remains open.
+and decoded self-exit; it did not establish immediate CPU stop or Task
+retirement. The later bounded [D-011 source/test gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+checks every exact-birth saved window backing before stopped-exit mutation and
+returns a typed recovery error on refusal. Root pseudo signaling still does
+not prove canonical Task/VM retirement, and the complete target exit-effect
+contract, including failures after successful preflight, remains open.
 
 ## A1. Machine authority
 
@@ -192,9 +195,12 @@ For stopped host exit with saved window backing, [D-011](DECISIONS.md)
 chooses strict framebuffer preflight: if any selected backing cannot restore
 to the supplied destination, refuse completion before **any** exit effect and
 hold the stopped process for recovery. Do not turn that refusal into an
-ordinary CPU continuation or a successful best-effort exit. This is a target
-policy pending a red control and implementation, not a claim that current
-Kernel teardown is atomic.
+ordinary CPU continuation or a successful best-effort exit. The bounded
+[D-011 gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+source-tests this refusal for saved live and already-destroyed HWND backing,
+including partial multi-window failure and active/parked/pending scheduler
+propagation. It does not make later teardown effects atomic or complete the
+machine-owned Task/VM lifecycle.
 
 ## A3. Execution and continuation boundary
 

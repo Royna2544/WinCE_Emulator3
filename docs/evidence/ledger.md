@@ -1889,10 +1889,33 @@ foreign-handle collision. Focused tests include a tiny-MIPS positive import.
 Final 18-block suites passed release **2,081/0/9 ignored** and no-default
 **1,502/0/3 ignored**; Unicorn-only and desktop-without-trace checks passed.
 The tiny-MIPS missing-birth negative is refused before guest entry, so an
-actual stale-A/B MIPS import trap remains unproved. Immediate native CPU stop,
-canonical Task retirement, the root return-stub path, D-011 stopped-exit
-framebuffer preflight/recovery, CE6 parity, full Stage 3 and live iNavi remain
-open. No emulator run, writable-mount operation or LAN session occurred.
+actual stale-A/B MIPS import trap remains unproved. At this earlier seal,
+immediate native CPU stop, canonical Task retirement, the root return-stub
+path and D-011 stopped-exit framebuffer preflight/recovery remained open.
+CE6 parity, full Stage 3 and live iNavi also remained open. No emulator run,
+writable-mount operation or LAN session occurred.
+
+## D-011 stopped host-exit framebuffer preflight (2026-10-15, executed offline)
+
+The [validation receipt](../../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+identifies the final source seal, hashes and full numbered raw logs. A01
+preserved a 2/2 behavioral red for un-restorable saved backing. The initial
+scheduler fixture A12 was 2 pass/2 fail; its corrected A18 rerun was 4/4.
+The final 18-block suites passed A19 no-default **1,509/0/3 ignored** and
+A20 release `unicorn,trace,win32-desktop` **2,092/0/9 ignored**. A21/A22
+alternate native feature checks and A23 format/diff check passed.
+
+The bounded gate validates all exact-birth saved window backings before any
+stopped-exit effect; a malformed, incompatible or missing destination returns
+`HostExitRecoveryRequired` before mutating windows, backing, sends, waits or
+process state. Controls include already-destroyed HWND backing and a later
+failing store after an earlier compatible one. Scheduler controls keep active,
+parked and pending owners for recovery rather than interpreting the error as
+ordinary false or running another slice. The monitor holds later manual
+continue/until/tap until checkpoint restore. Compatible retry succeeds in the
+bounded controls. This does not prove canonical Task/VM retirement after a
+root pseudo signal or whole-exit atomicity after successful preflight. No
+live iNavi run, writable-mount operation or LAN session occurred.
 
 ## Chat-project validation notes (not in this repository)
 

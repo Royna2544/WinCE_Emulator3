@@ -162,17 +162,30 @@ not CE6 permission for a cross-process parent/owner topology.
 foreign window's link to a retired parent/owner. An exact-set teardown must
 not silently destroy or reparent that foreign HWND to make the fixture pass;
 its visual visibility after a synthetic invalid link is not a CE6 claim.
-Partial host-exit teardown is not a successful completion. Currently the
-stopped path mutates windows/backing before its process-completion step can
-still fail, and ignores framebuffer-restore success. This gate records those
-risks and does not claim atomic whole-process exit or framebuffer rollback;
-they need a separate preflight/recovery gate. This source gate neither accepts
-full Stage 3 nor authorizes a writable-mount iNavi run.
+Partial host-exit teardown is not a successful completion. At the earlier
+exact-window-set seal, the stopped path could mutate windows/backing before
+process completion and ignored framebuffer-restore failure. That gate did not
+claim atomic whole-process exit or framebuffer rollback. It neither accepted
+full Stage 3 nor authorized a writable-mount iNavi run.
 
-[D-011](../DECISIONS.md) now chooses strict framebuffer preflight for that
-separate stopped-exit gate: a mismatched saved backing must refuse completion
-before any window/process mutation and leave the stopped owner for recovery.
-The current source does not yet implement this policy.
+### Bounded stopped-exit framebuffer recovery gate (source-tested)
+
+[D-011](../DECISIONS.md) chooses strict framebuffer preflight. The bounded
+[receipt](../../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+seals a typed refusal before any stopped-exit window, backing, send, waiter
+or process effect when a frozen-birth saved image cannot restore to the
+destination. The checks include already-destroyed HWND backing, a later
+failing store after an earlier compatible store, malformed layout and absent
+destination. Tested active, parked and pending process owners retain their
+CPU/launch and stop scheduling on refusal; the interactive monitor requires
+checkpoint recovery before another manual slice or tap. A compatible retry
+can complete the selected bounded exit. The behavioral red was 2/2; after an
+initial scheduler-fixture error, corrected focused controls passed 4/4.
+Final suites passed release **2,092/0/9 ignored** and no-default
+**1,509/0/3 ignored**, with alternate feature/format/diff checks green.
+Post-preflight teardown failures are not proven whole-exit atomic, and a
+root pseudo signal does not prove canonical Task/VM retirement. No live iNavi
+run or CE6 parity result follows.
 
 ### Bounded guest self-exit caller gate (source-tested)
 
@@ -197,9 +210,9 @@ tiny-MIPS missing-birth fixture is rejected before guest entry, not at the
 import hook; actual stale-A/B MIPS trap rejection remains unproved. A positive
 pseudo import signals the process object but does not prove immediate native
 CPU stop or canonical Task retirement. The separate root-thread return-stub
-path remains context-free; real-handle continuation, CE6 timing/LastError
-parity, full Stage 3 and live iNavi remain open. The separate D-011 stopped
-host-exit framebuffer preflight above is still unimplemented.
+  path remains context-free; real-handle continuation, CE6 timing/LastError
+  parity, full Stage 3 and live iNavi remain open. The later bounded D-011
+  gate above addresses only stopped-exit saved-framebuffer refusal.
 
 ### Bounded sender-owned send transaction (source-tested)
 

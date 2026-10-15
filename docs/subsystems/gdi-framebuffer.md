@@ -40,6 +40,16 @@ Checked arithmetic must precede any out-of-bounds source/destination access or p
 
 Surface snapshots are owned byte copies. Host presenters/remote workers must never retain mutable guest-memory/framebuffer borrows. Checkpoint clone must keep pixel/resource state independent and reconcile guest backing through the address-space service. Overlay rendering must avoid drawing a caret twice when it is already in the framebuffer; verify existing flags and presentation behavior before consolidation.
 
+The bounded [D-011 stopped-exit gate](../../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+now preflights each frozen-birth saved window image against the current
+destination's format, dimensions, stride and byte extent before copying or
+retiring any exit-owned state. A malformed or incompatible later image cannot
+partially restore earlier images: it returns typed recovery refusal with the
+stopped owner retained. Focused framebuffer and Kernel controls include
+already-destroyed HWND backing, short destination layout and a compatible
+retry. This source gate does not prove whole-exit atomicity after preflight,
+general drawing parity or live iNavi rendering.
+
 ## Telemetry and visual evidence
 
 Record genuine drawing API/operation, DC/object/window identity, resolved address-space owner, validated extent, result, dirty region and published frame sequence. Separate guest draw/paint completion from host encode/present time. Report pixels/allocated capacities/backing-store/native-engine memory independently; a small logical surface does not explain whole-host RSS.
