@@ -173,6 +173,15 @@ main-EXE pages, E-44 migrated the initial heap/stack slabs and O-M2 replaced
 copied heap spillover with sparse per-birth fixed pages. Writable image/DLL
 backing, full clone lineage, safe heap reuse and Stage 3 Task authority remain
 separate gates.
+The next connected Stage 2 source sequence is writable main-image pages,
+preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
+persistence through the old copy path as the ownership proof. Each cut needs
+real-MIPS bytes, exact birth/module-generation pins, native copy/readback
+exclusion and failure controls. The [memory](subsystems/guest-memory.md) and
+[loader](subsystems/pe-loader.md) plans detail those gates. [O-M3](DECISIONS.md)
+keeps ROM/XIP versus RAM page provenance and `GlobalMemoryStatus` charge timing
+open before guest-budget or live acceptance. A writable-mount run still needs
+a distinct approval and fresh verified adjacent backups.
 
 ### Parallel lanes (never gate a stage)
 

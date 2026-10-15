@@ -184,6 +184,13 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    reported host-RSS/native-map profile; do not call source tests an iNavi
    memory or speed improvement.
 
+The configured iNavi EXE is an SD-mounted file, not a demonstrated XIP ROM
+page. `\Windows` is a virtual mount without a host root; a DLL found in
+`DUMPPLZ\Windows` through search paths is not therefore proven ROM-backed.
+The app-directory DLL preload path also means one loader invocation can mix
+module origins. Each module/page needs its own provenance rather than one
+blanket DLL budget rule.
+
 This is a design sequence, not a claim that `AddressSpace` already owns these
 pages. The shared [memory plan](guest-memory.md) defines byte/pin lifetime and
 the unresolved physical accounting boundary.

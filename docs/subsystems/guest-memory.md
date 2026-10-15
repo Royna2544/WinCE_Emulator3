@@ -323,15 +323,32 @@ commit (856-909), refuses a direct write to a ROM PFN (409-413), and can
 replace a DLL or failed-EXE image page on write (1930-2020). This supports
 provenance-sensitive charging, **not** a rule that all dumped image bytes are
 free, that all are charged at load, or that PE `WRITE` flags imply RAM backing.
-Before a production image page joins the budget, classify its actual source
-and page sharing: committed RAM pages charge once when committed; a proven
-shared ROM/XIP page charges only for a private replacement when one is made.
+The same CE6 tree's `NK/KERNEL/loader.c` maps read-only uncompressed pages
+directly only for `FA_XIP`, leaves pageable sections uncommitted until fault,
+and commits nonpageable sections at load (2610-2657). Its DLL pager can share
+an NK page or make a private writable copy (2139-2225); an ordinary file EXE
+fault pages through allocated RAM (2239-2275). These are reference-kernel
+branches, not yet measured provenance for this emulator's target images.
+Before a production image page joins the budget, classify its actual source,
+page sharing and whether its physical occupancy is already included in the
+fixed boot-reserved baseline. Only an incremental, not-yet-counted committed
+RAM page would charge when committed; a proven shared ROM/XIP page would
+charge only for a private replacement when one is made.
 These are proposed accounting cases, not a claim that the current loader can
 classify them. Unknown provenance must not be silently treated as either
 free XIP or committed RAM in a new charged path; retain the old explicit
 copy-backed path or refuse the migration until classification and charging
 are defined. Guest charges, host RSS and native TCG reservation remain
 separate measures. See [O-M3](../DECISIONS.md) for the open decision.
+
+The current mount configuration does establish a narrower file-origin fact:
+the app EXE is loaded from the writable/removable `\SDMMC Disk` host mount,
+whereas `\Windows` has no `host_root` and rejects ordinary guest-file
+translation. The `DUMPPLZ\Windows` DLL dump can be a loader search directory,
+but its path is not proof that the guest mapped those bytes from ROM PFNs.
+An SD file origin likewise does not establish which image pages are resident,
+shared or already included in the boot-reserved amount. Record the actual
+loader/pager provenance and page events before assigning a physical charge.
 
 Freeze expected-red tests before changing the production path: real MIPS
 store/load on a writable main-image page across fresh owners; A/B same-VA
@@ -343,10 +360,10 @@ anonymous native `mem_map` in the same cut that changes its sync path.
 Then test the corresponding preloaded/dynamic DLL store, park,
 unload/reload and failure cases. Synthetic fixtures explicitly tagged with
 modeled RAM and ROM/XIP provenance must check `GlobalMemoryStatus` at boot,
-load, first write, owner close and
-unload, including shared-page single charge, low-budget failure without
-publication, and pin-held deferred release. Do not infer a physical-budget
-result from a host allocation or a green byte-persistence test. Run the
+load, first write, owner close and unload, including baseline-already-counted
+versus incremental RAM pages, shared-page single charge, low-budget failure
+without publication, and pin-held deferred release. Do not infer a physical-
+budget result from a host allocation or a green byte-persistence test. Run the
 source-focused and broad suites before seeking a separately approved,
 freshly backed-up writable-mount iNavi measurement.
 
