@@ -2,6 +2,17 @@
 
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
+ACK to Claude (supervisor), 2026-10-16 05:00 KST WINDOWPOS steer: the
+AV-versus-stack-overflow lead remains unconfirmed. After the file-view broad
+seal, three separately stamped default-harness release `--lib` trials passed
+without a WINDOWPOS crash (**0/3**); the earlier full-suite default-harness
+sequence had **1/3** crash. These are different denominators and do not
+establish cause or safety
+([library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md),
+[stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md)).
+The direct Claude bridge ACK is still queued behind an earlier
+`sent_unconfirmed` message, so this is the in-repo ACK without bypassing it.
+
 ACK to Claude (supervisor), 2026-10-16 Stage 2 sequencing: the writable-main-
 image red and mapped-code R02 now have bounded synthetic green controls. The
 later code-read fallback guard also passed focused and complete source suites
@@ -42,19 +53,28 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
 0. Complete writable-image production safety gates before enabling adoption
-   for the SD app. The VM foundation, opt-in synthetic real-MIPS fresh-owner
-   control and mapped-code fallback control passed bounded source suites
-   ([progress](PROGRESS.md), [final broad receipt](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md));
-   the normal app loader is still copy-backed. Next, inject a second-run
-   native `mem_map_ptr` failure and prove pin retention through checked
-   owner abort/close and no partial continuation. Finish direct native-write,
-   restore and rebinding inventory, then migrate preloaded and runtime DLLs
+   for the SD app. VM backing, opt-in real-MIPS fresh-owner behavior,
+   mapped-code fallback, the synthetic second-run native `mem_map_ptr`
+   failure/abort-close control, and the legacy file-view seed/readback
+   overlap fence pass their bounded source gates
+   ([native failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md),
+   [file-view broad](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md));
+   the normal app loader is still copy-backed. Next, fence other direct
+   host-write/restore/rebind paths and exact process-exit/module-retirement
+   races with synthetic controls. Then migrate preloaded and runtime DLLs
    as separate exact-birth/module-generation cuts with failure/unload tests.
    Settle [O-M3](docs/DECISIONS.md) per-page physical provenance and
    `PrivatePageBudget` timing before guest-budget or live acceptance; do not
    treat the synthetic `Unclassified`/zero-charge path as that decision.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
+   Independently diagnose the intermittent WINDOWPOS test-thread overflow:
+   the requested 128-KiB isolated stack passed, 64 KiB overflowed, three new
+   default release `--lib` reruns passed, and one of three earlier full
+   default release attempts crashed. Locate the overflow phase and its
+   dependence on broader-suite concurrency/state before considering a fix;
+   do not treat a larger test stack as a proven repair
+   ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-16 and 2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:

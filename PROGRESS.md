@@ -26,13 +26,38 @@ remain separate work.
 The [mutable-code read gate](evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)
 passed **5/5** focused release controls: a live writable-image instruction is
 read from native memory, while a failed native read does not fall back to a
-stale mutable blob. The [final complete source suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
+stale mutable blob. The [complete source suites at that seal](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
 passed release **2,116/0/9 ignored** and no-default **1,515/0/3 ignored**
-across 18 result blocks each. These are source/test results, not an iNavi
-run, a release EXE/PDB seal, a footprint or speed result, O-M3 physical-page
-accounting, or full Stage 2 acceptance. Native `mem_map_ptr` failure/abort
-coverage, host-write inventory, DLL migration, checkpoint relineage and
-production activation remain open.
+across 18 result blocks each.
+
+The later [synthetic native-map failure gate](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+passed **1/1** focused release control: a real second-run `mem_map_ptr`
+collision leaves both VM runs inaccessible while pinned; checked abort-close
+retires the native slot, a retained clone keeps its pin, and a fresh owner
+cannot reuse staged continuation/map metadata. Its serial-harness complete
+suites passed release **2,117/0/9 ignored** and no-default **1,515/0/3
+ignored**; one later default-harness full release retry also passed
+**2,117/0/9 ignored**. An earlier default-harness attempt crashed on a
+WINDOWPOS test-thread stack overflow, so those green runs do not establish
+repeatable broad-run stability
+([serial receipt](evidence/stage2-writable-image-native-failure-20261016/serial-broad-validation.receipt.md),
+[retry](evidence/stage2-writable-image-native-failure-20261016/default-retry.addendum.receipt.md)).
+
+The [writable-image/legacy file-view overlap gate](evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)
+now refuses overlapping legacy seed/readback before either direction mutates
+bytes, including same/foreign PID and retired-but-pinned runs; adjacent
+nonoverlapping views retain ordinary behavior. Focused release **5/5** and
+no-default **1/1** passed. Its [stable-source complete suites](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
+passed release **2,119/0/9 ignored** and no-default **1,516/0/3 ignored**
+across 18 result blocks each with the default test harness. These are
+source/test results, not an iNavi run, a release EXE/PDB seal, a footprint
+or speed result, O-M3 physical-page accounting, or full Stage 2 acceptance.
+Other direct host writes, exact process-exit/module-retirement fences, DLL
+migration, checkpoint relineage and production activation remain open. The
+intermittent WINDOWPOS stack failure remains under investigation
+([stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
+[three clean library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md));
+no production stack defect or fix has been established.
 
 ## 2026-10-15 Live-run preparation, historical reds and design refresh
 

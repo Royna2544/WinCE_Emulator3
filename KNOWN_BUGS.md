@@ -9,12 +9,21 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   `guest_thread_stack_tests::direct_visible_message_payload_windowpos_matches_raw_and_mips_reads`
   overflowing its test-thread stack, then exited `0xc0000005`
   ([raw log](evidence/stage2-writable-image-native-failure-20261016/broad-release-attempt02.raw.log)).
+  Of three stamped default-harness full release runs so far, one crashed and
+  two passed (that native-failure attempt 02, its retry 04, and the
+  [file-view attempt 01](evidence/stage2-writable-image-file-view-20261016/broad-release-attempt01.raw.log));
+  this small count is not a stable reproduction-rate estimate.
+  Three later separately stamped, default-harness release `--lib` reruns
+  passed (**0/3** WINDOWPOS crashes); those library-only runs are not pooled
+  with the earlier full-suite denominator
+  ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
   The exact isolated attempt 01, serial broad attempt 03, and default broad
   retry 04 passed the same test. A later isolated direct-EXE probe passed
   at requested 512, 256 and 128 KiB test-thread stacks, then overflowed at
   64 KiB ([receipt](evidence/stage2-windowpos-stack-20261016/validation.receipt.md));
-  this does not explain the earlier broad-run overflow with the usual 2 MiB
-  stack. Neither its cause nor live risk is established. The test clones a
+  this does not explain the earlier broad-run overflow, whose requested
+  test-thread stack size was not explicitly stamped in the raw log. Neither
+  its cause nor live risk is established. The test clones a
   full `CeKernel` for raw Get/Peek comparison and also exercises the shared
   native callout/payload path;
   which part consumes the stack is unknown. The existing release EXE's PE
@@ -75,9 +84,16 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   production-path activation
   ([writable green](evidence/stage2-writable-image-green-20261016/validation.receipt.md),
   [code-read green](evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)).
-  Native `mem_map_ptr` failure/abort behavior, direct host-write inventory,
-  DLL unload/reload, full machine checkpoint relineage, O-M3 guest physical
-  accounting and an approved matched app run remain open. The synthetic
+  A synthetic second-run native `mem_map_ptr` collision now confirms pin
+  retention through checked abort-close and refusal to reuse a staged
+  continuation; a failed native owner close itself is not injected
+  ([receipt](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)).
+  Legacy file-view seed/readback now refuses overlap with active or
+  retired-but-pinned writable-image runs before byte mutation
+  ([receipt](evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)).
+  Other direct host-write/restore/rebind and exact exit/module-retirement
+  fences, DLL unload/reload, full machine checkpoint relineage, O-M3 guest
+  physical accounting and an approved matched app run remain open. The synthetic
   `Unclassified` image backing charges no guest pages and cannot establish
   production `PrivatePageBudget` treatment.
   Unconverted direct-import outputs can still fail closed on a

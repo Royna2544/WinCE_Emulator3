@@ -25,13 +25,17 @@ remote-control HTTP/WebSocket surface.
   passes. E-44 separately source-gated the initial heap/stack fixed slabs;
   O-M2 then made the fixed process heap birth-qualified and removed copied
   spillover. An opt-in synthetic writable-main-image VM/pin path, monitor
-  checkpoint refusal and live-native mutable-code reads now pass bounded
-  source controls and complete suites
-  ([receipt](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)).
-  Production SD activation, DLL ownership, native failure controls and O-M3
-  guest-memory accounting remain open; no new iNavi run, performance result
-  or full Stage 2/live acceptance follows. Persistent-owner architecture is
-  deferred to Stage 8.
+  checkpoint refusal and live-native mutable-code reads pass bounded source
+  controls. A synthetic second-run native-map failure/checked abort and a
+  legacy file-view overlap fence also pass; the latest complete source suites
+  passed release **2,119/0/9 ignored** and no-default **1,516/0/3 ignored**
+  ([receipt](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)).
+  An intermittent WINDOWPOS test-thread overflow remains unexplained despite
+  later clean reruns ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
+  Production SD activation, other host-write/exit fences, DLL ownership and
+  O-M3 guest-memory accounting remain open; no new iNavi run, performance
+  result or full Stage 2/live acceptance follows. Persistent-owner
+  architecture is deferred to Stage 8.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,
