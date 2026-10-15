@@ -3459,16 +3459,7 @@ impl CeKernel {
     /// A host exit with a verified process birth must not claim a window from
     /// an older incarnation of the same public PID.
     fn process_window_targets_for_birth(&self, owner: ProcessBirthKey) -> Vec<u32> {
-        self.gwe
-            .windows_snapshot()
-            .into_iter()
-            .filter(|window| {
-                !window.destroyed
-                    && window.hwnd != crate::ce::gwe::DESKTOP_HWND
-                    && window.delivery_owner().process_birth() == Some(owner)
-            })
-            .map(|window| window.hwnd)
-            .collect()
+        self.gwe.process_window_targets_for_birth(owner)
     }
 
     /// Include an already-destroyed HWND so its captured backing can be
@@ -3488,33 +3479,52 @@ impl CeKernel {
     fn destroy_process_windows_for_birth(&mut self, owner: ProcessBirthKey, thread_id: u32) {
         let hwnds = self.process_window_targets_for_birth(owner);
         self.gwe.terminate_sent_messages_from_process_birth(owner);
-        self.destroy_process_window_targets(owner.process_id(), thread_id, hwnds);
-    }
-
-    fn destroy_process_window_targets(&mut self, process_id: u32, thread_id: u32, hwnds: Vec<u32>) {
+        let pending_receiver_sends = self
+            .gwe
+            .sent_message_ids_for_windows(&hwnds)
+            .into_iter()
+            .filter(|send_id| !self.gwe.sent_message_result_ready(*send_id))
+            .collect::<Vec<_>>();
         for hwnd in &hwnds {
-            let targets = self.gwe.window_and_descendants(*hwnd).unwrap_or_default();
             self.record_window_lifecycle_trace(
                 "destroy_window_begin",
                 thread_id,
                 Some(*hwnd),
                 Some(1),
-                Some(format!("reason=process_exit/process_id={process_id}")),
+                Some(format!(
+                    "reason=process_exit/process_id={}",
+                    owner.process_id()
+                )),
             );
-            let _ = self.gwe.destroy_window(*hwnd, self.timers.tick_count());
+        }
+        let retired = self
+            .gwe
+            .destroy_process_windows_for_birth(owner, self.timers.tick_count());
+        debug_assert_eq!(hwnds, retired, "one birth-selected GWE target set");
+        for send_id in pending_receiver_sends {
+            if self.gwe.sent_message_result_ready(send_id) {
+                self.queue_send_reply_wake_candidates(send_id);
+            }
+        }
+        if !retired.is_empty() {
             self.release_discarded_message_pointer_payloads();
-            self.release_message_pointer_payloads_for_windows(&targets);
+            self.release_message_pointer_payloads_for_windows(&retired);
+        }
+        for hwnd in &retired {
             self.record_window_lifecycle_trace(
                 "destroy_window_end",
                 thread_id,
                 Some(*hwnd),
                 Some(1),
-                Some(format!("reason=process_exit/process_id={process_id}")),
+                Some(format!(
+                    "reason=process_exit/process_id={}",
+                    owner.process_id()
+                )),
             );
         }
-        if !hwnds.is_empty() {
-            self.shell.remove_windows_state(&hwnds);
-            self.timers.remove_window_timers(&hwnds);
+        if !retired.is_empty() {
+            self.shell.remove_windows_state(&retired);
+            self.timers.remove_window_timers(&retired);
         }
     }
 
@@ -14805,6 +14815,403 @@ mod tests {
             })
         );
         assert_eq!(kernel.window_backing_stores.get(&hwnd_a), Some(&backing_a));
+        Ok(())
+    }
+
+    fn host_exit_preserves_foreign_linked_window(owner_link: bool) -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let process_a = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let (thread_a_handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let thread_a = kernel
+            .handles
+            .thread_birth_key_for_handle(thread_a_handle)
+            .expect("A thread birth");
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = launch_b.process_birth.expect("B process birth");
+        let thread_b = launch_b.primary_thread_birth.expect("B thread birth");
+        assert_ne!(process_a, process_b);
+
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_b,
+                "EXIT_PARENT_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 16, 16),
+            )
+            .expect("B exact-birth window");
+        kernel.set_current_process_id(process_a.process_id());
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_a,
+                "FOREIGN_LINK_A",
+                "A",
+                (!owner_link).then_some(hwnd_b),
+                owner_link.then_some(hwnd_b),
+                0,
+                WS_VISIBLE
+                    | if owner_link {
+                        crate::ce::gwe::WS_POPUP
+                    } else {
+                        0
+                    },
+                0,
+                Rect::from_origin_size(20, 20, 16, 16),
+            )
+            .expect("A exact-birth window with synthetic foreign link");
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth {
+                thread: thread_a,
+                process: process_a,
+            })
+        );
+        assert_eq!(
+            kernel.gwe.window_and_descendants(hwnd_b),
+            Some(vec![hwnd_b, hwnd_a])
+        );
+
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            64,
+            64,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        assert!(kernel.capture_window_backing_store(hwnd_b, &framebuffer));
+        assert!(kernel.capture_window_backing_store(hwnd_a, &framebuffer));
+        let backing_a = kernel.window_backing_stores[&hwnd_a].clone();
+        let position = WindowPos {
+            hwnd: hwnd_a,
+            insert_after: HWND_TOP,
+            x: 20,
+            y: 20,
+            width: 16,
+            height: 16,
+            flags: 0,
+        };
+        let (payload_owner, ptr_a) = kernel
+            .queue_window_pos_payload(hwnd_a, position)
+            .expect("A typed payload");
+        assert_eq!(payload_owner, process_a);
+        assert!(kernel.post_window_typed_payload_message(
+            hwnd_a,
+            WM_WINDOWPOSCHANGED,
+            0,
+            ptr_a,
+            process_a,
+        ));
+        let timer_a = kernel.set_timer(Some(hwnd_a), Some(0x4455), 60_000);
+        assert_eq!(timer_a, 0x4455);
+        kernel
+            .shell
+            .register_change_notification(ShellChangeNotifyRegistration {
+                hwnd: hwnd_a,
+                event_mask: 1,
+                notify_flags: 0,
+                watch_dir: None,
+                recursive: false,
+            });
+        assert!(kernel.shell.change_notification(hwnd_a).is_some());
+        assert!(
+            kernel
+                .peek_ready_message_w_filtered(
+                    thread_a.thread_id(),
+                    Some(hwnd_a),
+                    WM_WINDOWPOSCHANGED,
+                    WM_WINDOWPOSCHANGED,
+                )
+                .is_some()
+        );
+
+        assert!(kernel.mark_process_launch_exited_with_framebuffer(
+            &launch_b,
+            0,
+            Some(&mut framebuffer),
+        ));
+        assert!(!kernel.gwe.is_window(hwnd_b));
+        assert!(!kernel.window_backing_stores.contains_key(&hwnd_b));
+        assert!(
+            kernel.gwe.is_window(hwnd_a),
+            "B exit must not retire A through a foreign parent/owner link"
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth {
+                thread: thread_a,
+                process: process_a,
+            })
+        );
+        assert_eq!(kernel.window_backing_stores.get(&hwnd_a), Some(&backing_a));
+        assert!(kernel.shell.change_notification(hwnd_a).is_some());
+        assert!(
+            kernel
+                .peek_ready_message_w_filtered(
+                    thread_a.thread_id(),
+                    Some(hwnd_a),
+                    WM_WINDOWPOSCHANGED,
+                    WM_WINDOWPOSCHANGED,
+                )
+                .is_some()
+        );
+        assert!(
+            kernel
+                .gwe
+                .message_pointer_payload(process_a, ptr_a)
+                .is_some()
+        );
+        assert!(
+            kernel
+                .timers
+                .pending_timers()
+                .iter()
+                .any(|timer| { timer.hwnd == Some(hwnd_a) && timer.id == timer_a })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_foreign_parent_link_preserves_other_birth_window() -> Result<()> {
+        host_exit_preserves_foreign_linked_window(false)
+    }
+
+    #[test]
+    fn host_exit_foreign_owner_link_preserves_other_birth_window() -> Result<()> {
+        host_exit_preserves_foreign_linked_window(true)
+    }
+
+    #[test]
+    fn host_exit_retires_all_same_birth_child_and_owned_windows() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(None, None);
+        let owner = launch.process_birth.expect("process birth");
+        let thread = launch.primary_thread_birth.expect("thread birth");
+        kernel.set_current_process_id(launch.process_id);
+        let root = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread,
+                "EXIT_ROOT",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 16, 16),
+            )
+            .expect("root");
+        let child = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread,
+                "EXIT_CHILD",
+                "",
+                Some(root),
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(16, 0, 16, 16),
+            )
+            .expect("child");
+        let owned = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread,
+                "EXIT_OWNED",
+                "",
+                None,
+                Some(root),
+                0,
+                WS_VISIBLE | crate::ce::gwe::WS_POPUP,
+                0,
+                Rect::from_origin_size(32, 0, 16, 16),
+            )
+            .expect("owned popup");
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            64,
+            64,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for hwnd in [root, child, owned] {
+            assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        }
+        let position = WindowPos {
+            hwnd: child,
+            insert_after: HWND_TOP,
+            x: 16,
+            y: 0,
+            width: 16,
+            height: 16,
+            flags: 0,
+        };
+        let (payload_owner, payload) = kernel
+            .queue_window_pos_payload(child, position)
+            .expect("child payload");
+        assert_eq!(payload_owner, owner);
+        assert!(kernel.post_window_typed_payload_message(
+            child,
+            WM_WINDOWPOSCHANGED,
+            0,
+            payload,
+            owner,
+        ));
+        let child_timer = kernel.set_timer(Some(child), Some(0x4555), 60_000);
+        assert_eq!(child_timer, 0x4555);
+        kernel
+            .shell
+            .register_change_notification(ShellChangeNotifyRegistration {
+                hwnd: child,
+                event_mask: 1,
+                notify_flags: 0,
+                watch_dir: None,
+                recursive: false,
+            });
+        assert!(kernel.shell.change_notification(child).is_some());
+
+        assert!(kernel.mark_process_launch_exited_with_framebuffer(
+            &launch,
+            0,
+            Some(&mut framebuffer),
+        ));
+        for hwnd in [root, child, owned] {
+            assert!(!kernel.gwe.is_window(hwnd));
+            assert!(!kernel.window_backing_stores.contains_key(&hwnd));
+        }
+        assert!(kernel.gwe.message_pointer_payload(owner, payload).is_none());
+        assert!(kernel.shell.change_notification(child).is_none());
+        assert!(
+            !kernel
+                .timers
+                .pending_timers()
+                .iter()
+                .any(|timer| timer.hwnd == Some(child) && timer.id == child_timer)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_wakes_exact_sender_waiting_on_retired_receiver_window() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (sender_handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let sender_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(sender_handle)
+            .expect("A sender birth");
+        let launch_b = kernel.queue_process_launch(None, None);
+        let receiver_birth = launch_b.primary_thread_birth.expect("B receiver birth");
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "EXIT_SEND_RECEIVER_B",
+                "",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("B receiver window");
+        kernel.set_current_process_id(1);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
+                hwnd_b,
+                crate::ce::gwe::WM_USER + 0xc1,
+                0,
+                0,
+                None,
+            )
+            .expect("A queued send to B");
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                sender_birth,
+                sender_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::SendMessage { send_id },
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("A exact send waiter");
+        assert!(!kernel.sent_message_result_ready(send_id));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        let before = kernel.scheduler_stats();
+
+        assert!(kernel.mark_process_launch_exited(&launch_b, 0));
+        assert!(!kernel.gwe.is_window(hwnd_b));
+        assert!(kernel.sent_message_result_ready(send_id));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        let after = kernel.scheduler_stats();
+        assert_eq!(
+            after.send_reply_signal_count,
+            before.send_reply_signal_count + 1,
+            "receiver teardown must signal A's exact send ID once"
+        );
+        assert_eq!(
+            after.send_reply_wake_candidate_count,
+            before.send_reply_wake_candidate_count + 1,
+            "A's registered SendReply waiter must be queued"
+        );
+        assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0));
+        Ok(())
+    }
+
+    #[test]
+    fn pseudo_process_exit_uses_exact_window_birth_set() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let process_a = kernel.current_process_birth_key().expect("boot birth");
+        let (thread_a_handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let thread_a = kernel
+            .handles
+            .thread_birth_key_for_handle(thread_a_handle)
+            .expect("A thread birth");
+        let launch_b = kernel.queue_process_launch(None, None);
+        let thread_b = launch_b.primary_thread_birth.expect("B thread birth");
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_b,
+                "PSEUDO_EXIT_B",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::default(),
+            )
+            .expect("B window");
+        kernel.set_current_process_id(process_a.process_id());
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_a,
+                "PSEUDO_FOREIGN_A",
+                "",
+                None,
+                Some(hwnd_b),
+                0,
+                WS_VISIBLE | crate::ce::gwe::WS_POPUP,
+                0,
+                Rect::default(),
+            )
+            .expect("A foreign-owned popup");
+        kernel.set_current_process_id(launch_b.process_id);
+
+        assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 7));
+        assert!(!kernel.gwe.is_window(hwnd_b));
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert_eq!(kernel.current_process_exit_code, 7);
         Ok(())
     }
 

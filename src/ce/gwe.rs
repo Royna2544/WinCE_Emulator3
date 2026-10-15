@@ -1996,6 +1996,38 @@ impl Gwe {
         let Some(targets) = self.window_and_descendants(hwnd) else {
             return false;
         };
+        self.destroy_window_targets_exact(&targets);
+        true
+    }
+
+    /// Host process exit retires windows by immutable creation birth, not by
+    /// parent/owner traversal. The explicit guest DestroyWindow path above
+    /// retains its recursive target selection.
+    pub fn process_window_targets_for_birth(&self, owner: ProcessBirthKey) -> Vec<u32> {
+        self.windows
+            .values()
+            .filter(|window| {
+                !window.destroyed
+                    && window.hwnd != DESKTOP_HWND
+                    && window.delivery_owner.process_birth() == Some(owner)
+            })
+            .map(|window| window.hwnd)
+            .collect()
+    }
+
+    pub fn destroy_process_windows_for_birth(
+        &mut self,
+        owner: ProcessBirthKey,
+        _time_ms: u32,
+    ) -> Vec<u32> {
+        let targets = self.process_window_targets_for_birth(owner);
+        if !targets.is_empty() {
+            self.destroy_window_targets_exact(&targets);
+        }
+        targets
+    }
+
+    fn destroy_window_targets_exact(&mut self, targets: &[u32]) {
         let exposed_rects: Vec<Rect> = targets
             .iter()
             .filter_map(|target| {
@@ -2035,7 +2067,7 @@ impl Gwe {
         {
             self.caret = None;
         }
-        self.cleanup_clipboard_windows(&targets);
+        self.cleanup_clipboard_windows(targets);
         self.keyboard_target_by_thread
             .retain(|_, hwnd| !targets.contains(hwnd));
         self.ime_context_by_window
@@ -2084,9 +2116,8 @@ impl Gwe {
             queue.retain(|id| !doomed_sent.contains(id));
         }
         for rect in exposed_rects {
-            self.invalidate_visible_windows_in_screen_rect(rect, true, &targets);
+            self.invalidate_visible_windows_in_screen_rect(rect, true, targets);
         }
-        true
     }
 
     pub fn mark_window_subtree_being_destroyed(&mut self, hwnd: u32) -> bool {
