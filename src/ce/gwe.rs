@@ -5548,9 +5548,9 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if let Some(sent) = self.first_matching_queued_sent_message(
-            thread_id, hwnd, min_msg, max_msg, true,
-        ) {
+        if let Some(sent) =
+            self.first_matching_queued_sent_message(thread_id, hwnd, min_msg, max_msg, true)
+        {
             // A pre-run visible peek must not present a finite-Sleep-deferred
             // send as dispatchable, nor let a later queued item pass it.
             return sent
@@ -5664,9 +5664,9 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if self.first_matching_sent_message_is_sleep_deferred(
-            thread_id, hwnd, min_msg, max_msg, false,
-        ) {
+        if self
+            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, false)
+        {
             return None;
         }
         if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
@@ -5720,9 +5720,9 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if self.first_matching_sent_message_is_sleep_deferred(
-            thread_id, hwnd, min_msg, max_msg, true,
-        ) {
+        if self
+            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, true)
+        {
             return None;
         }
         if let Some(message) =
@@ -5824,9 +5824,9 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
-        if self.first_matching_sent_message_is_sleep_deferred(
-            thread_id, hwnd, min_msg, max_msg, false,
-        ) {
+        if self
+            .first_matching_sent_message_is_sleep_deferred(thread_id, hwnd, min_msg, max_msg, false)
+        {
             return None;
         }
         if let Some(message) =
@@ -6061,14 +6061,8 @@ impl Gwe {
         max_msg: u32,
         visible_only: bool,
     ) -> bool {
-        self.first_matching_queued_sent_message(
-            thread_id,
-            hwnd,
-            min_msg,
-            max_msg,
-            visible_only,
-        )
-        .is_some_and(|sent| sent.deferred_from_sleep_frame.is_some())
+        self.first_matching_queued_sent_message(thread_id, hwnd, min_msg, max_msg, visible_only)
+            .is_some_and(|sent| sent.deferred_from_sleep_frame.is_some())
     }
 
     fn take_matching_visible_sent_message(
@@ -7360,12 +7354,14 @@ mod tests {
 
         assert!(gwe.peek_visible_message_filtered(12, None, 0, 0).is_none());
         assert!(gwe.get_visible_message_filtered(12, None, 0, 0).is_none());
-        assert!(gwe
-            .peek_message_filtered(12, None, 0, 0, PeekFlags::NO_REMOVE)
-            .is_none());
-        assert!(gwe
-            .peek_message_filtered(12, None, 0, 0, PeekFlags::REMOVE)
-            .is_none());
+        assert!(
+            gwe.peek_message_filtered(12, None, 0, 0, PeekFlags::NO_REMOVE)
+                .is_none()
+        );
+        assert!(
+            gwe.peek_message_filtered(12, None, 0, 0, PeekFlags::REMOVE)
+                .is_none()
+        );
         assert!(gwe.get_message_filtered(12, None, 0, 0).is_none());
         assert_eq!(gwe.active_sent_message_id(12), None);
         assert_eq!(
@@ -7438,14 +7434,8 @@ mod tests {
             "a deferred send excluded by the filter does not block a later match"
         );
         assert_eq!(
-            gwe.peek_message_filtered(
-                12,
-                None,
-                WM_USER + 12,
-                WM_USER + 12,
-                PeekFlags::REMOVE,
-            )
-            .map(|message| message.msg),
+            gwe.peek_message_filtered(12, None, WM_USER + 12, WM_USER + 12, PeekFlags::REMOVE,)
+                .map(|message| message.msg),
             Some(WM_USER + 12)
         );
         assert_eq!(gwe.active_sent_message_id(12), Some(ordinary_id));

@@ -28,8 +28,8 @@ use crate::{
             HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
             MessageQueueHandleObject, ProcessBirthKey, TaskFrameError, TaskFrameRef, TaskWaitPin,
             ThreadBirthKey, ThreadObject, ThreadResumeResult, ThreadSuspendResult, VolumeObject,
-            WaitMultipleResult, WaitResult,
-            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+            WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
+            win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
         remote::{
@@ -8098,7 +8098,9 @@ impl CeKernel {
                 // Cancellation, exact-birth exit and failed publication all
                 // retire only the matching canonical frame. A successful
                 // completion already retired it before removing the index.
-                if self.handles.active_finite_sleep_frame(frame.key().owner_birth())
+                if self
+                    .handles
+                    .active_finite_sleep_frame(frame.key().owner_birth())
                     == Some(frame)
                 {
                     if let Err(error) = self.handles.cancel_finite_sleep_frame(frame) {
@@ -9330,10 +9332,8 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<(u64, Message)> {
-        self.peek_ready_sent_message_w_filtered_with_sleep_frame(
-            thread_id, hwnd, min_msg, max_msg,
-        )
-        .map(|(id, message, _frame)| (id, message))
+        self.peek_ready_sent_message_w_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg)
+            .map(|(id, message, _frame)| (id, message))
     }
 
     pub(crate) fn peek_ready_sent_message_w_filtered_with_sleep_frame(
@@ -9344,9 +9344,9 @@ impl CeKernel {
         max_msg: u32,
     ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
         self.expire_timed_out_send_messages();
-        let candidate = self.gwe.peek_sent_message_filtered_with_sleep_frame(
-            thread_id, hwnd, min_msg, max_msg,
-        )?;
+        let candidate = self
+            .gwe
+            .peek_sent_message_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg)?;
         if let Some(frame) = candidate.2
             && self.live_thread_birth_key_by_id(thread_id) != Some(frame.key().owner_birth())
         {
@@ -9373,9 +9373,7 @@ impl CeKernel {
         expected_send_id: u64,
     ) -> Option<Message> {
         if self
-            .peek_ready_sent_message_w_filtered_with_sleep_frame(
-                thread_id, hwnd, min_msg, max_msg,
-            )?
+            .peek_ready_sent_message_w_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg)?
             .0
             != expected_send_id
         {
@@ -10018,11 +10016,15 @@ impl CeKernel {
     }
 
     pub fn send_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
-        let target_thread = self
-            .gwe
-            .window(hwnd)
-            .filter(|window| !window.destroyed)
-            .map(|window| window.thread_id)?;
+        let window = self.gwe.window(hwnd).filter(|window| !window.destroyed)?;
+        let target_thread = window.thread_id;
+        if let WindowDeliveryOwner::Birth { thread, process } = window.delivery_owner()
+            && (!self.is_live_thread_birth(thread)
+                || !self.handles.process_execution_live_by_birth(process)
+                || self.handles.live_thread_creation_owner_by_id(target_thread) != Some(process))
+        {
+            return None;
+        }
         self.gwe.begin_send_message(target_thread);
         let result = self.gwe.send_message(hwnd, msg, wparam, lparam);
         self.gwe.end_send_message(target_thread);
@@ -10065,11 +10067,15 @@ impl CeKernel {
         lparam: u32,
         timeout_ms: Option<u32>,
     ) -> Option<u64> {
-        let target_thread = self
-            .gwe
-            .window(hwnd)
-            .filter(|window| !window.destroyed)
-            .map(|window| window.thread_id)?;
+        let window = self.gwe.window(hwnd).filter(|window| !window.destroyed)?;
+        let target_thread = window.thread_id;
+        if let WindowDeliveryOwner::Birth { thread, process } = window.delivery_owner()
+            && (!self.is_live_thread_birth(thread)
+                || !self.handles.process_execution_live_by_birth(process)
+                || self.handles.live_thread_creation_owner_by_id(target_thread) != Some(process))
+        {
+            return None;
+        }
         if target_thread == caller_thread_id {
             return None;
         }
@@ -10080,14 +10086,15 @@ impl CeKernel {
             .filter(|frame| self.is_blocked_finite_sleep_frame(*frame));
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
         let send_id = if let Some(frame) = deferred_frame {
-            self.gwe.queue_send_message_for_window_deferred_by_finite_sleep(
-                Some(caller_thread_id),
-                hwnd,
-                message,
-                flags,
-                timeout_ms,
-                frame,
-            )
+            self.gwe
+                .queue_send_message_for_window_deferred_by_finite_sleep(
+                    Some(caller_thread_id),
+                    hwnd,
+                    message,
+                    flags,
+                    timeout_ms,
+                    frame,
+                )
         } else {
             self.gwe.queue_send_message_for_window(
                 Some(caller_thread_id),
@@ -17092,7 +17099,10 @@ mod tests {
         );
         assert!(kernel.begin_finite_sleep_completion(frame));
         assert!(!kernel.begin_finite_sleep_completion(frame));
-        assert_eq!(kernel.select_ready_blocked_waiter(1, 111, |_, _| false), None);
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 111, |_, _| false),
+            None
+        );
         assert!(kernel.retire_finite_sleep_completion(frame));
         assert!(kernel.blocked_waiter(frame.wait_id()).is_none());
         assert_eq!(kernel.handles.active_finite_sleep_frame(birth), None);
@@ -17150,18 +17160,36 @@ mod tests {
             .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
             .unwrap();
         let send_id = kernel
-            .begin_cross_thread_send_message_w(sender_tid, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
             .unwrap();
         assert_eq!(
-            kernel.gwe.sent_message(send_id).unwrap().deferred_from_sleep_frame,
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .unwrap()
+                .deferred_from_sleep_frame,
             Some(frame)
         );
         assert!(kernel.thread_has_pending_sent_message(receiver_tid));
         assert!(kernel.begin_finite_sleep_completion(frame));
         assert!(kernel.retire_finite_sleep_completion(frame));
-        assert_eq!(kernel.handles.active_finite_sleep_frame(receiver_birth), None);
         assert_eq!(
-            kernel.gwe.sent_message(send_id).unwrap().deferred_from_sleep_frame,
+            kernel.handles.active_finite_sleep_frame(receiver_birth),
+            None
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .unwrap()
+                .deferred_from_sleep_frame,
             Some(frame),
             "retiring Sleep must not turn a deferred send into a pre-run callout"
         );
@@ -17173,9 +17201,18 @@ mod tests {
                 .hwnd,
             hwnd
         );
-        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), Some(send_id));
-        assert_eq!(kernel.complete_active_sent_message(receiver_tid, 0x77), Some(send_id));
-        assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0x77));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_tid),
+            Some(send_id)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_tid, 0x77),
+            Some(send_id)
+        );
+        assert_eq!(
+            kernel.take_completed_send_message_result(send_id),
+            Some(0x77)
+        );
     }
 
     #[test]
@@ -17189,26 +17226,101 @@ mod tests {
             .thread_birth_key_for_handle(receiver_handle)
             .unwrap();
         let hwnd = kernel.create_window_ex_w(receiver_tid, "SLEEP_EXIT_SEND", "", None, 0, 0, 0);
-        let neighbor_hwnd = kernel.create_window_ex_w(neighbor_tid, "NEIGHBOR_SEND", "", None, 0, 0, 0);
+        let neighbor_hwnd =
+            kernel.create_window_ex_w(neighbor_tid, "NEIGHBOR_SEND", "", None, 0, 0, 0);
         let frame = kernel
             .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
             .unwrap();
         let deferred_send = kernel
-            .begin_cross_thread_send_message_w(sender_tid, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
             .unwrap();
         let neighbor_send = kernel
-            .begin_cross_thread_send_message_w(sender_tid, neighbor_hwnd, crate::ce::gwe::WM_USER + 2, 0, 0, None)
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                neighbor_hwnd,
+                crate::ce::gwe::WM_USER + 2,
+                0,
+                0,
+                None,
+            )
             .unwrap();
         assert_eq!(
-            kernel.gwe.sent_message(deferred_send).unwrap().deferred_from_sleep_frame,
+            kernel
+                .gwe
+                .sent_message(deferred_send)
+                .unwrap()
+                .deferred_from_sleep_frame,
             Some(frame)
         );
         assert!(kernel.mark_guest_thread_exited_by_birth(receiver_birth, 0));
         assert!(kernel.blocked_waiter(frame.wait_id()).is_none());
         assert!(!kernel.thread_has_pending_sent_message(receiver_tid));
-        assert_eq!(kernel.take_completed_send_message_result(deferred_send), Some(0));
+        assert_eq!(
+            kernel.take_completed_send_message_result(deferred_send),
+            Some(0)
+        );
         assert!(kernel.thread_has_pending_sent_message(neighbor_tid));
         assert!(!kernel.sent_message_result_ready(neighbor_send));
         assert!(kernel.gwe.sent_message(neighbor_send).is_some());
+    }
+
+    #[test]
+    fn finite_sleep_send_rejects_stale_birth_window_after_tid_reuse() -> Result<()> {
+        let (mut kernel, receiver_handle, receiver_birth, old_hwnd, live_hwnd) =
+            stale_window_remote_input_fixture()?;
+        let receiver_tid = receiver_birth.thread_id();
+        let (_, sender_tid) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let frame = kernel
+            .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
+            .expect("new incarnation finite Sleep frame");
+        assert!(kernel.gwe.sent_message_ids_for_windows(&[old_hwnd, live_hwnd]).is_empty());
+        assert_eq!(
+            kernel.send_message_w(old_hwnd, crate::ce::gwe::WM_USER, 0, 0),
+            None,
+            "raw send must also reject the old birth-owned HWND",
+        );
+
+        assert_eq!(
+            kernel.begin_cross_thread_send_message_w(
+                sender_tid,
+                old_hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            ),
+            None,
+            "an old birth-owned HWND must not borrow the reused TID's Sleep frame",
+        );
+        assert!(kernel.gwe.sent_message_ids_for_windows(&[old_hwnd]).is_empty());
+        assert_eq!(kernel.handles.active_finite_sleep_frame(receiver_birth), Some(frame));
+        assert!(kernel.blocked_waiter(frame.wait_id()).is_some());
+
+        let live_send = kernel
+            .begin_cross_thread_send_message_w(
+                sender_tid,
+                live_hwnd,
+                crate::ce::gwe::WM_USER + 2,
+                0,
+                0,
+                None,
+            )
+            .expect("live birth-owned HWND must still accept a send");
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(live_send)
+                .and_then(|send| send.deferred_from_sleep_frame),
+            Some(frame),
+        );
+        assert!(kernel.thread_has_pending_sent_message(receiver_tid));
+        Ok(())
     }
 }
