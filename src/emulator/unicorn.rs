@@ -68659,8 +68659,10 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
     use super::{
-        ImportTrapTable, LiveTrampolineState, MappedBlob, MemoryMap, MemoryPerms, read_unicorn_u32,
-        reconcile_persistent_native_memory, sync_persisted_blobs_to_native,
+        ImportTrapTable, LiveTrampolineState, MAIN_GUEST_THREAD_ID, MappedBlob, MemoryMap,
+        MemoryPerms, MipsGuestContext, SavedCpuContext, THREAD_EXIT_STUB_ADDR,
+        UnicornDebugSnapshot, read_unicorn_u32, reconcile_persistent_native_memory,
+        sync_persisted_blobs_to_native,
     };
     use crate::{
         ce::{
