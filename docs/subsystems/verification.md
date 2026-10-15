@@ -126,6 +126,20 @@ Report primary native-start owner separately from helpers and end-of-slice selec
 
 Track whole-host RSS/private/virtual/CPU peaks and phase samples alongside logical blob length/capacity, allocation live/reserved extents, native regions/context/translation residency and retained queue/snapshot storage. Missing capacity/native-engine metrics remain missing. One active cached PID bracket is not whole-machine memory, an atomic epoch or proof of ownership. The 650 growth recorded in ledger E-2 requires investigation before a memory acceptance claim.
 
+### CE6 device snapshot and measurement boundary
+
+Read-only project `sources/SYSTEM.TXT:5-9` reports CE 6.0, one MIPS type-4000 CPU, 4-KiB pages, 800×480 pixels and memory load 16%; the [GMS receipt](../../evidence/gms-device-report-20261014/validation.receipt.md) records line 8 and its bounded API controls.
+
+| Device-reported field | Bytes |
+| --- | ---: |
+| Physical RAM, total | 195,350,528 |
+| Physical RAM, available | 164,368,384 |
+| Virtual memory, total | 1,073,741,824 |
+| Virtual memory, available | 1,073,152,000 |
+
+These device fields are not host RSS/private/virtual or total guest commit; `live_guest_stable_page_budget_used_bytes` is a narrow charge that excludes boot reservation and other backings.
+The run recipe's `t0` is emulator process launch, not full device OS boot; splash does not prove map readiness. Numeric launch-to-map, input-lag and footprint budgets remain unreviewed under [Stage 7](../PLAN.md).
+
 ### Proposed bounded iNavi measurement contract (a04 historical)
 
 The historical [a04 validation receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)

@@ -27,7 +27,6 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 
 | Subsystem | Design page | Current source scope |
 | --- | --- | --- |
-| CE6 platform and boot measurements | [platform profile](subsystems/ce6-platform-boot-profile.md) | Read-only device report, GMS validation, Stage 7 milestone/budget gate |
 | Runtime composition/control | [runtime control](subsystems/runtime-control.md) | main, desktop, monitor, CPU facade |
 | Native CPU engine | [CPU](subsystems/cpu-engine.md) | emulator/unicorn, native_engine, cpu_mips, arch |
 | Guest memory/VM/heaps | [memory](subsystems/guest-memory.md) | ce/memory, emulator/memory, native byte adapters |
