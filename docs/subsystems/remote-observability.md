@@ -8,6 +8,42 @@ Status: design-first subsystem plan. [Architecture](../ARCHITECTURE.md) is the s
 
 Status, framebuffer and separate debug keys are published independently. `claim_debug_publish_slot` uses host Instant to throttle publication. No shared epoch, publication-age guarantee or atomic cross-endpoint owner correlation exists. Equal active-before/active-after PID is a bracket observation, not proof against an intervening ABA switch. Current traces are bounded retained histories, not complete execution journals.
 
+### Source-tested summary freshness (not a shared snapshot)
+
+The [telemetry source gate](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-validation-receipt.md)
+adds four fields to each accepted `/api/v1/debug/summary.txt` publication:
+`publication_sequence`, `publication_host_monotonic_ns`,
+`publication_utc_unix_ms`, and
+`live_guest_stable_page_budget_used_bytes`. The publisher samples its host
+monotonic clock after acquiring the per-server publication lock, then assigns
+a checked, increasing per-server sequence and UTC milliseconds to that slot.
+Throttled attempts and repeated HTTP GETs of a cached body do not assign a new
+sequence. Compare the embedded sequence, not the observer's receive time, to
+identify a repeated summary; UTC can tie or move backward. An advanced
+sequence proves a new summary publication, not guest progress or a fresh
+frame/window/status snapshot. The summary stamp has no common epoch with
+those independently published endpoints, and its monotonic origin is not an
+observer clock origin.
+
+The budget scalar reads `kernel.memory.private_commit_used_bytes()`: charged
+stable guest pages, including shared-view charges and retained pins, but not
+the separately tracked boot reservation or every guest backing. It is not
+total CE RAM use, native translation/cache memory, or host RSS/private bytes.
+A public `VirtualAlloc` reserve-only/one-page-commit control showed the
+expected unchanged/+4-KiB accounting on source; no live iNavi budget curve
+has yet been measured.
+
+The [bounded summary observer](../../evidence/stage3-live-evidence-20261015/observer-summary-validation.receipt.md)
+is source-tested to attempt a summary GET on each nominal two-second slot,
+retain at most 256 complete bodies of at most 64 KiB, and record request/
+receive clocks, status, SHA-256, parsed fields and repeated/regressed
+publication identity. Oversized, malformed, failed and incomplete responses
+remain explicit failures rather than truncated valid samples. The runner's
+[first-frame coverage checks](../../evidence/stage3-live-evidence-20261015/runner-offline-a03-first-frame-proof-receipt.md)
+are launch-relative, but the observer has not validated a live run with this
+new summary schema. Actual request spacing and any missed coverage must be
+read from the resulting per-request clocks and flags.
+
 ### W-B1c mixed touch/key admission order (source-tested)
 
 The common [A1/A5 anchor](../ARCHITECTURE.md) targets one machine-wide
@@ -100,7 +136,7 @@ The 650 run (ledger E-2) makes these distinctions concrete: 16 location ACKs but
 
 ## Migration and acceptance
 
-1. Document existing endpoint/ACK/cache semantics without changing them; add explicit freshness/unknown fields in a separately versioned, bounded contract.
+1. Preserve the source-tested summary-local freshness stamp while documenting existing endpoint/ACK/cache semantics; add shared provenance and explicit unknown fields in a separately versioned, bounded contract.
 2. Introduce machine-owned event correlation and consumption acknowledgements through existing real input/device/GWES consumers; remove direct guest mutation from host adapters.
 3. Publish coherent immutable machine-boundary snapshots using the shared future epoch; retain per-component timing for independently paced streams.
 4. Retire uncorrelated legacy debug caches only after consumers/tests migrate; label compatibility responses clearly during transition.

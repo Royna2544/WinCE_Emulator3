@@ -1609,6 +1609,57 @@ full exit capture retirement, implicit gesture ownership, owner-filtered host
 teardown, remaining producers, CE6 implementation parity, full Stage 3 and
 live iNavi acceptance remain open.
 
+## Live-run preparation: telemetry, clean build and offline safety (2026-10-15, source-only)
+
+After the W-B1c source gate, a pre-run Rust
+[seal](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-pre-run-seal.md)
+(SHA-256 `9D28B43737E94ED902009019A4E145DEE38BD35815222F22CA65A06D4DBA0BF2`)
+and scoped patch (SHA-256
+`042C126BA55B6521E5607D24518FE050831E2D8AC47A2FEC5A35179EEE5934F7`)
+bound the debug-summary per-server publication stamp and narrow live guest
+stable-page budget field. Full release passed **1,996/0/9** and no-default
+**1,456/0/3** across 18 result blocks each; Unicorn-only and desktop-without-
+trace checks exited 0. The [validation receipt](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-validation-receipt.md)
+holds the raw-log hashes and unchanged post-test source hashes. This scalar is
+not total guest commit or host RSS; the stamp is not a shared cross-endpoint
+snapshot epoch. The user-supplied `D:\GitHub\llvm-proj\build\bin\libclang.dll`
+was absent, so the gates used `C:\Program Files\doxygen\bin\libclang.dll`.
+
+A package-scoped `cargo clean --release -p wince_emulation_v3` removed 449
+disposable build files (9.6 GiB), then a real clean release build produced a
+preserved EXE (SHA-256
+`1984310B427BF5E719EB2BDDEB7871134C0EDC923544271B32D962A6FF6AC513`)
+and PDB (SHA-256
+`B7C0C7C403CB93CAB2AE214D65FA48414B8524E7AC784FFB857A13C92FD28AD8`)
+under `evidence/stage3-live-evidence-20261015/`. Their RSDS GUID+age matches:
+`1673843D-3539-4BBE-8265-C11B88F6B4C1:1`. The
+[clean-build receipt](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-clean-build-receipt.md)
+distinguishes this build from an earlier no-op artifact reuse.
+
+The final 21-file [source seal](../../evidence/stage3-live-evidence-20261015/final-source-seal.json)
+has SHA-256 `9BC784FD86060C429889160702234080682199E0D08C7D4A39FC7CF367845ECB`;
+its scoped patch is `D2B7696A4F5E814E2B059BCA4419227138C6EF369FF05E5B0D71EFC3D1CA1C27`.
+The [final build receipt](../../evidence/stage3-live-evidence-20261015/final-build-receipt.json)
+has SHA-256 `B29AC4E45AB58C986A15D27CBDB4191D533AA4219E9EF86156A6D51634830B28`.
+Separate [offline safety controls](../../evidence/stage3-live-evidence-20261015/final-offline-safety-gate-receipt.md)
+passed **97/97 preflight, 40/40 runner, 14/14 backup and 9/9 observer** without
+running the effectful entry point or touching real mounts. The two historical-
+use ledgers were seeded with six deny rows and are byte-identical (SHA-256
+`90B83E40BE6550BFEFACF36538BF77DEB8EE41C905E83953C75CCE8F57C333A3`).
+The [final seal receipt](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
+records the source-to-binary checks and independent review. Its build-receipt
+test flags are cross-checked attestations, not cryptographic execution proof.
+
+No iNavi guest, real writable-mount backup, mount write or live observer ran
+for this gate. A fresh, distinct one-run chat approval remains pending; its
+authenticity needs human review. A future approved run must make fresh adjacent
+ZIPs after approval, recheck mount content and preserved artifacts, keep the
+mounts quiescent, and disclose LAN exposure at the mandated
+`192.168.0.39:8765` endpoint. Offline controls do not eliminate a simultaneous
+driver/monitor death immediately after spawn or external writes after the
+last mount scan. Splash/map readiness, boot time, guest response lag and the
+current build's live memory footprint are still unmeasured.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

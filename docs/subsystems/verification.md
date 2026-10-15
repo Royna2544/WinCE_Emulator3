@@ -126,6 +126,69 @@ Report primary native-start owner separately from helpers and end-of-slice selec
 
 Track whole-host RSS/private/virtual/CPU peaks and phase samples alongside logical blob length/capacity, allocation live/reserved extents, native regions/context/translation residency and retained queue/snapshot storage. Missing capacity/native-engine metrics remain missing. One active cached PID bracket is not whole-machine memory, an atomic epoch or proof of ownership. The 650 growth recorded in ledger E-2 requires investigation before a memory acceptance claim.
 
+### Bounded iNavi measurement contract (source-tested, live result pending)
+
+The [new source/build seal](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
+and [offline runner gate](../../evidence/stage3-live-evidence-20261015/final-offline-safety-gate-receipt.md)
+prepare this measurement path; neither is a new application run. A future
+approved run uses the monitor's actual process-launch monotonic tick as `t0`,
+not the run tag, observer startup or first HTTP response. The observer starts
+before launch and records when it sees the process descriptor, then requests
+the first frame before status/summary. Its first request and response must
+fall within launch +2 s for the early-frame coverage check; failure remains
+explicitly incomplete evidence, not a delayed boot result. Subsequent frame,
+status and summary requests target two-second slots, but use each recorded
+request/receive clock rather than assuming exact spacing. The first observed
+status with `running=true` and `gpsTarget=COM7:` is the *input schedule origin*,
+not proof that the guest has finished booting. The raw-NMEA burst at that
+origin +93..108 s and tap at +153 s are therefore input-ready-relative,
+not launch-relative.
+
+Measure launch-to-first retained frame, launch-to-first genuine iNavi splash,
+progress/settled splash, splash teardown, first genuine map, and first
+navigation response as separate milestones. Label visual classifications with
+the saved frame hash, request/receive interval and preceding successful poll;
+a frame change alone does not identify a map. If the last successful poll is
+still splash, report map readiness as *not observed through that poll*, not as
+a completed boot time or proof that no transient frame occurred between polls.
+For input, keep HTTP acceptance, remote drain/post, positive guest `COM7:`
+`ReadFile`, parsed location effect, touch WNDPROC entry/return and later
+frame/state change separate. Cached debug rings and independently published
+frame/status/summary keys have no shared `SnapshotEpoch`; a poll gives at
+most a delivery observation bound, not exact ACK-to-handler or visual-response
+lag. The source-tested summary sequence identifies a fresh **summary body
+only**. Exact event latency still needs a correlated ingress/event identity
+and monotonic timestamps at actual guest consumption/dispatch.
+
+Sample host process working set (RSS proxy), private bytes, virtual bytes and
+CPU at the recorded two-second monitor times; report phase-aligned values and
+sampled peaks, which may miss intervening peaks. Report the summary's
+`live_guest_stable_page_budget_used_bytes` on distinct, advancing publication
+sequences as a *narrow charged stable-page budget*: it excludes boot-reserved
+bytes and other guest backings. Neither that scalar nor configured CE physical
+RAM capacity is total guest memory consumption, and neither can be subtracted
+from host RSS to infer native-engine/TCG residency. Native arena, backing
+capacity and unreported guest families remain unknown until separately
+instrumented. Earlier E-1/E-22/E-27/E-29/E-32/O-P4/E-38 host-memory samples
+have no matching live stable-page-budget series.
+
+For CPU cost, retain every completed `ce.slice_profile` row and its exact
+`native_start_pid`/TID, guest instruction count and `setup_ms`, `hooks_ms`,
+`run_ms`, `snapshot_ms`, `sync_out_ms`; the later selected PID is not the
+outgoing native owner. For comparison to E-38, define a busy slice as
+`guest_insns >= 900000` and compute weighted run-only MIPS as
+`sum(guest_insns) / sum(run_ms) / 1000`, grouped by the primary iNavi process
+and helpers as well as together. Report mean setup-plus-hooks time per busy
+slice and the wider non-run cost separately. These integer-millisecond
+logged phases and run-only MIPS exclude some host/observer work; they are not
+launch-to-map speed. E-38's 330 s splash-only run gives a historical,
+unmatched reference of 430.676 MiB sampled RSS and 444.953 MiB private,
+with 17.120 weighted busy run-only MIPS combined and 26.359 MIPS for PID 1
+([receipt](../../evidence/e37-live-20261014T051228Z/analysis.receipt.md)).
+It supplies no current-build live result and no causal speed or footprint
+gain. Repeat phase- and input-matched baseline/candidate runs before making
+such a claim; set no boot-delay or memory threshold from a single splash run.
+
 ## Readiness and observability oracle
 
 Inspect real frames/windows and genuine executed handlers. First splash is a bounded visual observation, not complete boot. A navigation map must arise from guest startup/paint paths and real splash teardown, then ordinary GPS/touch must affect navigation behavior. Keep app-specific gate addresses/messages only as diagnostic probes, never production heuristics.
