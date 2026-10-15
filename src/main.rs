@@ -4460,7 +4460,12 @@ mod tests {
             .memory
             .prepare_writable_image_run(identity, &[0; 4096])
             .expect("prepare writable image run");
-        assert!(kernel.memory.commit_prepared_writable_image_run(prepared).is_some());
+        assert!(
+            kernel
+                .memory
+                .commit_prepared_writable_image_run(prepared)
+                .is_some()
+        );
         assert!(kernel.memory.has_stable_writable_image_runs());
         kernel
     }
