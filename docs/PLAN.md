@@ -255,8 +255,15 @@ close only their named gates, not Stage 2 or live acceptance.
   The input-only gate distinguishes explicit host HWNDs from guest Get/Peek
   retrieval filters; coordinate touch retains live capture/hit-test, blocked-
   wait/modal HWNDs are fallback hints only, and keys use live focus/active
-  ownership. Full exit capture retirement, implicit gesture ownership and
-  owner-filtered host teardown remain open. Broadcast, HWND timers, hotkeys,
+  ownership. Full exit capture retirement and implicit gesture ownership
+  remain open. Independent-window/backing selection on verified process exit
+  and the no-birth pseudo-exit fence are source-green under PID reuse (focused
+  controls and no-default full suite **1,485/0/3**;
+  [receipt pending](../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
+  Full owner-filtered host teardown remains open because GWE recursive foreign
+  parent/owner links and numeric sent-message sender cleanup lack birth proof;
+  no final release broad pass, live-app result or CE6 parity is established.
+  Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
