@@ -237,9 +237,8 @@ close only their named gates, not Stage 2 or live acceptance.
   The input-only gate distinguishes explicit host HWNDs from guest Get/Peek
   retrieval filters; coordinate touch retains live capture/hit-test, blocked-
   wait/modal HWNDs are fallback hints only, and keys use live focus/active
-  ownership. Mixed touch/key ordering is the next separate gate; full exit
-  capture retirement, implicit gesture ownership and owner-filtered host
-  teardown remain open. Broadcast, HWND timers, hotkeys,
+  ownership. Full exit capture retirement, implicit gesture ownership and
+  owner-filtered host teardown remain open. Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
@@ -251,14 +250,24 @@ close only their named gates, not Stage 2 or live acceptance.
   Other blocked payload families have not been migrated by these parked-wait
   gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
-- W-B1c mixed touch/key admission order is [designed separately](subsystems/remote-observability.md)
-  against A1/A5, before code. Its first required control is the expected-red
-  Birth-owned A-focused key, then B-point DOWN, in one drain; only after that
-  red and independent plan review may one typed, sequenced `CeRemote` FIFO
-  replace the two current queues. Preserve W-B1b Birth routing and the current
-  message-time projection. O-C5 guest-time assignment, physical cross-adapter
-  arrival order, cross-thread WNDPROC execution order, host `GetMessage(NULL)`
-  wake without a HWND, and live tap delivery remain outside this source gate.
+- W-B1c mixed touch/key admission order passed its bounded
+  [source gate](../evidence/stage3-mixed-input-order-20261015/validation.receipt.md)
+  after a preserved expected red and independent plan review. One typed,
+  per-`CeRemote`-instance sequenced FIFO replaces the separate touch/key
+  drains; tap admission is atomic, and each key resolves live focus at its
+  event position. Explicit HWND routing for both types, W-B1b exact-Birth
+  guards and stale-target drops, and the existing `Message.time_ms` projection
+  remain. The key(A) → DOWN(B) → key(B) release control passed; the full release
+  suite passed 1,992/0/9, no-feature 1,452/0/3 across 18 blocks each, and two
+  alternate feature checks passed. The release seal was captured after its run
+  began, with matching committed source hashes and no observed intervening
+  source write; it is not a pre-run seal. This is local host-input admission,
+  not CE6 focus parity, machine-wide cross-adapter arrival order, cross-thread
+  WNDPROC execution order, NMEA/serial ordering, or live tap delivery.
+  [O-C5](DECISIONS.md) guest-time assignment and host `GetMessage(NULL)` wake
+  without an HWND remain open. See [remote-observability](subsystems/remote-observability.md)
+  for scope and remaining remote-boundary work. No app or writable-mount run
+  was performed for this gate.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

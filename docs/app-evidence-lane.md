@@ -42,36 +42,116 @@ is the latest approved live observation; its one-run approval is spent. New
 writable-mount observations require a separate human approval and fresh
 adjacent, SHA-verified ZIP backups.
 
-### Next live-run preparation (planned, not authorized or executed)
+### Next live-run preparation (design gate; not authorized or executed)
 
-After the W-B1c input-order source gate, do not reuse
-`scripts/inavi_bounded_e22.ps1` unchanged: it hardcodes the E-37 executable,
-the 2026-10-14 adjacent backup names/hashes, an old approval and `e37-live-`
-evidence paths. Review and parameterize it for a *fresh* release EXE/matching
-PDB and current-source/config hashes. Obtain a new one-run approval for writes
-to the original SD, ResidentFlash and EmulatorRoot mounts, then run
-`scripts/backup_rw_mounts.ps1` to make and SHA-verify fresh adjacent ZIPs
-before launch. Preserve pre/post mount inventories, cap the app at 330 s with
-the existing independent watchdog/RSS/log limits, and do not infer that older
-run approvals or backups cover new source. Recheck the four slow-boot marker
-files without deleting them.
+Instrumentation and runner work below require their own source gate; this
+read-only app-evidence lane does not authorize a launch or gate a stage.
 
-Keep the comparable raw-NMEA feed and one input-ready-relative tap. Record
-HTTP ACK, remote drain/post, actual guest WNDPROC entry/return and subsequent
-frame hashes as different milestones. E-38 tap delivery predates W-B1b/W-B1c,
-so this run must establish that the new routing still reaches the intended
-iNavi window; a poll interval only bounds lag unless the events carry
-correlated monotonic timestamps. Capture launch-relative and input-ready-
-relative splash, progress and *actual map* frames separately, along with
-phase-aligned PID1/helper guest instructions, busy-slice MIPS and fixed setup
-cost, host RSS/private/virtual peaks and guest committed/reserved bytes.
-Current heap-live, virtual-live and `blob_mb` observations are partial proxies;
-before claiming a small CE6-like guest footprint, add and source-test a
-bounded committed-private-page scalar (the memory owner already exposes
-`private_commit_used_bytes`) or report that quantity as missing. Separate
-native cache/engine residency from guest RAM and host RSS. One clean run can
-test delivery and stability; causal speed/footprint claims still require the
-matched repeated-run protocol in [verification](subsystems/verification.md).
+**Narrow memory telemetry.** In `src/main.rs::publish_remote_endpoint`, plan a
+`live_guest_stable_page_budget_used_bytes` field in the debug `summary`, read
+from `kernel.memory.private_commit_used_bytes()`. The debug-publisher owner
+must assign a per-run monotonic publication sequence and host-monotonic
+nanoseconds at its accepted publication slot, with UTC for human alignment,
+*in that same body*. A repeated sequence is stale even if the HTTP receipt
+time differs; UTC alone can tie or jump. The observer should fetch the summary
+every 2 s, retaining each response's receive UTC/monotonic clock, HTTP result,
+body SHA-256, embedded publication identity and parsed field;
+retain at most 256 summary bodies of at most 64 KiB each, independently of the
+raw-log limit. Reject an oversized summary while retaining the HTTP failure
+metadata; do not truncate it into an apparently valid sample. The current
+generic capture path accepts much larger responses, so this needs a dedicated
+summary bound and a real 2-s fetch rather than its current every-fifth-slot
+(10-s) cadence. A source control must show reserve-only leaves the field
+unchanged and committing one new stable page through the *public*
+`VirtualAlloc` path adds exactly 4 KiB; also check that shared-view aliases
+charge once, retained pins keep their charge until final release, and O-M2
+heap/stack page commits charge per guest page rather than per 1-MiB native
+mapping block. This is the guest **stable-page budget**: `used_bytes` includes
+charged shared-view pages, detached/native-retained pins and quarantined
+charges,
+but excludes `boot_reserved_bytes` (a separately tracked budget component)
+and other guest backings. It is not total guest commit, guest physical RAM or
+host RSS. Existing heap-live,
+virtual-live and `blob_mb` values remain partial proxies; report any missing
+quantity rather than infer a small CE6 footprint.
+
+**Fresh-run manifest and preflight.** Do not reuse
+`scripts/inavi_bounded_e22.ps1` unchanged: it hardcodes the E-37 EXE/PDB,
+2026-10-14 adjacent ZIP hashes, a spent approval and `e37-live-` paths. A
+future parameterized runner must require a unique evidence tag and per-run
+manifest naming and SHA-256-verifying the fresh release EXE and matching PDB
+against a build receipt chained from the W-B1c sealed HEAD `0e06e2c5` and its
+patch/file hashes to the new telemetry/runner source seal. Immediately before
+launch, the recorded source hashes must still match that new seal. The
+EXE↔PDB RSDS GUID+age must match, not merely their separate hashes; any crash
+analysis must verify the actually loaded PDB. The new source must pass its own
+focused controls and sealed full release/no-feature/alternate-feature gate
+before that EXE can be used. The manifest also records current
+`registry.reg`, `serial_devices.json`, `mounts.toml` and target-app hashes,
+the exact fresh backup manifest and all three adjacent
+SD/ResidentFlash/EmulatorRoot ZIP paths and hashes, plus the
+human one-run approval reference. Validate these relationships and hashes
+before launch, including that `mounts.toml`'s three writable roots are exactly
+the three backup source roots. Reject E-37 paths, missing fields or an
+existing evidence tag. The monitor worker must independently revalidate the
+sealed manifest hash and executable provenance immediately before its actual
+`Start-Process`, not rely only on the parent process's earlier check.
+A manifest records approval but cannot grant it. Keep a durable append-only
+approval/backup use ledger under `evidence/`, outside disposable build output.
+Mirror every entry (approval reference, ZIP hashes, state and UTC) to a tracked
+append-only ledger under `docs/evidence/` for off-machine backup commits; the
+runner must refuse launch if either copy is missing or their histories differ.
+If a crash interrupts the two-file update, that disagreement fails closed
+until a human-recorded reconciliation, never an automatic timeout.
+The monitor worker that actually launches the process must, under an
+exclusive ledger lock, reject any approval reference or ZIP hash already
+reserved/spent and append and flush an attempt reservation immediately before
+`Start-Process` in both ledgers; a parent-only check is insufficient. Record the exact spawned
+PID/start identity and mark the
+approval spent once spawn succeeds. An unresolved reservation fails closed and
+cannot be reused automatically; even a proved no-spawn attempt needs fresh
+human direction before retry. Clearing a stuck reservation requires an
+explicit human action recorded as another ledger entry, never an automatic
+timeout. Test the ledger's duplicate and interrupted
+reservation behavior without launching the emulator.
+After a new human approval, `scripts/backup_rw_mounts.ps1` must produce and
+verify the fresh ZIPs. Its source inventory and sequential archive are not an
+atomic snapshot if a mount changes mid-backup: require the three mount trees
+to stay quiescent through inventory/verification, compare a post-backup
+content-hash inventory to the source manifests, and fail closed on any detected
+mismatch.
+Just before spawn, compare a cheap size/mtime inventory against that
+post-backup inventory and reject another detected emulator process using the
+mounts; if process identity cannot be checked, fail closed. These checks
+narrow but cannot close the later-write window or prove the absence of every
+external writer.
+Preserve the four slow-boot marker guard without deleting markers, the
+no-reparse checks, pre/post mount inventories, 330 s app cap, independent
+390 s watchdog, 2 GiB RSS cap and 512 MiB raw-log cap.
+
+The expected-red controls are an absent/repeated-sequence summary publication
+and reserve-only versus public one-page accounting, plus stale E-37/approval/ZIP,
+already-spent approval, interrupted ledger reservation, bad-hash and
+duplicate-tag manifests that must reject before process spawn.
+Review the metric semantics, manifest schema and failure boundaries
+independently **before implementation**; acceptance then needs those focused
+source/parser controls green and a source-bound build/test receipt. Tests of
+the parser and negative manifests must not launch the app or touch mounts.
+This design gate itself neither backs up mounts nor spends a run approval.
+
+For a separately approved live run, keep the comparable raw-NMEA feed and one
+input-ready-relative tap. Record HTTP ACK, remote drain/post, actual guest
+WNDPROC entry/return and subsequent frame hashes as different milestones.
+E-38 tap delivery predates W-B1b/W-B1c, so establish that new routing still
+reaches the intended iNavi window; a poll interval only bounds lag unless
+events carry correlated monotonic timestamps. Capture launch-relative and
+input-ready-relative splash, progress and *actual map* frames separately,
+along with phase-aligned PID1/helper guest instructions, busy-slice MIPS and
+fixed setup cost, host RSS/private/virtual peaks, stable-page budget and
+separately reported VM reservation. Separate native cache/engine residency
+from guest RAM and host RSS. One clean run can test delivery and stability;
+causal speed/footprint claims still require matched repeated runs under
+[verification](subsystems/verification.md).
 
 Closed by other sessions (recorded in `PROGRESS.md`): growing sensor-init retries
 (packed-sample fix), the repeated `CreateProcessW(happyway_win.exe)` storm under

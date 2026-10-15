@@ -66,12 +66,18 @@ inform the boundary but do not verify this emulator's CE6 behavior.
 W-B1b passed 27/27 focused controls, a38 release 1,988/0/9 and a39
 no-feature 1,448/0/3 across 18 blocks each, plus a40/a41 feature checks.
 The a33/a34 broad failures on an obsolete hidden-window fixture preceded its
-a35 test repair, a36/a37 focused reruns and the fresh a38 source seal. Mixed
-touch/key ordering, broadcast, HWND timers, hotkeys, sent/paint/modal and other
-input producers, full GWES, and live iNavi acceptance remain open.
-The next mixed-admission-order gate is designed under
-[remote-observability](remote-observability.md); it changes host input
-sequencing, not GWE's per-thread dispatch priority or CE6 callback parity.
+a35 test repair, a36/a37 focused reruns and the fresh a38 source seal. The
+separate W-B1c mixed touch/key [source gate](../../evidence/stage3-mixed-input-order-20261015/validation.receipt.md)
+passed the expected-red-to-green key(A) → DOWN(B) → key(B) control, release
+1,992/0/9 and no-feature 1,452/0/3 across 18 blocks each, and two alternate
+feature checks. Its release source seal was captured after that run began, with
+matching committed file hashes; it is not pre-run evidence. The change orders
+local `CeRemote` admission into Kernel and resolves key focus at each event's
+position; it does not establish CE6 focus parity, machine-wide arrival order,
+cross-thread WNDPROC execution order or live tap delivery. See
+[remote-observability](remote-observability.md). Broadcast, HWND timers,
+hotkeys, sent/paint/modal and other input producers, full GWES, and live iNavi
+acceptance remain open.
 Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
 
 ## Failure and lifetime rules
