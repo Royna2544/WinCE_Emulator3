@@ -6964,6 +6964,9 @@ impl CeKernel {
             // Retire only input published to this incarnation. Numeric TID
             // cleanup would also destroy a replacement task's queue.
             self.gwe.retire_thread_birth(key);
+            for send_id in self.gwe.terminate_deferred_sent_messages_to_birth(key) {
+                self.queue_send_reply_wake_candidates(send_id);
+            }
             self.release_discarded_message_pointer_payloads();
             self.timers.remove_thread_timers_for_birth(key);
             // A completed owner cannot resume its frame. Cancel through the
@@ -9302,7 +9305,9 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        self.expire_timed_out_send_messages();
+        self.peek_ready_sent_message_w_filtered_with_sleep_frame(
+            thread_id, hwnd, min_msg, max_msg,
+        )?;
         let message = self
             .gwe
             .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
@@ -9325,9 +9330,38 @@ impl CeKernel {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<(u64, Message)> {
+        self.peek_ready_sent_message_w_filtered_with_sleep_frame(
+            thread_id, hwnd, min_msg, max_msg,
+        )
+        .map(|(id, message, _frame)| (id, message))
+    }
+
+    pub(crate) fn peek_ready_sent_message_w_filtered_with_sleep_frame(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
         self.expire_timed_out_send_messages();
-        self.gwe
-            .peek_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)
+        let candidate = self.gwe.peek_sent_message_filtered_with_sleep_frame(
+            thread_id, hwnd, min_msg, max_msg,
+        )?;
+        if let Some(frame) = candidate.2
+            && self.live_thread_birth_key_by_id(thread_id) != Some(frame.key().owner_birth())
+        {
+            // A stale receiver incarnation cannot activate a marked send by
+            // reusing its numeric TID. Finish only the old birth's deferred
+            // transactions so their senders receive a genuine failure.
+            for send_id in self
+                .gwe
+                .terminate_deferred_sent_messages_to_birth(frame.key().owner_birth())
+            {
+                self.queue_send_reply_wake_candidates(send_id);
+            }
+            return None;
+        }
+        Some(candidate)
     }
 
     pub(crate) fn take_ready_sent_message_w_filtered_if_id(
@@ -9338,10 +9372,10 @@ impl CeKernel {
         max_msg: u32,
         expected_send_id: u64,
     ) -> Option<Message> {
-        self.expire_timed_out_send_messages();
         if self
-            .gwe
-            .peek_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?
+            .peek_ready_sent_message_w_filtered_with_sleep_frame(
+                thread_id, hwnd, min_msg, max_msg,
+            )?
             .0
             != expected_send_id
         {
@@ -10040,13 +10074,29 @@ impl CeKernel {
             return None;
         }
         let flags = timeout_ms.map_or(SMF_NULL, |_| crate::ce::gwe::SMF_TIMEOUT);
-        let send_id = self.gwe.queue_send_message_for_window(
-            Some(caller_thread_id),
-            hwnd,
-            Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
-            flags,
-            timeout_ms,
-        );
+        let deferred_frame = self
+            .live_thread_birth_key_by_id(target_thread)
+            .and_then(|birth| self.handles.active_finite_sleep_frame(birth))
+            .filter(|frame| self.is_blocked_finite_sleep_frame(*frame));
+        let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
+        let send_id = if let Some(frame) = deferred_frame {
+            self.gwe.queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(caller_thread_id),
+                hwnd,
+                message,
+                flags,
+                timeout_ms,
+                frame,
+            )
+        } else {
+            self.gwe.queue_send_message_for_window(
+                Some(caller_thread_id),
+                hwnd,
+                message,
+                flags,
+                timeout_ms,
+            )
+        };
         if let Some(id) = send_id {
             self.gwe
                 .set_sent_message_sender_process(id, self.current_process_id);
@@ -17084,5 +17134,73 @@ mod tests {
         assert!(kernel.blocked_waiter(neighbor).is_none());
         assert!(kernel.blocked_waiter(second.wait_id()).is_none());
         assert_eq!(kernel.handles.active_finite_sleep_frame(birth), None);
+    }
+
+    #[test]
+    fn finite_sleep_send_keeps_frame_provenance_after_wake_until_queue_take() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let (_, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .unwrap();
+        let hwnd = kernel.create_window_ex_w(receiver_tid, "SLEEP_SEND_FRAME", "", None, 0, 0, 0);
+        let frame = kernel
+            .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
+            .unwrap();
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(sender_tid, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
+            .unwrap();
+        assert_eq!(
+            kernel.gwe.sent_message(send_id).unwrap().deferred_from_sleep_frame,
+            Some(frame)
+        );
+        assert!(kernel.thread_has_pending_sent_message(receiver_tid));
+        assert!(kernel.begin_finite_sleep_completion(frame));
+        assert!(kernel.retire_finite_sleep_completion(frame));
+        assert_eq!(kernel.handles.active_finite_sleep_frame(receiver_birth), None);
+        assert_eq!(
+            kernel.gwe.sent_message(send_id).unwrap().deferred_from_sleep_frame,
+            Some(frame),
+            "retiring Sleep must not turn a deferred send into a pre-run callout"
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), None);
+        assert_eq!(
+            kernel
+                .take_ready_sent_message_w_filtered(receiver_tid, None, 0, 0)
+                .unwrap()
+                .hwnd,
+            hwnd
+        );
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_tid), Some(send_id));
+        assert_eq!(kernel.complete_active_sent_message(receiver_tid, 0x77), Some(send_id));
+        assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0x77));
+    }
+
+    #[test]
+    fn finite_sleep_receiver_exit_replies_to_only_its_deferred_send() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let (_, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .unwrap();
+        let hwnd = kernel.create_window_ex_w(receiver_tid, "SLEEP_EXIT_SEND", "", None, 0, 0, 0);
+        let frame = kernel
+            .try_publish_finite_sleep_wait_for_birth(receiver_birth, receiver_handle, 100, 10)
+            .unwrap();
+        let deferred_send = kernel
+            .begin_cross_thread_send_message_w(sender_tid, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
+            .unwrap();
+        assert_eq!(
+            kernel.gwe.sent_message(deferred_send).unwrap().deferred_from_sleep_frame,
+            Some(frame)
+        );
+        assert!(kernel.mark_guest_thread_exited_by_birth(receiver_birth, 0));
+        assert!(kernel.blocked_waiter(frame.wait_id()).is_none());
+        assert!(!kernel.thread_has_pending_sent_message(receiver_tid));
+        assert_eq!(kernel.take_completed_send_message_result(deferred_send), Some(0));
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::ce::object::{ProcessBirthKey, ThreadBirthKey};
+use crate::ce::object::{ProcessBirthKey, TaskFrameRef, ThreadBirthKey};
 use crate::ce::timer::TimerMessageOrigin;
 
 bitflags::bitflags! {
@@ -423,6 +423,10 @@ pub struct SentMessage {
     pub sender_thread_id: Option<u32>,
     pub sender_process_id: Option<u32>,
     pub receiver_thread_id: u32,
+    /// Immutable provenance for a send queued while its exact receiver birth
+    /// was blocked in finite Sleep. Pre-run callouts must leave it queued;
+    /// guest message retrieval may still activate it after Sleep returns.
+    pub deferred_from_sleep_frame: Option<TaskFrameRef>,
     pub message: Message,
     pub flags: u32,
     pub timeout_ms: Option<u32>,
@@ -3780,14 +3784,58 @@ impl Gwe {
         &mut self,
         sender_thread_id: Option<u32>,
         hwnd: u32,
+        message: Message,
+        flags: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
+        self.queue_send_message_for_window_with_sleep_frame(
+            sender_thread_id,
+            hwnd,
+            message,
+            flags,
+            timeout_ms,
+            None,
+        )
+    }
+
+    /// Publish a send and its finite-Sleep delivery provenance atomically.
+    /// The caller must first verify that `frame` is the receiver's active,
+    /// blocked canonical frame; GWE verifies that it names the window owner.
+    pub fn queue_send_message_for_window_deferred_by_finite_sleep(
+        &mut self,
+        sender_thread_id: Option<u32>,
+        hwnd: u32,
+        message: Message,
+        flags: u32,
+        timeout_ms: Option<u32>,
+        frame: TaskFrameRef,
+    ) -> Option<u64> {
+        self.queue_send_message_for_window_with_sleep_frame(
+            sender_thread_id,
+            hwnd,
+            message,
+            flags,
+            timeout_ms,
+            Some(frame),
+        )
+    }
+
+    fn queue_send_message_for_window_with_sleep_frame(
+        &mut self,
+        sender_thread_id: Option<u32>,
+        hwnd: u32,
         mut message: Message,
         flags: u32,
         timeout_ms: Option<u32>,
+        deferred_from_sleep_frame: Option<TaskFrameRef>,
     ) -> Option<u64> {
         let Some(window) = self.windows.get(&hwnd) else {
             return None;
         };
-        if window.destroyed {
+        if window.destroyed
+            || deferred_from_sleep_frame
+                .is_some_and(|frame| frame.key().owner_birth().thread_id() != window.thread_id)
+        {
             return None;
         }
         if message.source == MSGSRC_UNKNOWN {
@@ -3803,6 +3851,7 @@ impl Gwe {
                 sender_thread_id,
                 sender_process_id: None,
                 receiver_thread_id: window.thread_id,
+                deferred_from_sleep_frame,
                 message,
                 flags,
                 timeout_ms,
@@ -4763,6 +4812,27 @@ impl Gwe {
             })
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
+        self.terminate_selected_sent_messages_to_receiver(sent_ids)
+    }
+
+    /// Retire only sends that were deferred for this exact finite-Sleep
+    /// receiver birth. A replacement using the same numeric TID, and sends
+    /// with no such provenance, are deliberately left untouched.
+    pub fn terminate_deferred_sent_messages_to_birth(&mut self, birth: ThreadBirthKey) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| {
+                sent.deferred_from_sleep_frame
+                    .is_some_and(|frame| frame.key().owner_birth() == birth)
+                    && sent.flags & SMF_RESULT_READY == 0
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        self.terminate_selected_sent_messages_to_receiver(sent_ids)
+    }
+
+    fn terminate_selected_sent_messages_to_receiver(&mut self, sent_ids: Vec<u64>) -> Vec<u64> {
         if sent_ids.is_empty() {
             return sent_ids;
         }
@@ -5478,16 +5548,15 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if let Some(message) = self.sent_queues.get(&thread_id).and_then(|queue| {
-            queue.iter().find_map(|id| {
-                self.sent_messages.get(id).and_then(|sent| {
-                    (message_matches(&sent.message, hwnd, min_msg, max_msg)
-                        && self.message_targets_visible_window(&sent.message))
-                    .then(|| sent.message.clone())
-                })
-            })
-        }) {
-            return Some(message);
+        if let Some(sent) = self.first_matching_queued_sent_message(
+            thread_id, hwnd, min_msg, max_msg, true,
+        ) {
+            // A pre-run visible peek must not present a finite-Sleep-deferred
+            // send as dispatchable, nor let a later queued item pass it.
+            return sent
+                .deferred_from_sleep_frame
+                .is_none()
+                .then(|| sent.message.clone());
         }
         if let Some(message) = self.queues.get(&thread_id).and_then(|queue| {
             queue.iter().find_map(|entry| {
@@ -5595,6 +5664,11 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
+        if self.first_matching_sent_message_is_sleep_deferred(
+            thread_id, hwnd, min_msg, max_msg, false,
+        ) {
+            return None;
+        }
         if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
@@ -5646,6 +5720,11 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
+        if self.first_matching_sent_message_is_sleep_deferred(
+            thread_id, hwnd, min_msg, max_msg, true,
+        ) {
+            return None;
+        }
         if let Some(message) =
             self.take_matching_visible_sent_message(thread_id, hwnd, min_msg, max_msg)
         {
@@ -5683,11 +5762,27 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<(u64, Message)> {
+        self.peek_sent_message_filtered_with_sleep_frame(thread_id, hwnd, min_msg, max_msg)
+            .map(|(id, message, _frame)| (id, message))
+    }
+
+    /// Inspect the first filter-matching queued send without activating it.
+    /// The frame is provenance, not a copy of its mutable Task phase.
+    pub(crate) fn peek_sent_message_filtered_with_sleep_frame(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<(u64, Message, Option<TaskFrameRef>)> {
         self.sent_queues.get(&thread_id)?.iter().find_map(|id| {
             self.sent_messages
                 .get(id)
-                .filter(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
-                .map(|sent| (*id, sent.message.clone()))
+                .filter(|sent| {
+                    sent.flags & SMF_RESULT_READY == 0
+                        && message_matches(&sent.message, hwnd, min_msg, max_msg)
+                })
+                .map(|sent| (*id, sent.message.clone(), sent.deferred_from_sleep_frame))
         })
     }
 
@@ -5729,6 +5824,11 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
+        if self.first_matching_sent_message_is_sleep_deferred(
+            thread_id, hwnd, min_msg, max_msg, false,
+        ) {
+            return None;
+        }
         if let Some(message) =
             self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
         {
@@ -5935,6 +6035,40 @@ impl Gwe {
             .push(id);
         self.begin_send_message(thread_id);
         Some(message)
+    }
+
+    fn first_matching_queued_sent_message(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        visible_only: bool,
+    ) -> Option<&SentMessage> {
+        self.sent_queues.get(&thread_id)?.iter().find_map(|id| {
+            self.sent_messages.get(id).filter(|sent| {
+                message_matches(&sent.message, hwnd, min_msg, max_msg)
+                    && (!visible_only || self.message_targets_visible_window(&sent.message))
+            })
+        })
+    }
+
+    fn first_matching_sent_message_is_sleep_deferred(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        visible_only: bool,
+    ) -> bool {
+        self.first_matching_queued_sent_message(
+            thread_id,
+            hwnd,
+            min_msg,
+            max_msg,
+            visible_only,
+        )
+        .is_some_and(|sent| sent.deferred_from_sleep_frame.is_some())
     }
 
     fn take_matching_visible_sent_message(
@@ -7185,6 +7319,299 @@ mod tests {
             Some(0x1234)
         );
         assert!(gwe.sent_message(send_id).is_none());
+    }
+
+    #[test]
+    fn deferred_sleep_send_blocks_generic_readers_until_explicit_take() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let receiver_handle = handles.create_thread(12, 0x401000, 0, false);
+        let receiver_birth = handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .unwrap();
+        let receiver_frame = TaskFrameRef::new(
+            handles
+                .preflight_finite_sleep_frame(receiver_birth)
+                .unwrap(),
+            41,
+        )
+        .unwrap();
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex(12, "target", "", None, 0, WS_VISIBLE, 0);
+        let deferred_id = gwe
+            .queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(11),
+                hwnd,
+                Message::new(hwnd, WM_USER + 1, 0, 0, 0),
+                SMF_NULL,
+                None,
+                receiver_frame,
+            )
+            .unwrap();
+        let ordinary_id = gwe
+            .queue_send_message_for_window(
+                Some(13),
+                hwnd,
+                Message::new(hwnd, WM_USER + 2, 0, 0, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+        gwe.post_message(12, Message::new(hwnd, WM_USER + 3, 0, 0, 0));
+
+        assert!(gwe.peek_visible_message_filtered(12, None, 0, 0).is_none());
+        assert!(gwe.get_visible_message_filtered(12, None, 0, 0).is_none());
+        assert!(gwe
+            .peek_message_filtered(12, None, 0, 0, PeekFlags::NO_REMOVE)
+            .is_none());
+        assert!(gwe
+            .peek_message_filtered(12, None, 0, 0, PeekFlags::REMOVE)
+            .is_none());
+        assert!(gwe.get_message_filtered(12, None, 0, 0).is_none());
+        assert_eq!(gwe.active_sent_message_id(12), None);
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, _, frame)| (id, frame)),
+            Some((deferred_id, Some(receiver_frame))),
+            "later sends and posts must not overtake a matching deferred send"
+        );
+
+        assert_eq!(
+            gwe.take_sent_message_filtered(12, None, 0, 0)
+                .map(|message| message.msg),
+            Some(WM_USER + 1),
+            "the Kernel's checked GetMessage path uses this explicit take"
+        );
+        assert_eq!(gwe.active_sent_message_id(12), Some(deferred_id));
+        assert_eq!(
+            gwe.get_visible_message_filtered(12, None, 0, 0)
+                .map(|message| message.msg),
+            Some(WM_USER + 2)
+        );
+        assert_eq!(gwe.active_sent_message_id(12), Some(ordinary_id));
+        assert_eq!(
+            gwe.get_message_filtered(12, None, 0, 0)
+                .map(|message| message.msg),
+            Some(WM_USER + 3)
+        );
+    }
+
+    #[test]
+    fn deferred_sleep_send_respects_reader_filters_without_reordering_matches() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let receiver_handle = handles.create_thread(12, 0x401000, 0, false);
+        let receiver_birth = handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .unwrap();
+        let receiver_frame = TaskFrameRef::new(
+            handles
+                .preflight_finite_sleep_frame(receiver_birth)
+                .unwrap(),
+            41,
+        )
+        .unwrap();
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex(12, "target", "", None, 0, WS_VISIBLE, 0);
+        let deferred_id = gwe
+            .queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(11),
+                hwnd,
+                Message::new(hwnd, WM_USER + 11, 0, 0, 0),
+                SMF_NULL,
+                None,
+                receiver_frame,
+            )
+            .unwrap();
+        let ordinary_id = gwe
+            .queue_send_message_for_window(
+                Some(13),
+                hwnd,
+                Message::new(hwnd, WM_USER + 12, 0, 0, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            gwe.peek_visible_message_filtered(12, None, WM_USER + 12, WM_USER + 12)
+                .map(|message| message.msg),
+            Some(WM_USER + 12),
+            "a deferred send excluded by the filter does not block a later match"
+        );
+        assert_eq!(
+            gwe.peek_message_filtered(
+                12,
+                None,
+                WM_USER + 12,
+                WM_USER + 12,
+                PeekFlags::REMOVE,
+            )
+            .map(|message| message.msg),
+            Some(WM_USER + 12)
+        );
+        assert_eq!(gwe.active_sent_message_id(12), Some(ordinary_id));
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, _, frame)| (id, frame)),
+            Some((deferred_id, Some(receiver_frame)))
+        );
+        assert!(gwe.get_message_filtered(12, None, 0, 0).is_none());
+    }
+
+    #[test]
+    fn finite_sleep_send_provenance_publishes_with_queue_and_peeks_without_activation() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let receiver_handle = handles.create_thread(12, 0x401000, 0, false);
+        let receiver_birth = handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .unwrap();
+        let receiver_frame = TaskFrameRef::new(
+            handles
+                .preflight_finite_sleep_frame(receiver_birth)
+                .unwrap(),
+            41,
+        )
+        .unwrap();
+        let other_handle = handles.create_thread(13, 0x402000, 0, false);
+        let other_birth = handles.thread_birth_key_for_handle(other_handle).unwrap();
+        let other_frame = TaskFrameRef::new(
+            handles.preflight_finite_sleep_frame(other_birth).unwrap(),
+            42,
+        )
+        .unwrap();
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(12, "target", "");
+
+        assert!(
+            gwe.queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(11),
+                hwnd,
+                Message::new(hwnd, WM_USER + 1, 0, 0, 0),
+                SMF_NULL,
+                None,
+                other_frame,
+            )
+            .is_none(),
+            "a frame for another receiver must not publish even an unmarked send"
+        );
+        assert!(!gwe.has_pending_sent_message_for_thread(12));
+        assert_eq!(gwe.stats().send_transaction_count, 0);
+
+        let deferred_id = gwe
+            .queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(11),
+                hwnd,
+                Message::new(hwnd, WM_USER + 2, 0, 0, 0),
+                SMF_NULL,
+                None,
+                receiver_frame,
+            )
+            .expect("deferred send and frame published together");
+        let ordinary_id = gwe
+            .queue_send_message_for_window(
+                Some(14),
+                hwnd,
+                Message::new(hwnd, WM_USER + 3, 0, 0, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("ordinary send queued behind deferred send");
+        assert_eq!(deferred_id, 1, "failed publication must not consume an ID");
+        assert_eq!(ordinary_id, 2);
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, message, frame)| (id, message.msg, frame)),
+            Some((deferred_id, WM_USER + 2, Some(receiver_frame)))
+        );
+        assert_eq!(gwe.active_sent_message_id(12), None);
+        assert!(gwe.has_pending_sent_message_for_thread(12));
+
+        assert_eq!(
+            gwe.take_sent_message_filtered(12, None, 0, 0)
+                .map(|message| message.msg),
+            Some(WM_USER + 2),
+            "real message retrieval remains able to activate the queued send"
+        );
+        assert_eq!(gwe.active_sent_message_id(12), Some(deferred_id));
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, message, frame)| (id, message.msg, frame)),
+            Some((ordinary_id, WM_USER + 3, None))
+        );
+    }
+
+    #[test]
+    fn deferred_sleep_send_timeout_and_exact_birth_exit_leave_other_sends_untouched() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let old_handle = handles.create_thread(12, 0x401000, 0, false);
+        let old_birth = handles.thread_birth_key_for_handle(old_handle).unwrap();
+        let old_frame =
+            TaskFrameRef::new(handles.preflight_finite_sleep_frame(old_birth).unwrap(), 41)
+                .unwrap();
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(12, "target", "");
+        let old_id = gwe
+            .queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(11),
+                hwnd,
+                Message::new(hwnd, WM_USER + 4, 0, 0, 0),
+                SMF_NULL,
+                Some(10),
+                old_frame,
+            )
+            .unwrap();
+
+        assert!(handles.mark_thread_exited(old_handle, 0));
+        handles.close(old_handle).unwrap();
+        let new_handle = handles.create_thread(12, 0x402000, 0, false);
+        let new_birth = handles.thread_birth_key_for_handle(new_handle).unwrap();
+        let new_frame =
+            TaskFrameRef::new(handles.preflight_finite_sleep_frame(new_birth).unwrap(), 42)
+                .unwrap();
+        assert_ne!(old_birth, new_birth);
+        let new_id = gwe
+            .queue_send_message_for_window_deferred_by_finite_sleep(
+                Some(13),
+                hwnd,
+                Message::new(hwnd, WM_USER + 5, 0, 0, 0),
+                SMF_NULL,
+                None,
+                new_frame,
+            )
+            .unwrap();
+        let ordinary_id = gwe
+            .queue_send_message_for_window(
+                Some(14),
+                hwnd,
+                Message::new(hwnd, WM_USER + 6, 0, 0, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+
+        assert!(gwe.timeout_sent_message(old_id));
+        assert_eq!(gwe.take_completed_sent_message_result(old_id), Some(0));
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, _, frame)| (id, frame)),
+            Some((new_id, Some(new_frame))),
+            "timed-out send must leave the queue before a pre-run caller can see it"
+        );
+        assert!(
+            gwe.terminate_deferred_sent_messages_to_birth(old_birth)
+                .is_empty()
+        );
+        assert_eq!(
+            gwe.terminate_deferred_sent_messages_to_birth(new_birth),
+            vec![new_id]
+        );
+        assert_eq!(gwe.take_completed_sent_message_result(new_id), Some(0));
+        assert_eq!(
+            gwe.peek_sent_message_filtered_with_sleep_frame(12, None, 0, 0)
+                .map(|(id, _, frame)| (id, frame)),
+            Some((ordinary_id, None)),
+            "exact-birth retirement must preserve unmarked sends"
+        );
+        assert!(gwe.has_pending_sent_message_for_thread(12));
     }
 
     #[test]
