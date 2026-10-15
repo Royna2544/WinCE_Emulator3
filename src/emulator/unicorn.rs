@@ -79828,12 +79828,20 @@ mod unicorn_tests {
 
     // The ordinary one-way Send controls above do not cover a receiver that
     // sends back to its blocked sender before its own GetMessageW can return.
-    // Probe the next native lease for the inner receiver on S's saved stack
-    // without retiring either exact outer/inner Send wait early.
+    // Exercise the next-lease receiver handoff and unwind both exact Send
+    // waits on their own saved stacks without replaying either import.
     #[test]
-    #[ignore = "diagnostic: reciprocal native Send next-lease receiver handoff"]
     fn native_same_process_reciprocal_send_enters_blocked_sender_on_own_stack() -> crate::Result<()>
     {
+        reciprocal_send_fixture(false)
+    }
+
+    #[test]
+    fn native_same_process_reciprocal_send_rejects_wrong_parent_birth() -> crate::Result<()> {
+        reciprocal_send_fixture(true)
+    }
+
+    fn reciprocal_send_fixture(corrupt_parent_birth: bool) -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_GET_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 
@@ -79997,6 +80005,7 @@ mod unicorn_tests {
         sender_regs.regs[29] = sender_sp;
         sender_regs.hi = 0xa0a0_0022;
         sender_regs.lo = 0xa0a0_0033;
+        sender_regs.fprs[2] = 0x0000_0000_a0a0_0044;
         sender_regs.fcsr = 1;
         cpu.suspended_guest_thread = Some(super::SuspendedGuestThread {
             thread_id: sender_thread,
@@ -80058,10 +80067,12 @@ mod unicorn_tests {
             .expect("S real outer Send native wait");
         let outer_wait_id = outer.wait_id;
         let outer_return_pc = outer.return_pc;
+        let outer_return_ra = outer.regs.regs[31];
         assert_eq!(outer.regs.regs[29], sender_sp);
         assert_eq!(outer.regs.regs[16], 0xa0a0_0011);
         assert_eq!(outer.regs.hi, 0xa0a0_0022);
         assert_eq!(outer.regs.lo, 0xa0a0_0033);
+        assert_eq!(outer.regs.fprs[2], 0x0000_0000_a0a0_0044);
         assert_eq!(outer.regs.fcsr, 1);
         assert_eq!(outer.thread_handle, sender_handle);
         let outer_scheduler = kernel
@@ -80260,6 +80271,67 @@ mod unicorn_tests {
             inner_ids
         );
 
+        if corrupt_parent_birth {
+            let parent = cpu.pending_wndproc_returns[0]
+                .resume_import
+                .as_mut()
+                .expect("T exact outer GetMessage parent");
+            parent.thread_birth = sender_birth;
+            let rejected = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: Some(sender_wndproc),
+                    live_pump: true,
+                },
+            );
+            assert!(
+                matches!(&rejected.result, Err(Error::Backend(reason)) if reason.contains("blocked SendMessage wait")),
+                "wrong-parent-birth reciprocal handoff must fail before guest entry: {:?}; {:?}",
+                rejected.result,
+                rejected.report,
+            );
+            assert!(rejected.report.start_pc().is_none());
+            assert_eq!(cpu.saved_context_pc(), Some(send_trap));
+            assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
+            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]), outer_ids);
+            assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]), inner_ids);
+            assert_eq!(kernel.gwe.sent_message(outer_id).and_then(|send| send.result), None);
+            assert_eq!(kernel.gwe.sent_message(inner_id).and_then(|send| send.result), None);
+            assert_eq!(kernel.gwe.stats().send_transaction_count, 2);
+            assert_eq!(kernel.gwe.stats().send_transaction_completed_count, 0);
+            assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(outer_id));
+            assert_eq!(kernel.gwe.active_sent_message_id(sender_thread), None);
+            assert_eq!(cpu.pending_wndproc_returns.len(), 1);
+            assert!(cpu.pending_wndproc_returns[0].send_restore.is_none());
+            assert_eq!(
+                cpu.pending_wndproc_returns[0]
+                    .resume_import
+                    .as_ref()
+                    .map(|parent| parent.thread_birth),
+                Some(sender_birth)
+            );
+            assert_eq!(
+                cpu.blocked_wait_threads
+                    .iter()
+                    .filter(|wait| matches!(wait.kind, super::BlockedWaitKind::SendMessage { .. }))
+                    .map(|wait| wait.wait_id)
+                    .collect::<Vec<_>>(),
+                vec![outer_wait_id, inner_wait_id],
+            );
+            assert_eq!(
+                kernel.blocked_waiter(outer_wait_id).and_then(|wait| wait.owner_birth),
+                Some(sender_birth)
+            );
+            assert_eq!(
+                kernel.blocked_waiter(inner_wait_id).and_then(|wait| wait.owner_birth),
+                Some(receiver_birth)
+            );
+            return Ok(());
+        }
+
         let receiver_handoff = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
@@ -80315,6 +80387,7 @@ mod unicorn_tests {
         assert_eq!(sender_callback.regs[16], 0xa0a0_0011);
         assert_eq!(sender_callback.hi, 0xa0a0_0022);
         assert_eq!(sender_callback.lo, 0xa0a0_0033);
+        assert_eq!(sender_callback.fprs[2], 0x0000_0000_a0a0_0044);
         assert_eq!(sender_callback.fcsr, 1);
         assert_eq!(cpu.pending_wndproc_returns.len(), 2);
         let parent = &cpu.pending_wndproc_returns[0];
@@ -80464,9 +80537,11 @@ mod unicorn_tests {
         let sender_continuation = &cpu.saved_context.as_ref().expect("S outer Send return").regs;
         assert_eq!(sender_continuation.regs[2], 0x77);
         assert_eq!(sender_continuation.regs[29], sender_sp);
+        assert_eq!(sender_continuation.regs[31], outer_return_ra);
         assert_eq!(sender_continuation.regs[16], 0xa0a0_0011);
         assert_eq!(sender_continuation.hi, 0xa0a0_0022);
         assert_eq!(sender_continuation.lo, 0xa0a0_0033);
+        assert_eq!(sender_continuation.fprs[2], 0x0000_0000_a0a0_0044);
         assert_eq!(sender_continuation.fcsr, 1);
         assert!(kernel.blocked_waiter(outer_wait_id).is_none());
         assert!(cpu.blocked_wait_threads.iter().all(|wait| wait.wait_id != outer_wait_id));
