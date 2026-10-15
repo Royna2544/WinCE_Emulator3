@@ -348,18 +348,7 @@ function Get-InaviRunObservation(
     $backupManifest = Read-InaviJson $backupPath
     Assert-InaviBackupComplete $Manifest $backupManifest
     $sourceFiles = @{}
-    foreach ($relative in @(
-            'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
-            'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
-            'tests/basic_subsystems.rs', 'src/ce/memory.rs',
-            'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
-            'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
-            'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
-            'scripts/backup_rw_mounts_inventory_core.ps1',
-            'scripts/test_backup_rw_mounts_inventory.ps1',
-            'scripts/inavi_summary_observer_core.ps1',
-            'scripts/test_inavi_summary_observer.ps1',
-            'scripts/test_inavi_runner_guard.ps1')) {
+    foreach ($relative in (Get-InaviRequiredSourceFiles)) {
         $sourceFiles[$relative] = Get-Sha256 (Join-Path $Repository $relative)
     }
     $fileHashes = @{}
@@ -446,7 +435,8 @@ function New-InaviUseEvent(
     [string]$ManifestHash,
     [hashtable]$Manifest,
     [string]$State,
-    [AllowNull()][object]$App
+    [AllowNull()][object]$App,
+    [AllowNull()][object]$CapturedStartUtc = $null
 ) {
     $entry = @{
         eventId = [Guid]::NewGuid().ToString('D')
@@ -458,7 +448,12 @@ function New-InaviUseEvent(
     if ($State -eq 'spent') {
         if ($null -eq $App) { throw 'A spent entry requires the exact spawned process.' }
         $entry.pid = [int]$App.Id
-        $entry.processStartUtc = $App.StartTime.ToUniversalTime().ToString(
+        $startUtc = if ($null -ne $CapturedStartUtc) {
+            ([DateTime]$CapturedStartUtc).ToUniversalTime()
+        } else {
+            $App.StartTime.ToUniversalTime()
+        }
+        $entry.processStartUtc = $startUtc.ToString(
             'yyyy-MM-ddTHH:mm:ss.fffffffZ')
     }
     return $entry
@@ -595,10 +590,22 @@ function Assert-WorkerDirectory([string]$Directory) {
 function Assert-RemoteEndpointAvailable {
     # A stale emulator must not supply the observer's t0 or receive these POSTs.
     # CIM failure is not evidence of absence; it rejects the launch.
-    $other = @(Get-CimInstance -ClassName Win32_Process -Filter "Name LIKE 'wince_emulation_v3%'" -ErrorAction Stop)
+    $repository = 'D:\GitHub\Wince_emulation_v3'
+    $mountConfig = Join-Path $repository 'mounts.toml'
+    $other = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+        Where-Object {
+            $_.Name -like 'wince_emulation_v3*' -or
+            ($null -ne $_.ExecutablePath -and
+                [System.IO.Path]::GetFullPath([string]$_.ExecutablePath).StartsWith(
+                    ([System.IO.Path]::GetFullPath((Join-Path $repository 'evidence')) + '\'),
+                    [StringComparison]::OrdinalIgnoreCase)) -or
+            ($null -ne $_.CommandLine -and
+                [string]$_.CommandLine -like "*$mountConfig*")
+        })
     if ($other.Count -ne 0) {
-        throw "Another wince_emulation_v3 process is running (PID(s): $($other.ProcessId -join ', '))."
+        throw "Another emulator or process using this mount config is running (PID(s): $($other.ProcessId -join ', '))."
     }
+    # RULES.md requires this mounted-run endpoint absent a human override.
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('192.168.0.39'), 8765)
     try { $listener.Start() } finally { $listener.Stop() }
 }
@@ -791,6 +798,9 @@ function Invoke-Observer([string]$Directory) {
     $lastSummarySequence = $null
     $stoppedEarly = $false
     $launchTicks = $null
+    $observedTicks = $null
+    $firstCaptureTicks = $null
+    $coverageIncomplete = $false
     try {
         # Be ready before launch, but consume no capture slots until the exact
         # monitor-owned process descriptor exists. The heartbeat lets the
@@ -814,10 +824,16 @@ function Invoke-Observer([string]$Directory) {
                 [string]$descriptor.manifestSha256 -cne [string](Read-InaviJson (Join-Path $Directory 'run-claim.json')).manifestSha256) {
                 throw 'Observer received a mismatched process descriptor.'
             }
+            $observedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            $coverageIncomplete = (($observedTicks - $launchTicks) -lt 0 -or
+                ($observedTicks - $launchTicks) -gt (2L * $frequency))
             Write-AtomicJsonFile (Join-Path $Directory 'observer-launch.json') @{
-                launchTicks = $launchTicks; observedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+                launchTicks = $launchTicks; observedTicks = $observedTicks
                 observedUtc = [DateTime]::UtcNow.ToString('O')
+                launchToObserveMs = 1000.0 * ($observedTicks - $launchTicks) / $frequency
+                coverageIncomplete = $coverageIncomplete
             }
+            if ($coverageIncomplete) { throw 'Observer could not confirm first-two-second launch coverage.' }
         }
         while (-not $stoppedEarly -and
             ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -lt (420L * $frequency)) {
@@ -834,6 +850,13 @@ function Invoke-Observer([string]$Directory) {
                 continue
             }
             $nextSlot = $slot + 1
+            if ($null -eq $firstCaptureTicks) {
+                $firstCaptureTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+                if (($firstCaptureTicks - $launchTicks) -gt (2L * $frequency)) {
+                    $coverageIncomplete = $true
+                    throw 'Observer first capture started more than two seconds after launch.'
+                }
+            }
             $status = Invoke-GetCapture $client "$base/api/v1/status" 'status' $log $capture $slot $false
             if ($summarySamples -lt 256) {
                 $summary = Invoke-SummaryCapture $client "$base/api/v1/debug/summary.txt" $log $capture $slot $summaryBodiesSaved $lastSummarySequence
@@ -878,6 +901,8 @@ function Invoke-Observer([string]$Directory) {
         $client.Dispose()
         Write-JsonFile (Join-Path $Directory 'observer-result.json') @{
             readyTicks = $readyTicks; launchTicks = $launchTicks
+            observedTicks = $observedTicks; firstCaptureTicks = $firstCaptureTicks
+            coverageIncomplete = $coverageIncomplete
             endedUtc = [DateTime]::UtcNow.ToString('O')
             completedHorizon = ($null -ne $launchTicks -and
                 ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -ge (420L * $frequency))
@@ -899,6 +924,26 @@ function Get-MatchingProcess([int]$TargetProcessId, [long]$StartUtcTicks) {
     return $candidate
 }
 
+function Test-InaviMonitorHeartbeatFresh(
+    [string]$Directory,
+    [object]$Descriptor,
+    [long]$LaunchTicks
+) {
+    $now = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $path = Join-Path $Directory 'monitor-worker-heartbeat.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        return ($now - $LaunchTicks -ge 0 -and
+            $now - $LaunchTicks -le (5L * $frequency))
+    }
+    try {
+        $heartbeat = Read-InaviJson $path
+        $age = $now - [long]$heartbeat.ticks
+        return ($age -ge 0 -and $age -le (5L * $frequency) -and
+            [int]$heartbeat.processId -eq [int]$Descriptor.processId -and
+            [long]$heartbeat.startUtcTicks -eq [long]$Descriptor.startUtcTicks)
+    } catch { return $false }
+}
+
 function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
     $candidate = Get-MatchingProcess $TargetProcessId $StartUtcTicks
     if ($null -eq $candidate) { return }
@@ -906,6 +951,82 @@ function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
     if (-not $candidate.WaitForExit(10000)) {
         throw "Exact emulator PID $TargetProcessId did not terminate within 10 seconds."
     }
+}
+
+function Stop-InaviSpawnedFallback(
+    [string]$Directory,
+    [object]$MonitorProcess,
+    [string]$ExpectedManifestHash
+) {
+    $path = Join-Path $Directory 'spawned-process.json'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+    $spawned = Read-InaviJson $path
+    $monitorReady = Read-InaviJson (Join-Path $Directory 'monitor-worker-ready.json')
+    if ([string]$spawned.manifestSha256 -cne $ExpectedManifestHash -or
+        [int]$spawned.monitorPid -ne [int]$MonitorProcess.Id -or
+        [int]$monitorReady.monitorPid -ne [int]$MonitorProcess.Id -or
+        [long]$spawned.monitorStartUtcTicks -ne
+            [long]$monitorReady.monitorStartUtcTicks -or
+        [int]$spawned.processId -le 0 -or
+        [long]$spawned.startUtcTicks -le 0) {
+        throw 'Pre-spend spawned-process descriptor is not the exact monitor-owned app.'
+    }
+    Stop-ExactApp ([int]$spawned.processId) ([long]$spawned.startUtcTicks)
+    Write-JsonFile (Join-Path $Directory 'fallback-spawn-cleanup.json') @{
+        utc = [DateTime]::UtcNow.ToString('O')
+        processId = [int]$spawned.processId
+        startUtcTicks = [long]$spawned.startUtcTicks
+        reason = 'driver-no-active-descriptor'
+    }
+    return $true
+}
+
+function Stop-InaviUniqueLaunchFallback(
+    [string]$Directory,
+    [string]$ExecutablePath,
+    [string]$ManifestHash
+) {
+    # A monitor can die after Start-Process but before it writes any PID.
+    # Its command line already contains this run's unique framebuffer path.
+    # Identify that precise command line and executable, then guard the kill
+    # with the candidate's start time; never kill by process name alone.
+    $ppmPath = Join-Path $Directory 'terminal-frame.ppm'
+    $claim = Read-InaviJson (Join-Path $Directory 'run-claim.json')
+    if ([string]$claim.manifestSha256 -cne $ManifestHash -or
+        [string]::IsNullOrWhiteSpace([string]$claim.claimedUtc)) {
+        throw 'Unique-launch fallback lacks a matching run claim.'
+    }
+    $claimedUtc = [DateTimeOffset]::Parse([string]$claim.claimedUtc).UtcDateTime
+    $matches = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+        Where-Object {
+            $null -ne $_.CommandLine -and
+            [string]$_.CommandLine -like '*--framebuffer-dump*' -and
+            [string]$_.CommandLine -like "*$ppmPath*"
+        })
+    if ($matches.Count -gt 1) { throw 'Unique-run framebuffer path matched multiple processes.' }
+    if ($matches.Count -eq 0) { return $false }
+    $record = $matches[0]
+    if ([string]::IsNullOrWhiteSpace([string]$record.ExecutablePath) -or
+        -not (Test-InaviCoreSamePath ([string]$record.ExecutablePath) $ExecutablePath)) {
+        throw 'Unique-run command line belongs to a different executable.'
+    }
+    $candidate = Get-Process -Id ([int]$record.ProcessId) -ErrorAction Stop
+    $startUtc = $candidate.StartTime.ToUniversalTime()
+    if (-not (Test-InaviCoreSamePath ([string]$candidate.Path) $ExecutablePath) -or
+        $startUtc -lt $claimedUtc.AddSeconds(-2) -or
+        $startUtc -gt [DateTime]::UtcNow.AddSeconds(2)) {
+        throw 'Unique-run process path or start window is invalid.'
+    }
+    Stop-ExactApp ([int]$candidate.Id) ([long]$startUtc.Ticks)
+    Write-JsonFile (Join-Path $Directory 'fallback-unique-launch-cleanup.json') @{
+        utc = [DateTime]::UtcNow.ToString('O')
+        processId = [int]$candidate.Id
+        startUtcTicks = [long]$startUtc.Ticks
+        executablePath = $ExecutablePath
+        framebufferPath = $ppmPath
+        reason = 'monitor-died-before-process-descriptor'
+    }
+    return $true
 }
 
 function Assert-InaviWorkerClaim(
@@ -927,11 +1048,14 @@ function Assert-InaviWorkerClaim(
             [string]$item.manifestPath -cne $Path -or
             [string]$item.manifestSha256 -cne $Hash -or
             [string]$item.approvalReference -cne $Approval -or
+            [string]$item.approvalObservedUtc -cnotmatch
+                '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z$' -or
             [string]::IsNullOrWhiteSpace([string]$item.runTag)) {
             throw 'Detached monitor launch claim does not match the request.'
         }
     }
     if ([string]$Claim.runTag -cne [string]$Request.runTag -or
+        [string]$Claim.approvalObservedUtc -cne [string]$Request.approvalObservedUtc -or
         -not [System.IO.Path]::GetFullPath($Directory).Equals(
             [System.IO.Path]::GetFullPath((Join-Path 'D:\GitHub\Wince_emulation_v3\evidence' "live-$($Claim.runTag)")),
             [StringComparison]::OrdinalIgnoreCase)) {
@@ -958,10 +1082,55 @@ function Assert-InaviObserverLive([string]$Directory) {
     }
 }
 
+function Stop-InaviProcessObject([AllowNull()][object]$App) {
+    if ($null -eq $App) { return $false }
+    # This is the held Start-Process object/handle, not a PID-only reopen.
+    try { $App.Refresh() } catch { }
+    $exited = $false
+    try { $exited = [bool]$App.HasExited } catch { }
+    if (-not $exited) {
+        try { $App.Kill() } catch {
+            try { $exited = [bool]$App.HasExited } catch { }
+            if (-not $exited) { throw }
+        }
+    }
+    if (-not $App.WaitForExit(10000)) {
+        throw "Held spawned process object did not terminate within 10 seconds: $($App.Id)"
+    }
+    return $true
+}
+
+function Complete-InaviSpawnCommit(
+    [object]$App,
+    [scriptblock]$Commit,
+    [scriptblock]$RecordFailure
+) {
+    # Once Start-Process returns, every managed failure—including an
+    # immediate-exit StartTime error and a partial spent append—must close the
+    # held process object before propagating to the monitor's final inventory.
+    try {
+        $startUtc = $App.StartTime.ToUniversalTime()
+        if ($startUtc.Year -lt 2000) { throw 'Spawned process has an invalid start identity.' }
+        & $Commit $App $startUtc
+        return $startUtc.Ticks
+    } catch {
+        $failure = $_.Exception.Message
+        try { & $RecordFailure $failure $App } catch {
+            $failure = "$failure; failure-record write error: $($_.Exception.Message)"
+        }
+        try { [void](Stop-InaviProcessObject $App) } catch {
+            $failure = "$failure; exact-object cleanup error: $($_.Exception.Message)"
+        }
+        throw "Post-spawn commit failed: $failure"
+    }
+}
+
 function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
     Assert-WorkerDirectory $Directory
     $requestPath = Join-Path $Directory 'launch-request.json'
     $descriptorPath = Join-Path $Directory 'process.json'
+    $spawnedPath = Join-Path $Directory 'spawned-process.json'
+    $heartbeatPath = Join-Path $Directory 'monitor-worker-heartbeat.json'
     $readyPath = Join-Path $Directory 'monitor-worker-ready.json'
     $abortPath = Join-Path $Directory 'abort-request.json'
     $samples = Join-Path $Directory 'memory.jsonl'
@@ -1011,8 +1180,9 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
                 $ApprovalReference $repository
             $manifest = $checked.manifest
             if ([string]$manifest.runTag -cne [string]$claim.runTag -or
+                [string]$manifest.approvalObservedUtc -cne [string]$claim.approvalObservedUtc -or
                 $LimitMiB -ne [int]$manifest.caps.rssMiB) {
-                throw 'Detached monitor manifest tag or cap differs from its claim.'
+                throw 'Detached monitor manifest approval observation, tag or cap differs from its claim.'
             }
             $configuration = $manifest.config
             $arguments = @(
@@ -1036,23 +1206,49 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
                 -ArgumentList $arguments -WorkingDirectory $repository `
                 -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath `
                 -RedirectStandardError $stderrPath
-            $spent = New-InaviUseEvent ([string]$manifest.runTag) `
-                $ManifestSha256 $manifest 'spent' $app
-            Add-InaviDualLedgerEntry $checked.ledgers $spent
+            $appStartUtcTicks = Complete-InaviSpawnCommit $app {
+                param($spawnedApp, $startUtc)
+                $identity = @{
+                    processId = [int]$spawnedApp.Id
+                    startUtcTicks = $startUtc.Ticks
+                    launchTicks = $launchTicks
+                    launchedUtc = $startUtc.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
+                    executableSha256 = [string]$manifest.executable.sha256
+                    manifestSha256 = $ManifestSha256
+                    approvalReference = $ApprovalReference
+                    monitorPid = $PID
+                    monitorStartUtcTicks = $self.StartTime.ToUniversalTime().Ticks
+                }
+                Write-AtomicJsonFile $spawnedPath ($identity + @{ state = 'spawned-before-spend' })
+                $spent = New-InaviUseEvent ([string]$manifest.runTag) `
+                    $ManifestSha256 $manifest 'spent' $spawnedApp $startUtc
+                Add-InaviDualLedgerEntry $checked.ledgers $spent
+                Write-AtomicJsonFile $descriptorPath ($identity + @{ state = 'active-spent' })
+            } {
+                param($failure, $spawnedApp)
+                Write-JsonFile (Join-Path $Directory 'post-spawn-failure.json') @{
+                    utc = [DateTime]::UtcNow.ToString('O')
+                    error = $failure; processId = [int]$spawnedApp.Id
+                    spentConfirmed = $false
+                }
+            }
         } finally {
-            $ledgerLock.Dispose()
+            if ($null -ne $ledgerLock) { $ledgerLock.Dispose() }
         }
-        Write-AtomicJsonFile $descriptorPath @{
-            processId = $app.Id; startUtcTicks = $app.StartTime.ToUniversalTime().Ticks
-            launchTicks = $launchTicks; launchedUtc = [DateTime]::UtcNow.ToString('O')
-            executableSha256 = [string]$manifest.executable.sha256
-            manifestSha256 = $ManifestSha256; approvalReference = $ApprovalReference
-        }
+        $nextSample = $launchTicks
+        $nextHeartbeat = $launchTicks
         $reason = 'normal-exit'
         while ($true) {
             $app.Refresh()
             if ($app.HasExited) { break }
             $nowTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            if ($nowTicks -ge $nextHeartbeat) {
+                Write-ReplacingJsonFile $heartbeatPath @{
+                    utc = [DateTime]::UtcNow.ToString('O'); ticks = $nowTicks
+                    processId = $app.Id; startUtcTicks = $appStartUtcTicks
+                }
+                $nextHeartbeat = $nowTicks + $frequency
+            }
             if (Test-Path -LiteralPath $abortPath) {
                 $reason = 'driver-abort-request'; $fired = $true
                 $app.Kill()
@@ -1071,13 +1267,15 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
                     $app.Kill()
                     break
                 }
+                $rawLogBytes = 0L
                 foreach ($streamPath in @($stdoutPath, $stderrPath)) {
-                    if ((Test-Path -LiteralPath $streamPath -PathType Leaf) -and
-                        (Get-Item -LiteralPath $streamPath).Length -gt 512MB) {
-                        $reason = 'raw-log-limit'; $fired = $true
-                        $app.Kill()
-                        break
+                    if (Test-Path -LiteralPath $streamPath -PathType Leaf) {
+                        $rawLogBytes += (Get-Item -LiteralPath $streamPath).Length
                     }
+                }
+                if ($rawLogBytes -gt 512MB) {
+                    $reason = 'combined-raw-log-limit'; $fired = $true
+                    $app.Kill()
                 }
                 if ($fired) { break }
             }
@@ -1093,12 +1291,34 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
         $reason = 'monitor-error'; $fired = $true
     } finally {
         if ($null -ne $app) {
-            $app.Refresh()
-            if (-not $app.HasExited) {
-                try { $app.Kill() } catch { $monitorError = "kill failed: $($_.Exception.Message); $monitorError" }
+            try {
+                $terminationConfirmed = Stop-InaviProcessObject $app
+            } catch {
+                $monitorError = "exact-object termination failed: $($_.Exception.Message); $monitorError"
+                $reason = 'monitor-error'; $fired = $true
             }
-            $terminationConfirmed = $app.WaitForExit(10000)
-            if ($terminationConfirmed) { $appExitCode = $app.ExitCode }
+            if ($terminationConfirmed) {
+                try { $appExitCode = $app.ExitCode } catch {
+                    $monitorError = "exit-code read failed: $($_.Exception.Message); $monitorError"
+                    $reason = 'monitor-error'; $fired = $true
+                }
+            }
+        }
+        $postInventoryError = $null
+        $postInventoryCount = $null
+        $postInventoryChanges = $null
+        if ($null -ne $app -and $null -ne $checked) {
+            try {
+                $postInventoryPath = Join-Path $Directory 'monitor-mounted-after.jsonl'
+                $postInventoryCount = Write-MountedInventory $checked.observed.backups $postInventoryPath
+                $postInventoryChanges = Compare-MountedInventories `
+                    (Join-Path $Directory 'mounted-before.jsonl') $postInventoryPath `
+                    (Join-Path $Directory 'monitor-mounted-changes.jsonl')
+            } catch {
+                $postInventoryError = $_.Exception.Message
+                $monitorError = "monitor post-run mount inventory failed: $postInventoryError; $monitorError"
+                $reason = 'monitor-error'; $fired = $true
+            }
         }
         $endedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
         Write-JsonFile $resultPath @{
@@ -1108,6 +1328,9 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
             fired = $fired; reason = $reason; rssLimitMiB = $LimitMiB
             appExitCode = $appExitCode; terminationConfirmed = $terminationConfirmed
             error = $monitorError; stdout = $stdoutPath; stderr = $stderrPath; terminalPpm = $ppmPath
+            postInventoryCount = $postInventoryCount
+            postInventoryChanges = $postInventoryChanges
+            postInventoryError = $postInventoryError
         }
     }
     if ($null -ne $monitorError -or -not $terminationConfirmed) { throw "Monitor failed to confirm app termination: $monitorError" }
@@ -1189,6 +1412,7 @@ Write-AtomicJsonFile (Join-Path $runDirectory 'run-claim.json') @{
     runTag = $tag; launchNonce = $launchNonce
     manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
     approvalReference = $ApprovalReference
+    approvalObservedUtc = [string]$manifest.approvalObservedUtc
     claimedUtc = [DateTime]::UtcNow.ToString('O')
 }
 $previousDirectory = Get-Location
@@ -1200,6 +1424,8 @@ try {
         runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O')
         manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
         approvalReference = $ApprovalReference
+        approvalObservedUtc = [string]$manifest.approvalObservedUtc
+        approvalProvenance = 'Manifest-supplied human one-run approval observation; the runner checks freshness but cannot authenticate the conversation.'
         executable = $manifest.executable; pdb = $manifest.pdb
         backupManifest = $manifest.backupManifest; backups = $manifest.backups
         originalWritableMounts = $true; logFilter = $env:RUST_LOG
@@ -1249,6 +1475,7 @@ try {
         runTag = $tag; launchNonce = $launchNonce
         manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
         approvalReference = $ApprovalReference
+        approvalObservedUtc = [string]$manifest.approvalObservedUtc
     }
     $launchWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
     while (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'process.json'))) {
@@ -1274,6 +1501,9 @@ try {
     while ($null -ne (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {
         if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited) {
             $endedByScript = 'required-worker-failed'; break
+        }
+        if (-not (Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks)) {
+            $endedByScript = 'monitor-heartbeat-stale'; break
         }
         if ($null -eq $ready -and (Test-Path -LiteralPath (Join-Path $runDirectory 'input-ready.json'))) {
             try { $ready = Get-Content -LiteralPath (Join-Path $runDirectory 'input-ready.json') -Raw | ConvertFrom-Json } catch { }
@@ -1307,9 +1537,9 @@ try {
         Write-AtomicJsonFile (Join-Path $runDirectory 'abort-request.json') @{
             utc = [DateTime]::UtcNow.ToString('O'); reason = $endedByScript
         }
-        if ($monitorProcess.HasExited) {
-            # A dead monitor cannot honor the abort request. The driver is
-            # still alive here, so terminate only the verified app identity.
+        if ($monitorProcess.HasExited -or $endedByScript -eq 'monitor-heartbeat-stale') {
+            # A dead or stalled monitor cannot be trusted to honor the abort
+            # request. The driver terminates only the verified app identity.
             Stop-ExactApp ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks)
         }
     }
@@ -1374,6 +1604,7 @@ try {
     $earlyFailure = ($earlyFailure -or $guestCpuExceptionText -or $zeroPcText -or
         -not $ppmProduced -or -not $observerResultPresent -or
         $observerJob.State -ne 'Completed' -or -not $observerResult.completedHorizon -or
+        $observerResult.coverageIncomplete -or
         $null -ne $inventoryError)
     Write-JsonFile (Join-Path $runDirectory 'result.json') @{
         endedUtc = [DateTime]::UtcNow.ToString('O'); processId = $appDescriptor.processId; exitCode = $exitCode
@@ -1403,6 +1634,47 @@ try {
     throw
 } finally {
     if ($null -ne $client) { $client.Dispose() }
+    if ($null -eq $appDescriptor -and $null -ne $monitorProcess -and
+        $monitorProcess.HasExited) {
+        try {
+            $spawnedDescriptorError = $null
+            try {
+                $fallbackNeeded = Stop-InaviSpawnedFallback $runDirectory $monitorProcess $ManifestSha256
+            } catch {
+                $spawnedDescriptorError = $_.Exception.Message
+                $fallbackNeeded = $false
+            }
+            if (-not $fallbackNeeded) {
+                $fallbackNeeded = Stop-InaviUniqueLaunchFallback $runDirectory `
+                    ([string]$manifest.executable.path) $ManifestSha256
+            }
+            if ($null -ne $spawnedDescriptorError) {
+                Write-JsonFile (Join-Path $runDirectory 'fallback-descriptor-error.json') @{
+                    utc = [DateTime]::UtcNow.ToString('O')
+                    error = $spawnedDescriptorError
+                    uniqueLaunchFallbackFound = $fallbackNeeded
+                }
+            }
+            if ($fallbackNeeded) {
+                $fallbackAfterPath = Join-Path $runDirectory 'fallback-mounted-after.jsonl'
+                $fallbackAfterCount = Write-MountedInventory $backups $fallbackAfterPath
+                $fallbackChanges = Compare-MountedInventories `
+                    (Join-Path $runDirectory 'mounted-before.jsonl') $fallbackAfterPath `
+                    (Join-Path $runDirectory 'fallback-mounted-changes.jsonl')
+                Write-JsonFile (Join-Path $runDirectory 'fallback-mounted-inventory.json') @{
+                    utc = [DateTime]::UtcNow.ToString('O')
+                    afterEntries = $fallbackAfterCount; changedEntries = $fallbackChanges
+                }
+            }
+        } catch {
+            $exitStatus = 1
+            Write-JsonFile (Join-Path $runDirectory 'cleanup-error.json') @{
+                utc = [DateTime]::UtcNow.ToString('O')
+                error = $_.Exception.Message
+                phase = 'missing-active-descriptor-fallback'
+            }
+        }
+    }
     if ($null -ne $appDescriptor) {
         try {
             if ($null -ne (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {

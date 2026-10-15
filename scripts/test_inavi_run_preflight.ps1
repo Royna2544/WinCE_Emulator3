@@ -36,12 +36,14 @@ function New-SyntheticHash([string]$Label) {
 function New-Baseline {
     $root = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only'
     $sourceRoot = 'D:\GitHub\Wince_emulation_v3'
+    $backupTag = '20261015T020000Z'
     $sourceFiles = @{}
     foreach ($relative in @(
         'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
         'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
         'tests/basic_subsystems.rs', 'src/ce/memory.rs',
         'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
+        '.gitattributes',
         'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
         'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
         'scripts/backup_rw_mounts_inventory_core.ps1',
@@ -74,9 +76,9 @@ function New-Baseline {
     }
     $roots = @("$root\SD", "$root\ResidentFlash", "$root\EmulatorRoot")
     $backups = @(
-        @{ name = 'SD'; sourceRoot = $roots[0]; archivePath = "$root\SD.zip"; archiveSha256 = $hash.sd },
-        @{ name = 'ResidentFlash'; sourceRoot = $roots[1]; archivePath = "$root\ResidentFlash.zip"; archiveSha256 = $hash.resident },
-        @{ name = 'EmulatorRoot'; sourceRoot = $roots[2]; archivePath = "$root\EmulatorRoot.zip"; archiveSha256 = $hash.emulator }
+        @{ name = 'SD'; sourceRoot = $roots[0]; archivePath = "$root\INAVI-pre-live-$backupTag.zip"; archiveSha256 = $hash.sd },
+        @{ name = 'ResidentFlash'; sourceRoot = $roots[1]; archivePath = "$root\ResidentFlash-pre-live-$backupTag.zip"; archiveSha256 = $hash.resident },
+        @{ name = 'EmulatorRoot'; sourceRoot = $roots[2]; archivePath = "$root\EmulatorRoot-pre-live-$backupTag.zip"; archiveSha256 = $hash.emulator }
     )
     $seal = @{
         head = '9C302DB35583669FAB435449A5F4515B712583D6'
@@ -103,6 +105,7 @@ function New-Baseline {
     $manifest = @{
         schemaVersion = 1; runTag = 'offline-fixture-fresh'
         approvalReference = 'call_offline_fresh_approval'
+        approvalObservedUtc = '2026-10-15T01:59:00.0000000Z'
         sourceSeal = $seal
         sourceSealFile = @{ path = $paths.seal; sha256 = $hash.seal }
         buildReceipt = $receipt
@@ -144,7 +147,13 @@ function New-Baseline {
         executableRsds = $manifest.executable.rsds
         pdbRsds = $manifest.pdb.rsds
         writableMountRoots = $roots
-        verifiedBackupManifest = @{ sha256 = $hash.backupManifest; complete = $true; completed = $completed }
+        verifiedBackupManifest = @{
+            sha256 = $hash.backupManifest; complete = $true; completed = $completed
+            schemaVersion = 2; tag = $backupTag
+            startedUtc = '2026-10-15T02:00:00.0000000Z'
+            updatedUtc = '2026-10-15T02:10:00.0000000Z'
+            scriptSha256 = $sourceFiles['scripts/backup_rw_mounts.ps1']
+        }
         existingEvidenceTags = @()
     }
     return @{ manifest = $manifest; observed = $observed; localLedger = @(); trackedLedger = @() }
@@ -166,6 +175,14 @@ function New-UseEntry([string]$Approval, [string]$State, [string[]]$ZipHashes) {
         $entry.pid = [long]4242
         $entry.processStartUtc = '2026-10-15T00:00:01.0000000Z'
     }
+    return $entry
+}
+
+function New-LegacyDenyEntry([string[]]$ZipHashes) {
+    $entry = New-UseEntry 'legacy-fixture-only' 'legacy-deny' $ZipHashes
+    $entry.approvalReference = $null
+    $entry.provenance = 'evidence\e22-live-20261013T154435Z\manifest.json'
+    $entry.reason = 'Historical writable-mount launch; approval identifier not recorded.'
     return $entry
 }
 
@@ -211,6 +228,92 @@ $entry = New-UseEntry $sample.manifest.approvalReference 'reserved' @((New-Synth
 $sample.localLedger = @($entry)
 $sample.trackedLedger = @(Copy-Fixture $entry)
 $cases.Add(@{ name = 'interrupted_reservation'; data = $sample; accepted = $false; code = 'APPROVAL_RESERVED' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'unrelated_unresolved_reservation'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$spent = New-UseEntry 'call_other_offline_approval' 'spent' @($reserved.zipSha256)
+$sample.localLedger = @($reserved, $spent)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reservation_followed_by_matching_spent'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$spent = New-UseEntry 'call_other_offline_approval' 'spent' @($reserved.zipSha256)
+$spent.attemptId = 'offline-attempt-other-not-matching'
+$sample.localLedger = @($reserved, $spent)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reservation_followed_by_mismatched_spent'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$spent = New-UseEntry 'call_other_offline_approval' 'spent' @($reserved.zipSha256)
+$sample.localLedger = @($spent, $reserved)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'spent_before_reservation_does_not_resolve'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-UseEntry 'call_other_offline_approval' 'reconciled' @($reserved.zipSha256)
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciled_without_process_identity_does_not_resolve'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
+
+$sample = Copy-Fixture $base
+$legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'), (New-SyntheticHash 'old ResidentFlash archive'), (New-SyntheticHash 'old EmulatorRoot archive'))
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_with_unknown_approval_and_unrelated_zips'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$oldZip = New-SyntheticHash 'old SD archive'
+$sample.manifest.backups[0].archiveSha256 = $oldZip
+$sample.observed.verifiedBackupManifest.completed[0].archiveSha256 = $oldZip
+$sample.observed.fileSha256[$sample.manifest.backups[0].archivePath] = $oldZip
+$legacy = New-LegacyDenyEntry @($oldZip, (New-SyntheticHash 'old ResidentFlash archive'), (New-SyntheticHash 'old EmulatorRoot archive'))
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_blocks_prior_zip'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
+
+$sample = Copy-Fixture $base
+$legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'))
+$legacy.Remove('approvalReference')
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_missing_approval_field'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'))
+$legacy.approvalReference = 'call_fabricated_legacy_approval'
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_fake_approval_rejected'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'))
+$legacy.Remove('provenance')
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_without_provenance_rejected'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'))
+$legacy.Remove('reason')
+$sample.localLedger = @($legacy)
+$sample.trackedLedger = @(Copy-Fixture $legacy)
+$cases.Add(@{ name = 'legacy_deny_without_reason_rejected'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$entry.approvalReference = $null
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'reservation_with_unknown_approval_rejected'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
 
 $sample = Copy-Fixture $base
 $entry = New-UseEntry 'call_other_offline_approval' 'spent' @($sample.manifest.backups[0].archiveSha256)
@@ -307,6 +410,23 @@ $sample.observed.verifiedBackupManifest.completed[1].postBackupInventoryVerified
 $cases.Add(@{ name = 'backup_post_inventory_not_verified'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
 
 $sample = Copy-Fixture $base
+$sample.observed.verifiedBackupManifest.schemaVersion = 1
+$cases.Add(@{ name = 'legacy_backup_schema'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.verifiedBackupManifest.startedUtc = '2026-10-15T01:58:00.0000000Z'
+$sample.observed.verifiedBackupManifest.tag = '20261015T015800Z'
+$cases.Add(@{ name = 'backup_started_before_approval'; data = $sample; accepted = $false; code = 'BACKUP_NOT_FRESH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.verifiedBackupManifest.scriptSha256 = New-SyntheticHash 'other backup script'
+$cases.Add(@{ name = 'backup_script_not_sealed'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.approvalObservedUtc = '2026-10-15T02:01:00.0000000Z'
+$cases.Add(@{ name = 'approval_observed_after_backup_start'; data = $sample; accepted = $false; code = 'BACKUP_NOT_FRESH' })
+
+$sample = Copy-Fixture $base
 $entry = New-UseEntry 'call_unrelated_offline_approval' 'unknown' @((New-SyntheticHash 'unrelated archive'))
 $sample.localLedger = @($entry)
 $sample.trackedLedger = @(Copy-Fixture $entry)
@@ -397,7 +517,7 @@ $sample.observed.fileSha256.Remove($oldPath)
 $sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
 $cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
 
-if ($cases.Count -ne 43) { throw "Unexpected fixture count: $($cases.Count)" }
+if ($cases.Count -ne 59) { throw "Unexpected fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress

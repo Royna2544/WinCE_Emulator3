@@ -10,6 +10,8 @@ until the final content-hash comparison completes.
 [CmdletBinding()]
 param()
 
+$backupStarted = [DateTime]::UtcNow
+$backupStartedUtc = $backupStarted.ToString('O')
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -23,7 +25,7 @@ $mounts = @(
     @{ Name = 'ResidentFlash'; ArchiveStem = 'ResidentFlash'; Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Parent = 'D:\INAVI_Emulator\DUMPPLZ' },
     @{ Name = 'EmulatorRoot'; ArchiveStem = 'EmulatorRoot'; Source = 'D:\INAVI_Emulator\EmulatorRoot'; Parent = 'D:\INAVI_Emulator' }
 )
-$tag = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+$tag = $backupStarted.ToString('yyyyMMddTHHmmssZ')
 $evidence = Join-Path $repository "evidence\pre-live-mount-backup-$tag"
 if (Test-Path -LiteralPath $evidence) { throw "Evidence directory already exists: $evidence" }
 [void][System.IO.Directory]::CreateDirectory($evidence)
@@ -59,6 +61,7 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
 $manifestState = @{
     schemaVersion = 2
     tag = $tag
+    startedUtc = $backupStartedUtc
     updatedUtc = [DateTime]::UtcNow.ToString('O')
     repository = $repository
     scriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToUpperInvariant()
@@ -67,6 +70,7 @@ $manifestState = @{
 }
 
 function Publish-Manifest {
+    Assert-BackupStartedUtcContract -Manifest $manifestState -ExpectedStartedUtc $backupStartedUtc
     $manifestState.updatedUtc = [DateTime]::UtcNow.ToString('O')
     $manifestState.completed = $completed.ToArray()
     Write-JsonAtomic $manifestPath $manifestState

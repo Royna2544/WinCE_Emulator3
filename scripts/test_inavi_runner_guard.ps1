@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
-Offline guards for the effectful iNavi runner. Parse and define only two pure
-functions from the runner; never dot-source it. No emulator, mounts, backup,
+Offline guards for the effectful iNavi runner. Parse and define selected
+in-memory functions from the runner; never dot-source it. No emulator, mounts, backup,
 ledger or worker process is opened by this test.
 #>
 [CmdletBinding()]
@@ -19,7 +19,8 @@ $definitions = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $true))
 foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
-        'Get-InaviPdbRsds')) {
+        'Get-InaviPdbRsds', 'Stop-InaviProcessObject',
+        'Complete-InaviSpawnCommit')) {
     $definition = @($definitions | Where-Object Name -eq $name)
     if ($definition.Count -ne 1) { throw "Expected one pure runner function: $name" }
     . ([scriptblock]::Create($definition[0].Extent.Text))
@@ -45,6 +46,7 @@ $claim = @{
     runTag = 'fresh-run'; launchNonce = $nonce
     manifestPath = $manifestPath; manifestSha256 = $hash
     approvalReference = $approval
+    approvalObservedUtc = '2026-10-15T00:00:00Z'
 }
 $request = $claim.Clone()
 Assert-InaviWorkerClaim $claim $request $directory $manifestPath $hash $approval $nonce
@@ -53,6 +55,8 @@ $wrong = $request.Clone(); $wrong.launchNonce = 'C' * 32
 Assert-Reject { Assert-InaviWorkerClaim $claim $wrong $directory $manifestPath $hash $approval $nonce } 'nonce mismatch rejects'
 Assert-Reject { Assert-InaviWorkerClaim $claim $request 'D:\GitHub\Wince_emulation_v3\evidence\live-other' $manifestPath $hash $approval $nonce } 'run-directory mismatch rejects'
 Assert-Reject { Assert-InaviWorkerClaim $claim $request $directory $manifestPath $hash 'old-approval' $nonce } 'approval mismatch rejects'
+$wrong = $request.Clone(); $wrong.approvalObservedUtc = '2026-10-14T00:00:00Z'
+Assert-Reject { Assert-InaviWorkerClaim $claim $wrong $directory $manifestPath $hash $approval $nonce } 'approval observation mismatch rejects'
 
 $manifest = @{ approvalReference = $approval; backups = @(
         @{ archiveSha256 = '1' * 64 }, @{ archiveSha256 = '2' * 64 },
@@ -68,6 +72,56 @@ $spent = New-InaviUseEvent 'fresh-run' $hash $manifest 'spent' $fakeProcess
 Assert-Guard ($spent.state -eq 'spent' -and $spent.pid -eq 1234 -and
     $spent.processStartUtc -match '^\d{4}-\d{2}-\d{2}T') 'spent entry records exact process identity'
 Assert-Reject { New-InaviUseEvent 'fresh-run' $hash $manifest 'spent' $null } 'spent without process rejects'
+
+# Inject a failed spent append after a synthetic spawn. The post-spawn commit
+# wrapper must close the held process object, not reopen a PID or skip cleanup.
+$faulted = [pscustomobject]@{
+    Id = 7654; HasExited = $false; KillCount = 0; WaitCount = 0
+    StartTime = [DateTime]::UtcNow
+}
+$faulted | Add-Member ScriptMethod Refresh { }
+$faulted | Add-Member ScriptMethod Kill {
+    $this.KillCount++; $this.HasExited = $true
+}
+$faulted | Add-Member ScriptMethod WaitForExit {
+    param($milliseconds)
+    $this.WaitCount++; return $this.HasExited
+}
+$script:recordedPostSpawnFailure = $null
+Assert-Reject {
+    Complete-InaviSpawnCommit $faulted {
+        param($spawnedApp, $startUtc)
+        throw 'synthetic spent-append failure'
+    } {
+        param($failure, $spawnedApp)
+        $script:recordedPostSpawnFailure = $failure
+    }
+} 'spent-append failure rejects after synthetic spawn'
+Assert-Guard ($faulted.KillCount -eq 1 -and $faulted.WaitCount -eq 1 -and
+    $faulted.HasExited -and
+    $script:recordedPostSpawnFailure -like '*synthetic spent-append failure*') `
+    'spent-append failure records and closes held process object'
+
+# An immediate exit can make Process.StartTime unreadable. It must still
+# produce failure evidence, without killing a recycled PID.
+$immediate = [pscustomobject]@{ Id = 7655; HasExited = $true; KillCount = 0; WaitCount = 0 }
+$immediate | Add-Member ScriptProperty StartTime { throw 'synthetic immediate-exit StartTime failure' }
+$immediate | Add-Member ScriptMethod Refresh { }
+$immediate | Add-Member ScriptMethod Kill { $this.KillCount++ }
+$immediate | Add-Member ScriptMethod WaitForExit {
+    param($milliseconds)
+    $this.WaitCount++; return $true
+}
+$script:recordedImmediateFailure = $null
+Assert-Reject {
+    Complete-InaviSpawnCommit $immediate { throw 'commit must not run' } {
+        param($failure, $spawnedApp)
+        $script:recordedImmediateFailure = $failure
+    }
+} 'immediate exit rejects without readable StartTime'
+Assert-Guard ($immediate.KillCount -eq 0 -and $immediate.WaitCount -eq 1 -and
+    -not [string]::IsNullOrWhiteSpace($script:recordedImmediateFailure)) `
+    'immediate exit records failure without PID-only kill'
 
 # A four-block in-memory MSF7 fixture is written only to one random temp file
 # because the production parser accepts an exact PDB path. It is removed in
@@ -118,22 +172,29 @@ Assert-Guard ($source.Contains('Assert-InaviBackupComplete') -and
     $source.Contains('Assert-SlowBootMarkers')) 'worker retains backup, mount and marker gates'
 Assert-Guard ($source.Contains("phase = 'prelaunch'") -and
     $source.Contains('launchRelativeHorizonSeconds = 420') -and
-    $source.Contains('observer-worker-heartbeat.json')) 'observer capture begins at launch with prelaunch heartbeat'
+    $source.Contains('observer-worker-heartbeat.json') -and
+    $source.Contains('coverageIncomplete = $coverageIncomplete')) 'observer has launch-relative horizon and coverage classification'
+Assert-Guard ($source.Contains('Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks') -and
+    $source.Contains('Stop-InaviSpawnedFallback $runDirectory $monitorProcess $ManifestSha256') -and
+    $source.Contains('Stop-InaviUniqueLaunchFallback $runDirectory')) 'driver checks heartbeat and pre-descriptor exact fallback'
+Assert-Guard ($source.Contains('$rawLogBytes += (Get-Item -LiteralPath $streamPath).Length') -and
+    $source.Contains('if ($rawLogBytes -gt 512MB)')) 'monitor caps combined raw-log bytes'
 $coreSource = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'inavi_run_preflight_core.ps1'))
-$runnerList = [regex]::Match($source,
-    'foreach \(\$relative in @\((?<rows>.*?)\)\) \{',
-    [System.Text.RegularExpressions.RegexOptions]::Singleline)
-$coreList = [regex]::Match($coreSource,
-    '\$requiredSourceFiles = @\((?<rows>.*?)\)\s*if',
-    [System.Text.RegularExpressions.RegexOptions]::Singleline)
-if (-not $runnerList.Success -or -not $coreList.Success) {
-    throw 'Offline runner guard could not locate the two source-file lists.'
+$coreTokens = $null; $coreErrors = $null
+$coreAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $coreSource, [ref]$coreTokens, [ref]$coreErrors)
+$coreFunctions = @($coreAst.FindAll({ param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq 'Get-InaviRequiredSourceFiles'
+}, $true))
+if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 1) {
+    throw 'Offline runner guard could not load the shared source-file list.'
 }
-$runnerPaths = @([regex]::Matches($runnerList.Groups['rows'].Value, "'([^']+)' ") |
-    ForEach-Object { $_.Groups[1].Value })
-$corePaths = @([regex]::Matches($coreList.Groups['rows'].Value, "'([^']+)' ") |
-    ForEach-Object { $_.Groups[1].Value })
-Assert-Guard ($runnerPaths.Count -eq 20 -and $corePaths.Count -eq 20 -and
-    (($runnerPaths -join '|') -ceq ($corePaths -join '|'))) 'worker and pure-core source lists match exactly'
+. ([scriptblock]::Create($coreFunctions[0].Extent.Text))
+$requiredFiles = @(Get-InaviRequiredSourceFiles)
+Assert-Guard ($source.Contains('foreach ($relative in (Get-InaviRequiredSourceFiles))') -and
+    $coreSource.Contains('$requiredSourceFiles = @(Get-InaviRequiredSourceFiles)') -and
+    $requiredFiles.Count -eq 21 -and '.gitattributes' -in $requiredFiles -and
+    'scripts/test_inavi_runner_guard.ps1' -in $requiredFiles) 'worker and validator use one 21-file source map'
 
 Write-Output "Offline runner guards: $passed passed, 0 failed."

@@ -1,5 +1,28 @@
 # Pure comparison used by the writable-mount backup script and offline tests.
 # A matching size/mtime is insufficient: compare the final content hash too.
+function Assert-BackupStartedUtcContract {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [hashtable]$Manifest,
+        [Parameter(Mandatory)] [string]$ExpectedStartedUtc
+    )
+
+    if (-not $Manifest.ContainsKey('startedUtc') -or
+        [string]$Manifest.startedUtc -cne $ExpectedStartedUtc) {
+        throw 'Backup startedUtc is missing or changed during publication'
+    }
+    if ($ExpectedStartedUtc -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$') {
+        throw 'Backup startedUtc must be an exact UTC round-trip timestamp'
+    }
+    $parsed = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParseExact(
+        $ExpectedStartedUtc, 'O', [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed
+    )) {
+        throw 'Backup startedUtc is not a valid UTC timestamp'
+    }
+}
+
 function Assert-BackupInventoryMatch {
     [CmdletBinding()]
     param(

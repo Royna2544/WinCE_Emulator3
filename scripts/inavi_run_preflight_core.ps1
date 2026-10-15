@@ -28,6 +28,23 @@ function Test-InaviCoreCommit([object]$Value) {
         $Value -cnotmatch '^([0-9A-Fa-f])\1{39}$'
 }
 
+function ConvertTo-InaviCoreUtc([object]$Value) {
+    if ($Value -isnot [string] -or
+        $Value -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?Z$') {
+        return $null
+    }
+    [DateTimeOffset]$parsed = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse(
+            $Value,
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AssumeUniversal,
+            [ref]$parsed
+        )) {
+        return $null
+    }
+    return $parsed.ToUniversalTime()
+}
+
 function Test-InaviCoreInteger([object]$Value) {
     return $Value -is [int] -or $Value -is [long]
 }
@@ -45,6 +62,25 @@ function Test-InaviCoreSamePath([object]$Left, [object]$Right) {
     return [string]::Equals(
         ([string]$Left).TrimEnd('\'), ([string]$Right).TrimEnd('\'),
         [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-InaviRequiredSourceFiles {
+    # One pure list for the validator and the effectful worker's independent
+    # file-hash collector. Add a file here before sealing a new run build.
+    return @(
+        'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
+        'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
+        'tests/basic_subsystems.rs', 'src/ce/memory.rs',
+        'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
+        '.gitattributes',
+        'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
+        'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
+        'scripts/backup_rw_mounts_inventory_core.ps1',
+        'scripts/test_backup_rw_mounts_inventory.ps1',
+        'scripts/inavi_summary_observer_core.ps1',
+        'scripts/test_inavi_summary_observer.ps1',
+        'scripts/test_inavi_runner_guard.ps1'
+    )
 }
 
 function Add-InaviCoreCode([System.Collections.Generic.List[string]]$Codes, [string]$Code) {
@@ -91,6 +127,17 @@ function Test-InaviCoreEqual([object]$Left, [object]$Right) {
     return $Left.GetType() -eq $Right.GetType() -and [object]::Equals($Left, $Right)
 }
 
+function Get-InaviCoreUseIdentity([object]$Entry) {
+    # A spent event closes only its own earlier reservation. JSON encodes
+    # field boundaries, so arbitrary approval text cannot alias another key.
+    return ConvertTo-Json -InputObject @(
+        [string]$Entry.attemptId,
+        ([string]$Entry.manifestSha256).ToUpperInvariant(),
+        [string]$Entry.approvalReference,
+        @($Entry.zipSha256 | ForEach-Object { ([string]$_).ToUpperInvariant() })
+    ) -Compress -Depth 4
+}
+
 function Test-InaviCoreHashRecord(
     [object]$Record,
     [object]$FileHashes,
@@ -131,11 +178,12 @@ function Test-InaviRunManifestCore {
     }
 
     foreach ($field in @('schemaVersion', 'runTag', 'approvalReference',
+            'approvalObservedUtc',
             'sourceSeal', 'sourceSealFile', 'buildReceipt', 'executable', 'pdb', 'config',
             'backupManifest', 'backups', 'caps')) {
         if (-not (Test-InaviCoreField $Manifest $field)) {
             Add-InaviCoreCode $codes 'SCHEMA_MISSING'
-            if ($field -eq 'approvalReference') {
+            if ($field -in @('approvalReference', 'approvalObservedUtc')) {
                 Add-InaviCoreCode $codes 'APPROVAL_MISSING'
             }
         }
@@ -215,6 +263,10 @@ function Test-InaviRunManifestCore {
         [string]::IsNullOrWhiteSpace($Manifest.approvalReference)) {
         Add-InaviCoreCode $codes 'APPROVAL_MISSING'
     }
+    $approvalObservedUtc = ConvertTo-InaviCoreUtc $Manifest.approvalObservedUtc
+    if ($null -eq $approvalObservedUtc) {
+        Add-InaviCoreCode $codes 'APPROVAL_MISSING'
+    }
     if (-not (Test-InaviCoreCommit $seal.head) -or
         -not (Test-InaviCoreCommit $seal.parentHead) -or
         $seal.parentHead -ne '0e06e2c5c662ad224c9b472e7798f4604240a6b6' -or
@@ -227,19 +279,7 @@ function Test-InaviRunManifestCore {
             Add-InaviCoreCode $codes 'SOURCE_SEAL_MISMATCH'
         }
     }
-    $requiredSourceFiles = @(
-        'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
-        'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
-        'tests/basic_subsystems.rs', 'src/ce/memory.rs',
-        'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
-        'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
-        'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
-        'scripts/backup_rw_mounts_inventory_core.ps1',
-        'scripts/test_backup_rw_mounts_inventory.ps1',
-        'scripts/inavi_summary_observer_core.ps1',
-        'scripts/test_inavi_summary_observer.ps1',
-        'scripts/test_inavi_runner_guard.ps1'
-    )
+    $requiredSourceFiles = @(Get-InaviRequiredSourceFiles)
     if (-not (Test-InaviCoreSamePath $seal.sourceRoot 'D:\GitHub\Wince_emulation_v3') -or
         -not (Test-InaviCoreMap $seal.sourceFiles) -or
         $seal.sourceFiles.Count -ne $requiredSourceFiles.Count) {
@@ -425,9 +465,23 @@ function Test-InaviRunManifestCore {
         }
     }
     $verified = $Observed.verifiedBackupManifest
+    $backupScriptSha256 = if (Test-InaviCoreMap $seal.sourceFiles) {
+        $seal.sourceFiles['scripts/backup_rw_mounts.ps1']
+    } else {
+        $null
+    }
     if (-not (Test-InaviCoreMap $verified) -or
         -not (Test-InaviCoreField $verified 'sha256') -or
         $verified.sha256 -ne $Manifest.backupManifest.sha256 -or
+        -not (Test-InaviCoreField $verified 'schemaVersion') -or
+        $verified.schemaVersion -ne 2 -or
+        -not (Test-InaviCoreField $verified 'tag') -or
+        $verified.tag -isnot [string] -or
+        $verified.tag -cnotmatch '^\d{8}T\d{6}Z$' -or
+        -not (Test-InaviCoreField $verified 'scriptSha256') -or
+        $verified.scriptSha256 -ne $backupScriptSha256 -or
+        -not (Test-InaviCoreField $verified 'startedUtc') -or
+        -not (Test-InaviCoreField $verified 'updatedUtc') -or
         -not (Test-InaviCoreField $verified 'complete') -or
         $verified.complete -isnot [bool] -or
         -not $verified.complete -or
@@ -436,6 +490,19 @@ function Test-InaviRunManifestCore {
         $verified.completed.Count -ne 3) {
         Add-InaviCoreCode $codes 'BACKUP_MANIFEST_MISMATCH'
     } elseif ($Manifest.backups -is [array] -and $Manifest.backups.Count -eq 3) {
+        $backupStartedUtc = ConvertTo-InaviCoreUtc $verified.startedUtc
+        $backupUpdatedUtc = ConvertTo-InaviCoreUtc $verified.updatedUtc
+        if ($null -eq $backupStartedUtc -or $null -eq $backupUpdatedUtc -or
+            $null -eq $approvalObservedUtc -or
+            $backupStartedUtc -le $approvalObservedUtc -or
+            $backupUpdatedUtc -lt $backupStartedUtc -or
+            $verified.tag -cne $backupStartedUtc.ToString(
+                'yyyyMMddTHHmmssZ',
+                [System.Globalization.CultureInfo]::InvariantCulture
+            )) {
+            Add-InaviCoreCode $codes 'BACKUP_NOT_FRESH'
+        }
+        $archiveStems = @('INAVI', 'ResidentFlash', 'EmulatorRoot')
         for ($i = 0; $i -lt 3; $i++) {
             $actual = $verified.completed[$i]
             $claimed = $Manifest.backups[$i]
@@ -451,6 +518,11 @@ function Test-InaviRunManifestCore {
                     $actual[$field] -ne $claimed[$field]) {
                     Add-InaviCoreCode $codes 'BACKUP_MANIFEST_MISMATCH'
                 }
+            }
+            if ((Test-InaviCoreField $claimed 'archivePath') -and
+                [System.IO.Path]::GetFileName([string]$claimed.archivePath) -ine
+                "$($archiveStems[$i])-pre-live-$($verified.tag).zip") {
+                Add-InaviCoreCode $codes 'BACKUP_NOT_FRESH'
             }
             if (-not (Test-InaviCoreField $actual 'postBackupInventoryVerified') -or
                 $actual.postBackupInventoryVerified -isnot [bool] -or
@@ -498,12 +570,13 @@ function Test-InaviRunManifestCore {
     }
     $seenEventIds = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal)
+    $outstandingReservations = [System.Collections.Generic.Dictionary[string, int]]::new(
+        [System.StringComparer]::Ordinal)
     foreach ($entry in $LocalLedger) {
         if (-not (Test-InaviCoreMap $entry) -or
             -not (Test-InaviCoreField $entry 'eventId') -or
             -not (Test-InaviCoreField $entry 'attemptId') -or
             -not (Test-InaviCoreField $entry 'manifestSha256') -or
-            -not (Test-InaviCoreField $entry 'approvalReference') -or
             -not (Test-InaviCoreField $entry 'zipSha256') -or
             -not (Test-InaviCoreField $entry 'state') -or
             -not (Test-InaviCoreField $entry 'utc') -or
@@ -518,12 +591,30 @@ function Test-InaviRunManifestCore {
             $entry.attemptId -isnot [string] -or
             $entry.attemptId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$' -or
             -not (Test-InaviCoreHash $entry.manifestSha256) -or
-            $entry.approvalReference -isnot [string] -or
-            [string]::IsNullOrWhiteSpace($entry.approvalReference) -or
             $entry.state -isnot [string] -or
-            $entry.state -notin @('reserved', 'spent', 'reconciled') -or
+            $entry.state -notin @('reserved', 'spent', 'reconciled', 'legacy-deny') -or
             $entry.utc -isnot [string] -or
             $entry.utc -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$') {
+            Add-InaviCoreCode $codes 'LEDGER_INVALID'
+            continue
+        }
+        if ($entry.state -eq 'legacy-deny') {
+            # Old launches with an unrecorded approval must never acquire a
+            # fabricated call ID. They deny reuse of their three ZIP hashes.
+            if (($entry.Contains('approvalReference') -and
+                    $null -ne $entry.approvalReference) -or
+                -not (Test-InaviCoreField $entry 'provenance') -or
+                $entry.provenance -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.provenance) -or
+                -not (Test-InaviCoreField $entry 'reason') -or
+                $entry.reason -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.reason)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
+            }
+        } elseif (-not (Test-InaviCoreField $entry 'approvalReference') -or
+            $entry.approvalReference -isnot [string] -or
+            [string]::IsNullOrWhiteSpace($entry.approvalReference)) {
             Add-InaviCoreCode $codes 'LEDGER_INVALID'
             continue
         }
@@ -539,17 +630,20 @@ function Test-InaviRunManifestCore {
         }
         $seenZipHashes = [System.Collections.Generic.HashSet[string]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
-        if ($entry.approvalReference -eq $Manifest.approvalReference) {
+        if ($entry.state -ne 'legacy-deny' -and
+            $entry.approvalReference -eq $Manifest.approvalReference) {
             if ($entry.state -eq 'reserved') {
                 Add-InaviCoreCode $codes 'APPROVAL_RESERVED'
             } else {
                 Add-InaviCoreCode $codes 'APPROVAL_REUSED'
             }
         }
+        $validZipHashes = $true
         foreach ($zip in $entry.zipSha256) {
             if (-not (Test-InaviCoreHash $zip) -or
                 -not $seenZipHashes.Add($zip)) {
                 Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                $validZipHashes = $false
             } elseif ($Manifest.backups -is [array]) {
                 foreach ($backup in $Manifest.backups) {
                     if ((Test-InaviCoreMap $backup) -and
@@ -559,6 +653,28 @@ function Test-InaviRunManifestCore {
                     }
                 }
             }
+        }
+        if (-not $validZipHashes) { continue }
+        if ($entry.state -eq 'reserved') {
+            $identity = Get-InaviCoreUseIdentity $entry
+            if (-not $outstandingReservations.ContainsKey($identity)) {
+                $outstandingReservations[$identity] = 0
+            }
+            $outstandingReservations[$identity]++
+        } elseif ($entry.state -eq 'spent') {
+            $identity = Get-InaviCoreUseIdentity $entry
+            if ($outstandingReservations.ContainsKey($identity) -and
+                $outstandingReservations[$identity] -gt 0) {
+                $outstandingReservations[$identity]--
+            }
+        }
+        # A 'reconciled' row alone does not establish the process identity
+        # needed to resolve a reservation; a later matching spent row does.
+    }
+    foreach ($count in $outstandingReservations.Values) {
+        if ($count -gt 0) {
+            Add-InaviCoreCode $codes 'LEDGER_UNRESOLVED_RESERVATION'
+            break
         }
     }
     return New-InaviCoreResult $codes
