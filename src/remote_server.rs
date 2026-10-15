@@ -2004,9 +2004,10 @@ mod tests {
         assert_eq!(independent.sequence, 1);
         assert!(first.host_monotonic_ns <= second.host_monotonic_ns);
         assert!(second.host_monotonic_ns <= third.host_monotonic_ns);
-        assert!(first.utc_unix_ms <= second.utc_unix_ms);
-        assert!(second.utc_unix_ms <= third.utc_unix_ms);
-        assert!(first.utc_unix_ms > 0);
+        // UTC is for human alignment; the OS clock may move backward.
+        for stamp in [first, second, third, independent] {
+            assert!(stamp.utc_unix_ms > 0);
+        }
     }
 
     #[test]
