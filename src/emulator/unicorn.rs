@@ -52361,6 +52361,116 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn stopped_boot_exit_refuses_exact_birth_parked_popup_before_kernel_effects() -> Result<()> {
+        use crate::ce::scheduler::SchedulerBlockedWaitKind;
+
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let boot_birth = kernel.current_process_birth_key().expect("boot process birth");
+        let primary = kernel
+            .handles
+            .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
+            .expect("boot primary thread birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                primary,
+                "BOOT_POPUP_OWNER",
+                "",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 100, 100),
+            )
+            .expect("boot-owned popup owner window");
+        let menu = kernel.resources.create_popup_menu();
+        assert!(kernel.resources.append_menu_item(
+            menu,
+            crate::ce::resource::MenuItem::from_insert_flags(0, 0x42, Some("Choice".to_owned()),),
+        ));
+        let mut source = VirtualFramebuffer::default_primary()?;
+        let modal_state = crate::ce::coredll::track_popup_menu_ex_prepare(
+            &mut kernel,
+            &ModalTestMemory::default(),
+            Some(&mut source),
+            MAIN_GUEST_THREAD_ID,
+            &[menu, 0, 100, 100, hwnd, 0],
+        )
+        .map_err(|result| Error::Backend(format!("prepare TrackPopupMenuEx returned {result}")))?;
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                primary,
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+                Vec::new(),
+                SchedulerBlockedWaitKind::PopupMenuModal {
+                    mouse_message_max: modal_state.mouse_message_max,
+                },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact boot popup wait");
+        let mut parked_cpu = UnicornMips::new()?;
+        parked_cpu.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        parked_cpu.current_thread_id = MAIN_GUEST_THREAD_ID;
+        parked_cpu.saved_context_thread_birth = Some(primary);
+        parked_cpu.blocked_popup_menu_modal = Some(BlockedPopupMenuModal {
+            wait_id,
+            thread_id: MAIN_GUEST_THREAD_ID,
+            thread_handle: crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            modal_state,
+        });
+        let mut parked = parked_process_for_cpu(MAIN_GUEST_THREAD_ID, parked_cpu);
+        parked.process_state.process_id = boot_birth.process_id();
+        let mut active = UnicornMips::new()?;
+        active.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        active.current_thread_id = MAIN_GUEST_THREAD_ID;
+        active.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        active.saved_context_thread_birth = Some(primary);
+        active.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x76,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        active.parked_child_processes.push_back(parked);
+
+        let mut destination = VirtualFramebuffer::new(
+            VirtualFramebuffer::DEFAULT_WIDTH,
+            VirtualFramebuffer::DEFAULT_HEIGHT,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        let pixels_before = destination.pixels().to_vec();
+        let dirty_before = destination.dirty_rects().to_vec();
+        let process_before = kernel.current_process_state();
+        let trace_before = kernel.recent_process_ops().len();
+        let error = active
+            .try_complete_active_process_thread_exit(&mut kernel, Some(&mut destination))
+            .expect_err("exact-birth parked boot popup requires pre-exit recovery");
+        assert!(matches!(
+            error,
+            Error::HostExitRecoveryRequired { process_id, incarnation, .. }
+                if process_id == boot_birth.process_id()
+                    && incarnation == boot_birth.incarnation()
+        ));
+        assert_eq!(kernel.current_process_state(), process_before);
+        assert!(kernel.handles.process_execution_live_by_birth(boot_birth));
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert!(active.parked_child_processes[0].cpu.blocked_popup_menu_modal.is_some());
+        assert_eq!(active.saved_context.as_ref().map(|saved| saved.pc), Some(THREAD_EXIT_STUB_ADDR));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(destination.pixels(), pixels_before);
+        assert_eq!(destination.dirty_rects(), dirty_before.as_slice());
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        Ok(())
+    }
+
+    #[test]
     fn parked_modal_ready_probe_requires_published_wait_after_button_result() -> Result<()> {
         use crate::ce::gwe::Point;
         use crate::ce::scheduler::SchedulerBlockedWaitKind;
