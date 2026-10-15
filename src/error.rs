@@ -48,6 +48,15 @@ pub enum Error {
     MissingDevice(String),
     #[error("import DLL {dll} was not found; add a --dll-search-dir containing it")]
     MissingImportDll { dll: String },
+    #[error(
+        "stopped process {process_id} birth {incarnation} requires framebuffer recovery before exit: {reason} (window {hwnd:?})"
+    )]
+    HostExitRecoveryRequired {
+        process_id: u32,
+        incarnation: u64,
+        hwnd: Option<u32>,
+        reason: &'static str,
+    },
     #[error("emulator backend error: {0}")]
     Backend(String),
 }

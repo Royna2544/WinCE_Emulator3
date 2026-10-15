@@ -373,10 +373,10 @@ fn run_cpu_loop(
             // Requested parked-child exits must also be completed here:
             // blocked descendants are not runnable, so switching alone would
             // leave their process waits unsignaled indefinitely.
-            cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+            cpu.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
                 kernel,
                 Some(desktop.framebuffer_mut()),
-            );
+            )?;
             if let Some(thread_id) = cpu.parked_timer_fallback_thread_id() {
                 kernel.pump_timers_to_gwe(thread_id);
             }
@@ -384,8 +384,8 @@ fn run_cpu_loop(
                 reported_blocked_message_wait = false;
             }
             let remote_target = blocked_remote_input_target(cpu, kernel);
-            let _ = service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref());
-            if cpu.switch_to_next_parked_child_process(kernel) {
+            let _ = service_remote_endpoint(cpu, kernel, desktop, remote_target.as_ref())?;
+            if cpu.try_switch_to_next_parked_child_process(kernel)? {
                 publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
                 continue;
             }
@@ -409,10 +409,10 @@ fn run_cpu_loop(
             }
             break;
         }
-        cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+        cpu.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
             kernel,
             Some(desktop.framebuffer_mut()),
-        );
+        )?;
         // Pruning may itself complete and seal the selected child. Re-enter
         // the completed-owner maintenance lane before any native attempt.
         if cpu.active_process_execution_completed() {
@@ -421,7 +421,7 @@ fn run_cpu_loop(
         if remote_server_has_pending_control(kernel) {
             let pending_remote_target = blocked_remote_input_target(cpu, kernel);
             let pending_remote_drained =
-                service_remote_endpoint(cpu, kernel, desktop, pending_remote_target.as_ref());
+                service_remote_endpoint(cpu, kernel, desktop, pending_remote_target.as_ref())?;
             if pending_remote_drained.handled != 0 {
                 reported_blocked_message_wait = false;
                 let current_cpu_targeted = pending_remote_drained
@@ -523,10 +523,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if cpu.complete_active_process_thread_exit_with_framebuffer(
-            kernel,
-            Some(desktop.framebuffer_mut()),
-        ) {
+        if cpu.try_complete_active_process_thread_exit(kernel, Some(desktop.framebuffer_mut()))? {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -544,7 +541,7 @@ fn run_cpu_loop(
         }
         let early_blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let early_remote_drained =
-            service_remote_endpoint(cpu, kernel, desktop, early_blocked_remote_target.as_ref());
+            service_remote_endpoint(cpu, kernel, desktop, early_blocked_remote_target.as_ref())?;
         if early_remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
             let current_cpu_targeted = early_remote_drained
@@ -609,7 +606,7 @@ fn run_cpu_loop(
         }
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let remote_drained =
-            service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
+            service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref())?;
         if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
             let current_cpu_targeted = remote_drained
@@ -802,7 +799,7 @@ fn run_cpu_loop(
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if switch_completed_active_context(cpu, kernel) {
+        if switch_completed_active_context(cpu, kernel)? {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -898,7 +895,7 @@ fn run_cpu_loop(
         publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let remote_drained =
-            service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
+            service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref())?;
         if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
             let current_cpu_targeted = remote_drained
@@ -991,15 +988,12 @@ fn run_cpu_loop(
             }
             break;
         }
-        if cpu.complete_active_process_thread_exit_with_framebuffer(
-            kernel,
-            Some(desktop.framebuffer_mut()),
-        ) {
+        if cpu.try_complete_active_process_thread_exit(kernel, Some(desktop.framebuffer_mut()))? {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
         }
-        if switch_completed_active_context(cpu, kernel) {
+        if switch_completed_active_context(cpu, kernel)? {
             reported_blocked_message_wait = false;
             publish_remote_debug_after_scheduler_change(cpu, kernel, desktop);
             continue;
@@ -1441,17 +1435,17 @@ fn should_keep_remote_active_exit_alive(
     remote_server && active_visible_receiver_work
 }
 
-fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
+fn switch_completed_active_context(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> Result<bool> {
     if active_process_exited(cpu, kernel) {
-        return cpu.switch_to_next_parked_child_process(kernel);
+        return cpu.try_switch_to_next_parked_child_process(kernel);
     }
     if !cpu.last_stop_is_guest_thread_return_stub() {
-        return false;
+        return Ok(false);
     }
     if cpu.preserve_current_on_process_handoff(kernel) {
-        cpu.rotate_to_next_parked_process(kernel)
+        Ok(cpu.rotate_to_next_parked_process(kernel))
     } else {
-        cpu.switch_to_next_parked_child_process(kernel)
+        cpu.try_switch_to_next_parked_child_process(kernel)
     }
 }
 
@@ -1912,11 +1906,11 @@ fn service_remote_endpoint(
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
     blocked_get_message: Option<&BlockedRemoteInputTarget>,
-) -> RemoteEndpointDrain {
-    cpu.prune_exited_and_active_processes_from_parked_with_framebuffer(
+) -> Result<RemoteEndpointDrain> {
+    cpu.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
         kernel,
         Some(desktop.framebuffer_mut()),
-    );
+    )?;
     let remote_target = blocked_get_message.cloned();
     let drained = if let Some(blocked) = remote_target.as_ref() {
         kernel.drain_remote_server_control_messages_to_thread_window_with_targets(
@@ -1935,10 +1929,10 @@ fn service_remote_endpoint(
         snapshot.as_ref(),
         false,
     );
-    RemoteEndpointDrain {
+    Ok(RemoteEndpointDrain {
         handled: drained.handled,
         target_thread_ids: drained.target_thread_ids,
-    }
+    })
 }
 
 fn publish_remote_endpoint(
@@ -2586,7 +2580,7 @@ fn monitor_run_once(
         {
             break;
         }
-        if !monitor_continue_process_handoff(cpu, kernel, current_limits, &mut continued) {
+        if !monitor_continue_process_handoff(cpu, kernel, current_limits, &mut continued)? {
             break;
         }
     }
@@ -2617,38 +2611,38 @@ fn monitor_continue_process_handoff(
     kernel: &mut CeKernel,
     limits: UnicornRunLimits,
     continued: &mut usize,
-) -> bool {
+) -> Result<bool> {
     if requested_pc_stop_reached(
         limits.stop_pc,
         cpu.last_debug_snapshot(),
         cpu.saved_context_pc(),
     ) {
-        return false;
+        return Ok(false);
     }
     const MAX_MONITOR_CONTINUATIONS: usize = 16;
     if *continued >= MAX_MONITOR_CONTINUATIONS {
-        return false;
+        return Ok(false);
     }
     if cpu.clear_orphaned_cross_process_send_yield(kernel) {
         *continued += 1;
-        return true;
+        return Ok(true);
     }
     let active_exit_completed = active_process_exited(cpu, kernel);
     let active_context_returned_without_continuation = cpu.last_stop_is_guest_thread_return_stub();
     let process_handoff_switched = if active_exit_completed {
-        cpu.switch_to_next_parked_child_process(kernel)
+        cpu.try_switch_to_next_parked_child_process(kernel)?
     } else if active_context_returned_without_continuation {
         if cpu.preserve_current_on_process_handoff(kernel) {
             cpu.rotate_to_next_parked_process(kernel)
         } else {
-            cpu.switch_to_next_parked_child_process(kernel)
+            cpu.try_switch_to_next_parked_child_process(kernel)?
         }
     } else {
         false
     };
     if process_handoff_switched {
         *continued += 1;
-        return true;
+        return Ok(true);
     }
     if let Some(target_process_id) = cpu
         .last_debug_snapshot()
@@ -2657,10 +2651,10 @@ fn monitor_continue_process_handoff(
         && cpu.rotate_to_parked_process_id(kernel, target_process_id)
     {
         *continued += 1;
-        return true;
+        return Ok(true);
     }
     let Some(snapshot) = cpu.last_debug_snapshot() else {
-        return false;
+        return Ok(false);
     };
     let native_service_boundary = cpu.last_native_slice_outcome().is_service_boundary();
     let message_waiter = snapshot_has_live_blocked_message_waiter(snapshot, kernel);
@@ -2677,9 +2671,9 @@ fn monitor_continue_process_handoff(
     );
     if should_rotate_process && cpu.rotate_to_next_parked_process(kernel) {
         *continued += 1;
-        return true;
+        return Ok(true);
     }
-    false
+    Ok(false)
 }
 
 fn monitor_has_immediate_process_handoff(cpu: &UnicornMips, kernel: &CeKernel) -> bool {

@@ -4508,7 +4508,15 @@ impl UnicornMips {
     }
 
     pub fn switch_to_next_parked_child_process(&mut self, kernel: &mut CeKernel) -> bool {
-        self.switch_to_next_parked_process(kernel, false)
+        self.try_switch_to_next_parked_child_process(kernel)
+            .expect("fixture child handoff requires host-exit recovery")
+    }
+
+    pub fn try_switch_to_next_parked_child_process(
+        &mut self,
+        kernel: &mut CeKernel,
+    ) -> Result<bool> {
+        self.try_switch_to_next_parked_process(kernel, false)
     }
 
     pub fn preserve_current_on_process_handoff(&self, kernel: &CeKernel) -> bool {
@@ -5780,29 +5788,55 @@ impl UnicornMips {
     pub fn prune_exited_and_active_processes_from_parked_with_framebuffer(
         &mut self,
         kernel: &mut CeKernel,
-        mut framebuffer: Option<&mut dyn Framebuffer>,
+        framebuffer: Option<&mut dyn Framebuffer>,
     ) {
+        self.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+            kernel,
+            framebuffer,
+        )
+        .expect("fixture parked-process prune requires host-exit recovery");
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<()> {
         let active_process_exited = if let Some(framebuffer) = framebuffer.as_mut() {
-            self.complete_active_process_thread_exit(kernel, Some(&mut **framebuffer))
+            self.try_complete_active_process_thread_exit(kernel, Some(&mut **framebuffer))?
         } else {
-            self.complete_active_process_thread_exit(kernel, None)
+            self.try_complete_active_process_thread_exit(kernel, None)?
         };
         if active_process_exited {
-            return;
+            return Ok(());
         }
         let mut kept = VecDeque::new();
         while let Some(mut process) = self.parked_child_processes.pop_front() {
             if let Some((launch, requested_code)) =
                 Self::requested_parked_child_termination(&process, kernel)
             {
-                let completed = if let Some(framebuffer) = framebuffer.as_mut() {
-                    kernel.mark_process_launch_exited_with_framebuffer(
+                let completion = if let Some(framebuffer) = framebuffer.as_mut() {
+                    kernel.try_mark_process_launch_exited_with_framebuffer(
                         &launch,
                         requested_code,
                         Some(&mut **framebuffer),
                     )
                 } else {
-                    kernel.mark_process_launch_exited(&launch, requested_code)
+                    kernel.try_mark_process_launch_exited_with_framebuffer(
+                        &launch,
+                        requested_code,
+                        None,
+                    )
+                };
+                let completed = match completion {
+                    Ok(completed) => completed,
+                    Err(error) => {
+                        kept.push_back(process);
+                        kept.append(&mut self.parked_child_processes);
+                        self.parked_child_processes = kept;
+                        return Err(error);
+                    }
                 };
                 if completed {
                     kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
@@ -5868,14 +5902,25 @@ impl UnicornMips {
                     launch.process_id == process.process_state.process_id
                         && launch.thread_id == process.cpu.initial_thread_id
                 }) {
-                    let completed = if let Some(framebuffer) = framebuffer.as_mut() {
-                        kernel.mark_process_launch_exited_with_framebuffer(
+                    let completion = if let Some(framebuffer) = framebuffer.as_mut() {
+                        kernel.try_mark_process_launch_exited_with_framebuffer(
                             launch,
                             exit_code,
                             Some(&mut **framebuffer),
                         )
                     } else {
-                        kernel.mark_process_launch_exited(launch, exit_code)
+                        kernel.try_mark_process_launch_exited_with_framebuffer(
+                            launch, exit_code, None,
+                        )
+                    };
+                    let completed = match completion {
+                        Ok(completed) => completed,
+                        Err(error) => {
+                            kept.push_back(process);
+                            kept.append(&mut self.parked_child_processes);
+                            self.parked_child_processes = kept;
+                            return Err(error);
+                        }
                     };
                     if completed {
                         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
@@ -5932,6 +5977,7 @@ impl UnicornMips {
             }
         }
         self.parked_child_processes = kept;
+        Ok(())
     }
 
     #[cfg(feature = "unicorn")]
@@ -6024,21 +6070,21 @@ impl UnicornMips {
         &mut self,
         kernel: &mut CeKernel,
         mut framebuffer: Option<&mut dyn Framebuffer>,
-    ) -> bool {
+    ) -> Result<bool> {
         let Some((launch, requested_code)) = self.requested_active_child_termination(kernel) else {
-            return false;
+            return Ok(false);
         };
         let completed = if let Some(framebuffer) = framebuffer.as_mut() {
-            kernel.mark_process_launch_exited_with_framebuffer(
+            kernel.try_mark_process_launch_exited_with_framebuffer(
                 &launch,
                 requested_code,
                 Some(&mut **framebuffer),
-            )
+            )?
         } else {
-            kernel.mark_process_launch_exited(&launch, requested_code)
+            kernel.try_mark_process_launch_exited_with_framebuffer(&launch, requested_code, None)?
         };
         if !completed {
-            return false;
+            return Ok(false);
         }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessTerminationCompleted",
@@ -6067,7 +6113,7 @@ impl UnicornMips {
                 .process_birth
                 .expect("checked completed launch birth"),
         );
-        true
+        Ok(true)
     }
 
     #[cfg(feature = "unicorn")]
@@ -6076,43 +6122,44 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
-        self.complete_active_process_thread_exit(kernel, framebuffer)
+        self.try_complete_active_process_thread_exit(kernel, framebuffer)
+            .expect("fixture active-process exit requires host-exit recovery")
     }
 
     #[cfg(feature = "unicorn")]
-    fn complete_active_process_thread_exit(
+    pub fn try_complete_active_process_thread_exit(
         &mut self,
         kernel: &mut CeKernel,
         mut framebuffer: Option<&mut dyn Framebuffer>,
-    ) -> bool {
+    ) -> Result<bool> {
         if self.completed_active_process_exit {
-            return false;
+            return Ok(false);
         }
         let completed_request = if let Some(framebuffer) = framebuffer.as_mut() {
-            self.complete_requested_active_child_termination(kernel, Some(&mut **framebuffer))
+            self.complete_requested_active_child_termination(kernel, Some(&mut **framebuffer))?
         } else {
-            self.complete_requested_active_child_termination(kernel, None)
+            self.complete_requested_active_child_termination(kernel, None)?
         };
         if completed_request {
-            let _ = self.switch_to_next_parked_process(kernel, false);
-            return true;
+            let _ = self.try_switch_to_next_parked_process(kernel, false)?;
+            return Ok(true);
         }
         if self.complete_saved_guest_thread_exit(kernel) {
-            return false;
+            return Ok(false);
         }
         if self
             .active_terminal_child_process_return_code(kernel)
             .is_some()
         {
-            let _ = self.complete_active_terminal_child_process_return(kernel, framebuffer);
+            let _ = self.complete_active_terminal_child_process_return(kernel, framebuffer)?;
             if !self.completed_active_process_exit {
-                return false;
+                return Ok(false);
             }
-            let switched = self.switch_to_next_parked_process(kernel, false);
-            return switched || self.completed_active_process_exit;
+            let switched = self.try_switch_to_next_parked_process(kernel, false)?;
+            return Ok(switched || self.completed_active_process_exit);
         }
         let Some(exit_code) = self.active_process_thread_exit_code() else {
-            return false;
+            return Ok(false);
         };
         let Some(launch) = self
             .owned_process_launch
@@ -6127,7 +6174,7 @@ impl UnicornMips {
                     thread_id = self.current_thread_id,
                     "active child exit lacks its original launch; retaining its CPU"
                 );
-                return false;
+                return Ok(false);
             }
             // The boot process does not have a queued child launch. Its
             // broader root/worker execution handoff remains a separate slice.
@@ -6135,7 +6182,7 @@ impl UnicornMips {
                 crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
                 exit_code,
             );
-            return self.switch_to_next_parked_process(kernel, false);
+            return self.try_switch_to_next_parked_process(kernel, false);
         };
         if launch.process_birth.is_none() {
             tracing::warn!(
@@ -6144,16 +6191,20 @@ impl UnicornMips {
                 thread_id = launch.thread_id,
                 "active child exit lacks a verified birth; retaining its CPU"
             );
-            return false;
+            return Ok(false);
         }
-        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+        if !kernel.try_mark_process_launch_exited_with_framebuffer(
+            &launch,
+            exit_code,
+            framebuffer,
+        )? {
             tracing::warn!(
                 target: "ce.scheduler",
                 process_id = launch.process_id,
                 thread_id = launch.thread_id,
                 "active child completion was rejected; retaining its CPU"
             );
-            return false;
+            return Ok(false);
         }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
@@ -6177,8 +6228,8 @@ impl UnicornMips {
                 .process_birth
                 .expect("checked completed launch birth"),
         );
-        let switched = self.switch_to_next_parked_process(kernel, false);
-        switched || self.completed_active_process_exit
+        let switched = self.try_switch_to_next_parked_process(kernel, false)?;
+        Ok(switched || self.completed_active_process_exit)
     }
 
     #[cfg(feature = "unicorn")]
@@ -6345,9 +6396,9 @@ impl UnicornMips {
         &mut self,
         kernel: &mut CeKernel,
         framebuffer: Option<&mut dyn Framebuffer>,
-    ) -> Option<crate::ce::coredll::MessageBoxModalState> {
+    ) -> Result<Option<crate::ce::coredll::MessageBoxModalState>> {
         let Some(exit_code) = self.active_terminal_child_process_return_code(kernel) else {
-            return None;
+            return Ok(None);
         };
         let Some(launch) = self
             .owned_process_launch
@@ -6355,7 +6406,7 @@ impl UnicornMips {
             .filter(|launch| launch.process_id == kernel.current_process_id())
             .cloned()
         else {
-            return None;
+            return Ok(None);
         };
         if launch.process_birth.is_none() {
             tracing::warn!(
@@ -6364,7 +6415,7 @@ impl UnicornMips {
                 thread_id = launch.thread_id,
                 "terminal child return lacks a verified birth; retaining its CPU"
             );
-            return None;
+            return Ok(None);
         }
         let terminal_detail = self
             .last_debug_snapshot()
@@ -6391,14 +6442,18 @@ impl UnicornMips {
                     kernel.process_module_path()
                 )
             });
-        if !kernel.mark_process_launch_exited_with_framebuffer(&launch, exit_code, framebuffer) {
+        if !kernel.try_mark_process_launch_exited_with_framebuffer(
+            &launch,
+            exit_code,
+            framebuffer,
+        )? {
             tracing::warn!(
                 target: "ce.scheduler",
                 process_id = launch.process_id,
                 thread_id = launch.thread_id,
                 "terminal child completion was rejected; retaining its CPU"
             );
-            return None;
+            return Ok(None);
         }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildReturned",
@@ -6427,7 +6482,7 @@ impl UnicornMips {
         self.last_debug = None;
         self.last_wall_clock_debug = None;
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
-        modal_state
+        Ok(modal_state)
     }
 
     #[cfg(feature = "unicorn")]
@@ -6704,11 +6759,20 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         requeue_current: bool,
     ) -> bool {
+        self.try_switch_to_next_parked_process(kernel, requeue_current)
+            .expect("fixture process handoff requires host-exit recovery")
+    }
+
+    fn try_switch_to_next_parked_process(
+        &mut self,
+        kernel: &mut CeKernel,
+        requeue_current: bool,
+    ) -> Result<bool> {
         let Some(parked) = self.pop_next_runnable_parked_process(kernel) else {
-            return false;
+            return Ok(false);
         };
-        self.switch_to_parked_process(kernel, parked, requeue_current, None);
-        true
+        self.try_switch_to_parked_process(kernel, parked, requeue_current, None)?;
+        Ok(true)
     }
 
     fn pop_next_runnable_parked_process(&mut self, kernel: &CeKernel) -> Option<ParkedProcess> {
@@ -7035,8 +7099,38 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         parked: ParkedProcess,
         requeue_current: bool,
-        mut framebuffer: Option<&mut dyn Framebuffer>,
+        framebuffer: Option<&mut dyn Framebuffer>,
     ) {
+        self.try_switch_to_parked_process(kernel, parked, requeue_current, framebuffer)
+            .expect("fixture parked-process switch requires host-exit recovery");
+    }
+
+    fn try_switch_to_parked_process(
+        &mut self,
+        kernel: &mut CeKernel,
+        parked: ParkedProcess,
+        requeue_current: bool,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<()> {
+        #[cfg(feature = "unicorn")]
+        let terminal_modal_state = if !requeue_current {
+            let completion = if let Some(framebuffer) = framebuffer.as_mut() {
+                self.complete_active_terminal_child_process_return(kernel, Some(&mut **framebuffer))
+            } else {
+                self.complete_active_terminal_child_process_return(kernel, None)
+            };
+            match completion {
+                Ok(modal) => modal,
+                Err(error) => {
+                    // No process/window mutation occurred on recovery refusal.
+                    // Restore the selected incoming CPU to its parked queue.
+                    self.parked_child_processes.push_front(parked);
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let ParkedProcess {
             application,
             process_handle,
@@ -7060,16 +7154,6 @@ impl UnicornMips {
             requeue_current,
             "switching to parked process"
         );
-        #[cfg(feature = "unicorn")]
-        let terminal_modal_state = if !requeue_current {
-            if let Some(framebuffer) = framebuffer.as_mut() {
-                self.complete_active_terminal_child_process_return(kernel, Some(&mut **framebuffer))
-            } else {
-                self.complete_active_terminal_child_process_return(kernel, None)
-            }
-        } else {
-            None
-        };
         let outgoing_thread_ids = self.tracked_thread_ids();
         let mut next_cpu = *cpu;
         let mut incoming_thread_ids = next_cpu.tracked_thread_ids();
@@ -7186,6 +7270,7 @@ impl UnicornMips {
         });
         *self = next_cpu;
         self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, false);
+        Ok(())
     }
 
     #[cfg(feature = "unicorn")]
@@ -7969,7 +8054,16 @@ impl UnicornMips {
             }
         }
         let completed_request = if self.requested_active_child_termination(kernel).is_some() {
-            self.complete_requested_active_child_termination(kernel, Some(framebuffer))
+            match self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
+                Ok(completed) => completed,
+                Err(error) => {
+                    report.failure_operation = Some("preflight requested child termination");
+                    return AttemptExecution {
+                        report,
+                        result: Err(error),
+                    };
+                }
+            }
         } else {
             false
         };
@@ -14488,7 +14582,7 @@ impl UnicornMips {
                 // The native owner is now closed and its views/continuation
                 // have been synchronized. Complete before rotation can
                 // requeue this terminated CPU or select a different PID.
-                if !self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
+                if !self.complete_requested_active_child_termination(kernel, Some(framebuffer))? {
                     self.private_slab_attempt_poisoned = true;
                     self.saved_context = None;
                     report.failure_operation = Some("complete requested child termination");
@@ -14502,7 +14596,10 @@ impl UnicornMips {
             }
             *outcome_before_handoff = Some(self.last_native_slice_outcome);
             self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
-            self.prune_exited_and_active_processes_from_parked(kernel);
+            self.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+                kernel,
+                Some(framebuffer),
+            )?;
             return Ok(());
         }
         self.persist_run_state(&run_state, kernel);
@@ -14557,7 +14654,7 @@ impl UnicornMips {
         let _ = self.clear_orphaned_send_depths(kernel);
         self.refresh_finalized_wait_snapshot(kernel);
         if self.requested_active_child_termination(kernel).is_some() {
-            if !self.complete_requested_active_child_termination(kernel, Some(framebuffer)) {
+            if !self.complete_requested_active_child_termination(kernel, Some(framebuffer))? {
                 self.private_slab_attempt_poisoned = true;
                 self.saved_context = None;
                 report.failure_operation = Some("complete requested child termination");
@@ -14573,7 +14670,10 @@ impl UnicornMips {
         // not publish a handoff to an unrun child.
         *outcome_before_handoff = Some(self.last_native_slice_outcome);
         self.rotate_after_run_slice_handoff(kernel, limits.live_pump);
-        self.prune_exited_and_active_processes_from_parked(kernel);
+        self.try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+            kernel,
+            Some(framebuffer),
+        )?;
         Ok(())
     }
 
@@ -18411,7 +18511,7 @@ fn run_pending_process_launches<D>(
     dll_search_dirs: &[std::path::PathBuf],
     parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
 ) -> Result<()> {
-    let launches = kernel.take_pending_process_launches();
+    let mut launches: VecDeque<_> = kernel.take_pending_process_launches().into();
     if launches.is_empty() {
         return Ok(());
     }
@@ -18421,7 +18521,7 @@ fn run_pending_process_launches<D>(
         parent_owner_pid,
         sealed_host_write_guard,
     )?;
-    for launch in launches {
+    while let Some(launch) = launches.pop_front() {
         let launch_birth = launch.process_birth.ok_or_else(|| {
             Error::Backend("pending child launch has no original process birth".to_owned())
         })?;
@@ -18439,15 +18539,26 @@ fn run_pending_process_launches<D>(
             // but before the first child instruction. Do not resolve/load or
             // reset its exit state: its original birth is sufficient for the
             // checked zero-slice completion.
-            if !kernel.mark_process_launch_exited_with_framebuffer(
+            let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
                 &launch,
                 requested_code,
                 Some(&mut *framebuffer),
             ) {
-                return Err(Error::Backend(format!(
+                Ok(completed) => completed,
+                Err(error) => {
+                    launches.push_front(launch);
+                    kernel.restore_pending_process_launches(launches.into());
+                    return Err(error);
+                }
+            };
+            if !completed {
+                let error = Error::Backend(format!(
                     "pending child launch pid {} rejected requested completion",
                     launch.process_id
-                )));
+                ));
+                launches.push_front(launch);
+                kernel.restore_pending_process_launches(launches.into());
+                return Err(error);
             }
             kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                 op: "CreateProcessTerminationCompleted",
@@ -18465,6 +18576,27 @@ fn run_pending_process_launches<D>(
             continue;
         }
         let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
+            let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
+                &launch,
+                u32::MAX,
+                Some(&mut *framebuffer),
+            ) {
+                Ok(completed) => completed,
+                Err(error) => {
+                    launches.push_front(launch);
+                    kernel.restore_pending_process_launches(launches.into());
+                    return Err(error);
+                }
+            };
+            if !completed {
+                let error = Error::Backend(format!(
+                    "pending child launch pid {} rejected path-resolution completion",
+                    launch.process_id
+                ));
+                launches.push_front(launch);
+                kernel.restore_pending_process_launches(launches.into());
+                return Err(error);
+            }
             kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                 op: "CreateProcessResolveFailed",
                 application: launch.application.clone(),
@@ -18478,11 +18610,6 @@ fn run_pending_process_launches<D>(
                 error: Some("path not found".to_owned()),
                 detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
             });
-            kernel.mark_process_launch_exited_with_framebuffer(
-                &launch,
-                u32::MAX,
-                Some(&mut *framebuffer),
-            );
             continue;
         };
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
@@ -18531,7 +18658,14 @@ fn run_pending_process_launches<D>(
             child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
-            child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)?;
+            if let Err(error) =
+                child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)
+            {
+                if matches!(error, Error::HostExitRecoveryRequired { .. }) {
+                    return Ok((ChildProcessRunOutcome::RecoveryRequired(error), child));
+                }
+                return Err(error);
+            }
             let outcome = if child.completed_active_process_exit {
                 ChildProcessRunOutcome::Completed
             } else {
@@ -18598,6 +18732,7 @@ fn run_pending_process_launches<D>(
                 return Err(err);
             }
         };
+        let mut completion_recovery_error = None;
         let completion_rejected = match outcome {
             ChildProcessRunOutcome::Completed => {
                 // The child itself finished the request after its native
@@ -18609,11 +18744,18 @@ fn run_pending_process_launches<D>(
                 continue;
             }
             ChildProcessRunOutcome::Exited(exit_code) => {
-                if kernel.mark_process_launch_exited_with_framebuffer(
+                let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
                     &launch,
                     exit_code,
                     Some(&mut *framebuffer),
                 ) {
+                    Ok(completed) => completed,
+                    Err(error) => {
+                        completion_recovery_error = Some(error);
+                        false
+                    }
+                };
+                if completed {
                     kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                         op: "CreateProcessChildReturned",
                         application: launch.application.clone(),
@@ -18638,6 +18780,10 @@ fn run_pending_process_launches<D>(
                 true
             }
             ChildProcessRunOutcome::Parked => false,
+            ChildProcessRunOutcome::RecoveryRequired(error) => {
+                completion_recovery_error = Some(error);
+                true
+            }
         };
         if !completion_rejected {
             if let Some(exit_code) = child_launch_handle_exit_code(kernel, &launch) {
@@ -18680,6 +18826,10 @@ fn run_pending_process_launches<D>(
                 command_line: launch.command_line.clone().unwrap_or_default(),
                 current_directory: child_current_directory.clone(),
             });
+        if let Some(error) = completion_recovery_error {
+            kernel.restore_pending_process_launches(launches.into());
+            return Err(error);
+        }
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildParked",
             application: launch.application.clone(),
@@ -18701,11 +18851,12 @@ fn run_pending_process_launches<D>(
 }
 
 #[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum ChildProcessRunOutcome {
     Completed,
     Exited(u32),
     Parked,
+    RecoveryRequired(Error),
 }
 
 #[cfg(feature = "unicorn")]

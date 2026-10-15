@@ -179,6 +179,14 @@ impl UnicornMips {
     ) {
     }
 
+    pub fn try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     pub fn complete_escaped_saved_get_message_sent_callout(
         &mut self,
         _kernel: &mut CeKernel,
@@ -231,6 +239,21 @@ impl UnicornMips {
         _framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
         false
+    }
+
+    pub fn try_complete_active_process_thread_exit(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    pub fn try_switch_to_next_parked_child_process(
+        &mut self,
+        _kernel: &mut CeKernel,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     pub fn prepare_active_orphaned_visible_message_callout(
