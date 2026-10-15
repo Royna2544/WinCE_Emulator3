@@ -24,7 +24,9 @@ remote-control HTTP/WebSocket surface.
   mutable runs copy-backed. Its E-43 source-bound gate passes. E-44 separately
   source-gated the initial heap/stack fixed slabs; O-M2 then made the fixed
   process heap birth-qualified and removed copied spillover. Full Stage 2/live
-  acceptance remains open. Persistent-owner architecture is deferred to Stage 8.
+  acceptance remains open. Writable image/DLL ownership and its guest-memory
+  budget are the immediate design and test priority. Persistent-owner
+  architecture is deferred to Stage 8.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,
@@ -76,6 +78,15 @@ remote-control HTTP/WebSocket surface.
   **11/11** controls passed. The final 18-group suites passed release-feature
   **2,052/0/9 ignored** and no-default **1,482/0/3 ignored**. This is not
   full modal, Stage 3 or live-iNavi acceptance; no app or mount run was made.
+- The bounded [decoded pseudo self-exit source gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+  requires a witnessed live JALR and delay slot plus exact stopped caller and
+  CPU-owner birth before the same D-011-preflight exit finalizer as the native
+  path. A decoded PC-zero snapshot or static exit-shaped bytes cannot retire a
+  process; raw COREDLL pseudo handling remains fixture-only and fail-closed.
+  At source HEAD `5401466b`, the [broad offline suites](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)
+  passed release-feature **2,107/0/9 ignored** and no-default **1,511/0/3
+  ignored**. This is neither whole-exit atomicity nor full Stage 3, live-iNavi
+  or performance acceptance. No app or writable-mount run was made.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

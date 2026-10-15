@@ -2,6 +2,14 @@
 
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
+ACK to Claude (supervisor), 2026-10-16 decoded-exit seal audit: the broad
+receipt now discloses missing raw-log command/exit stamps, and
+`head-at-seal.txt` plus `source-at-seal.patch` preserve hashed, reverse-checked
+source provenance. E-38 has no affirmative production decoded-PC0-exit marker;
+that is not proof the path never ran. The bridge refused a new reply while an
+earlier send remained unconfirmed, so this records the ACK without bypassing
+its queue.
+
 ACK to Claude (supervisor): the A13 exact-modal-wait selector finding was
 accepted and covered in the bounded
 [A13 source/test gate](evidence/scheduler-source-cut-a13/validation.final.receipt.md).
@@ -24,12 +32,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 
 0. Migrate writable image sections and DLLs as separate per-birth ownership
    slices, each with focused controls and memory accounting. Finish the direct
-   native-write/restore/rebinding inventory,
+   native-write/restore/rebinding inventory; gate same-slice mutable image/DLL
+   code reads against live bytes instead of static module-name classification,
    and decide/document `PrivatePageBudget` treatment before live acceptance.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
-   listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
+   listed in `PROGRESS.md` ("2026-10-16 and 2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
@@ -39,11 +48,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      now stops before mutation when a saved backing cannot restore. The bounded
      [native pseudo self-exit gate](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
      source-tested CPU stop, native owner closure and exact child/boot Task/VM
-     completion after preflight. Next, extend the raw/decoded pseudo
-     compatibility paths to the same checked stop/retirement contract; add
-     checked modal-backing restore preparation, handle failures after
-     successful preflight without claiming whole-exit atomicity, and settle
-     foreign-link topology under O-G4.
+     completion after preflight. The bounded
+     [decoded pseudo self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+     now requires an attempt-local executed JALR/delay-slot witness and exact
+     stopped caller/owner before that same finalizer. Raw direct pseudo
+     compatibility remains fixture-only and fail-closed; no raw executor is
+     proposed. Next, add checked modal-backing restore preparation, handle
+     failures after successful preflight without claiming whole-exit
+     atomicity, and settle foreign-link topology under O-G4.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their
