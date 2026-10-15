@@ -103,7 +103,9 @@ then source-tested captured thread/process-lease admission for native COREDLL
 and decoded self-exit; it did not establish immediate CPU stop or Task
 retirement. The later bounded [D-011 source/test gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
 checks every exact-birth saved window backing before stopped-exit mutation and
-returns a typed recovery error on refusal. Root pseudo signaling still does
+returns a typed recovery error on refusal. A stopped boot CPU with a changed
+selected process also returns typed authority recovery instead of resuming.
+Root pseudo signaling still does
 not prove canonical Task/VM retirement, and the complete target exit-effect
 contract, including failures after successful preflight, remains open.
 
@@ -199,7 +201,10 @@ ordinary CPU continuation or a successful best-effort exit. The bounded
 [D-011 gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
 source-tests this refusal for saved live and already-destroyed HWND backing,
 including partial multi-window failure and active/parked/pending scheduler
-propagation. It does not make later teardown effects atomic or complete the
+propagation. The later selected-owner control refuses a boot/root exit whose
+saved CPU owner no longer matches the selected process. The monitor blocks a
+new checkpoint after refusal and permits only an earlier checkpoint restore
+to clear its execution hold. It does not make later teardown effects atomic or complete the
 machine-owned Task/VM lifecycle.
 
 ## A3. Execution and continuation boundary

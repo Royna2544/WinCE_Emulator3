@@ -1898,21 +1898,30 @@ writable-mount operation or LAN session occurred.
 ## D-011 stopped host-exit framebuffer preflight (2026-10-15, executed offline)
 
 The [validation receipt](../../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
-identifies the final source seal, hashes and full numbered raw logs. A01
+identifies the final A33 source seal, hashes and full numbered raw logs. A01
 preserved a 2/2 behavioral red for un-restorable saved backing. The initial
 scheduler fixture A12 was 2 pass/2 fail; its corrected A18 rerun was 4/4.
-The final 18-block suites passed A19 no-default **1,509/0/3 ignored** and
-A20 release `unicorn,trace,win32-desktop` **2,092/0/9 ignored**. A21/A22
-alternate native feature checks and A23 format/diff check passed.
+A24 then preserved a selected-owner behavioral red (0/1): the stopped boot
+CPU returned ordinary `false` when the selected process no longer matched its
+saved owner. A25 made that control 1/1 green; A26 reran scheduler controls
+4/4. A32 then preserved a monitor red: after recovery refusal, a newly saved
+checkpoint could be restored to clear the hold. A33 made its focused control
+green 1/1 by blocking new checkpoint saves during recovery. The final
+18-block suites passed A34 no-default **1,510/0/3 ignored** and A35 release
+`unicorn,trace,win32-desktop` **2,094/0/9 ignored**. A36/A37 alternate native
+feature checks and A38 format/diff check passed.
 
 The bounded gate validates all exact-birth saved window backings before any
 stopped-exit effect; a malformed, incompatible or missing destination returns
 `HostExitRecoveryRequired` before mutating windows, backing, sends, waits or
 process state. Controls include already-destroyed HWND backing and a later
-failing store after an earlier compatible one. Scheduler controls keep active,
-parked and pending owners for recovery rather than interpreting the error as
-ordinary false or running another slice. The monitor holds later manual
-continue/until/tap until checkpoint restore. Compatible retry succeeds in the
+failing store after an earlier compatible one. A stopped boot CPU whose saved
+owner differs from the selected process returns
+`HostExitAuthorityRecoveryRequired` instead of ordinary `false`. Scheduler
+controls keep active, parked and pending owners for recovery rather than
+running another slice. The monitor holds later manual
+continue/until/tap and blocks new checkpoint saves until an earlier
+checkpoint is restored. Compatible retry succeeds in the
 bounded controls. This does not prove canonical Task/VM retirement after a
 root pseudo signal or whole-exit atomicity after successful preflight. No
 live iNavi run, writable-mount operation or LAN session occurred.

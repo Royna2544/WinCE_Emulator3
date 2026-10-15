@@ -103,7 +103,10 @@ self-PID collision safety; release **2,081/0/9 ignored** and no-default
 canonical Task retirement or whole-exit atomicity. The later bounded
 [D-011 framebuffer gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
 rejects an un-restorable saved backing before stopped-exit effects and
-propagates recovery through tested scheduler paths.
+propagates recovery through tested scheduler paths. It also fails closed when
+the stopped boot CPU's saved owner differs from the selected process. The
+monitor refuses a new checkpoint after recovery is required; only restoring
+an earlier checkpoint clears the hold.
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit
 atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
@@ -301,7 +304,9 @@ close only their named gates, not Stage 2 or live acceptance.
   but not immediate CPU stop. The later bounded
   [D-011 gate](../evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
   checks saved-backing restore feasibility before stopped-exit effects and
-  propagates a typed recovery refusal. Post-preflight whole-exit atomicity,
+  propagates a typed recovery refusal. A selected-owner mismatch on the
+  stopped boot CPU likewise requires typed authority recovery. Post-preflight
+  whole-exit atomicity,
   full exit-effect authority, live-app behavior and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation

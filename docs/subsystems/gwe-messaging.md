@@ -177,12 +177,17 @@ or process effect when a frozen-birth saved image cannot restore to the
 destination. The checks include already-destroyed HWND backing, a later
 failing store after an earlier compatible store, malformed layout and absent
 destination. Tested active, parked and pending process owners retain their
-CPU/launch and stop scheduling on refusal; the interactive monitor requires
-checkpoint recovery before another manual slice or tap. A compatible retry
-can complete the selected bounded exit. The behavioral red was 2/2; after an
-initial scheduler-fixture error, corrected focused controls passed 4/4.
-Final suites passed release **2,092/0/9 ignored** and no-default
-**1,509/0/3 ignored**, with alternate feature/format/diff checks green.
+CPU/launch and stop scheduling on refusal; the interactive monitor blocks
+manual slices, taps and new checkpoints until an earlier checkpoint is
+restored. A stopped boot CPU
+with a mismatched selected owner returns typed authority recovery instead of
+ordinary `false`; the A24 selected-owner red turned green at A25 (1/1).
+A compatible retry can complete the selected bounded exit. The original
+behavioral red was 2/2; after an initial scheduler-fixture error, corrected
+focused controls passed 4/4. A32 exposed a post-refusal checkpoint bypass;
+A33 passed its corrected 1/1 control. Final suites passed release
+**2,094/0/9 ignored** and no-default **1,510/0/3 ignored**, with alternate
+feature/format/diff checks green.
 Post-preflight teardown failures are not proven whole-exit atomic, and a
 root pseudo signal does not prove canonical Task/VM retirement. No live iNavi
 run or CE6 parity result follows.
