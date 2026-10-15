@@ -4,6 +4,23 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 A11 reciprocal Send expected red (test only; no app run)
+
+The first real-MIPS reciprocal S→T→S send control is an intentionally ignored,
+test-only [expected red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.receipt.md).
+It was sealed at HEAD `cc1a6d101991e8c68fdeaed2f8ca8bd8d3be896d` with
+`src/emulator/unicorn.rs` SHA-256
+`4C1BFEEFE60D8F293A5CA8BA887069BE05D0E59EC5E7E854BA0D829162F75194`
+and test-only patch SHA-256
+`64C1BCFDBBB6378BBD5B946E08CF913E850F3BA29656E7FA050C378413E0DDED`.
+The selected test exited 101 at the intended S callback boundary, after real
+MIPS Sleep, S's outer Send, T's GetMessage callback entry and T's inner Send.
+Both exact send IDs and scheduler/native waits remained present, but execution
+stayed on T's saved PC rather than entering S's WNDPROC on S's stack. This is a
+reproduced source-control failure, not a live-app deadlock or a fixture
+precondition failure. No production repair or broad suite followed A11; it
+does not change A10's passed bounded source/test gate or authorize an iNavi run.
+
 ## 2026-10-15 Connected A→B Send/GetMessage bounded source gate (no app run)
 
 The ordinary same-process A→B `SendMessageW` into B's birth-verified blocked
