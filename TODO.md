@@ -16,11 +16,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - The user skipped the sealed a04 run; add real-MIPS finite-Sleep /
-     sent-callout expected reds and migrate that complete Task/Frame family
-     per `docs/subsystems/tasks-scheduler.md`. A non-alertable Sleep cannot
-     host a nested same-thread WNDPROC; do not stage two concurrent Sleeps as
-     a CE-reachable app path.
+   - Test the next CE-reachable continuation boundary after the finite-Sleep
+     TaskFrame source cut: T wakes and sends back to S while S remains blocked
+     sending to T. Preserve exact-birth native provenance, stack and one-return
+     assertions; also cover post-wake MsgWait/sent processing. Do not treat a
+     source-inferred reciprocal deadlock risk as a reproduced failure.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
@@ -78,8 +78,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   independently check its chat citation; make and SHA-verify a new complete
   adjacent triplet after that approval. Keep the writable folders quiescent,
   validate the post-backup inventory and current mount content, then use only
-  the preserved sealed EXE/PDB in one bounded run.
-  The current [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+  the newly source/build-sealed EXE/PDB approved for that one bounded run.
+  The historical [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
   [full patch](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch),
   [script-only build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
   and [offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)

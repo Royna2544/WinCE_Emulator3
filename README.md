@@ -25,6 +25,19 @@ remote-control HTTP/WebSocket surface.
   source-gated the initial heap/stack fixed slabs; O-M2 then made the fixed
   process heap birth-qualified and removed copied spillover. Full Stage 2/live
   acceptance remains open. Persistent-owner architecture is deferred to Stage 8.
+- The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
+  is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
+  while its receiver sleeps, then deliver through `GetMessageW`,
+  `PeekMessageW(PM_REMOVE)` or `GetMessageWNoWait` and return the WNDPROC result
+  to the sender. Focused finite-Sleep **17/17**, native same-process **4/4** and
+  stale-HWND **1/1** passed. Its 18-block full suites passed release
+  **2,025/0/9 ignored** and no-default **1,472/0/3 ignored**; Unicorn-only
+  and desktop/no-trace checks, release build and post-build source hashes also
+  passed. The initial **1,032/2/6 ignored** release attempt was diagnostic:
+  obsolete hidden-message fixtures were repaired and the source was resealed.
+  Reciprocal cross-Send and post-wake MsgWait remain untested. The user skipped
+  the a04 live run; no new mount backup or iNavi run follows from this source
+  gate, and full Stage 3 remains open.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
@@ -62,7 +75,7 @@ remote-control HTTP/WebSocket surface.
   focused **1/0**, with the fence and wait filters rerun **2/0** and **5/0**
   on its rebuilt binary
   ([receipt](evidence/e28-run-outcome-20261014/private-ready-get-message-slab-focused-green.receipt.md)).
-  The [current-source broad gate](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
+  The [E-28-source broad gate](evidence/e28-run-outcome-20261014/final-current-source-validation.receipt.md)
   passes release **1,691/0/16 ignored** and no-feature **1,263/0/14 ignored**,
   plus both Unicorn no-trace checks and format/diff checks. No live iNavi
   validation is claimed for that source.

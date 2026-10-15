@@ -4,6 +4,32 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 TaskFrame finite-Sleep scheduler source cut (no app run)
+
+The first machine-owned finite-Sleep `TaskFrameRef` source cut is resealed at
+HEAD `6626e74d`. `ThreadRecord` owns its mutable frame phase; scheduler waits
+and native register payloads carry exact-birth/frame locators. A sleeping
+receiver's same-process sent message stays queued until real guest retrieval:
+real-MIPS `GetMessageW`, `PeekMessageW(PM_REMOVE)` and `GetMessageWNoWait`
+controls enter WNDPROC and return its `0x77` result to the blocked sender.
+Pre-deadline idle reports `NoAttempt` instead of replaying S's send. Focused
+controls passed finite-Sleep **17/17**, native same-process **4/4** and native
+stale-HWND **1/1**; KData activation failures cancel only the new frame/wait,
+and an old birth-owned HWND cannot borrow a replacement TID's frame.
+
+The first release attempt was diagnostic (**1,032/2/6 ignored**): two hidden-
+message fixtures lacked authentic saved-context births; they were repaired
+without relaxing the production guard, then source was resealed. On the
+resealed HEAD, full release passed **2,025/0/9 ignored** and no-default
+**1,472/0/3 ignored** across 18 result blocks each. Unicorn-only and
+Unicorn+desktop/no-trace checks, the release build, format/diff checks and
+post-build source-hash verification passed
+([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)).
+This is a source/test gate, not full Stage 3 or a live-app result. Reciprocal
+cross-Send after receiver wake and post-wake MsgWait remain untested; neither
+is a reproduced failure. The user skipped the a04 run; no new adjacent mount
+backup or iNavi launch followed this scheduler cut.
+
 ## 2026-10-15 Architecture and measurement design refresh (no source/run)
 
 The common [Stage 7 plan](docs/PLAN.md) now requires reviewed, device- and
@@ -93,6 +119,12 @@ source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show d4263dde:PROGRESS.md`.
 
+- TaskFrame finite-Sleep scheduler source cut
+  ([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)):
+  resealed HEAD `6626e74d` passed release **2,025/0/9 ignored** and
+  no-feature **1,472/0/3 ignored** across 18 blocks each. Focused controls,
+  the superseded diagnostic run and remaining boundaries are recorded above;
+  this is not full Stage 3 or live-app acceptance.
 - W-B1c mixed remote key/touch admission order
   ([receipt](evidence/stage3-mixed-input-order-20261015/validation.receipt.md)):
   the preserved expected red showed an earlier A-focused key reaching B after
