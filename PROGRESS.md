@@ -116,112 +116,42 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
-- Bounded decoded direct-kernel pseudo self-exit source/test gate
-  ([focused receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md),
-  [broad validation](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)):
-  a decoded PC-zero snapshot or static exit-shaped bytes cannot retire a
-  process. The stopped native attempt must witness the live canonical JALR,
-  its delay slot, exact caller/owner births and stop state before the shared
-  post-owner finalizer applies D-011 preflight and Task/VM retirement. The
-  deferred-child path no longer infers completion from a static snapshot;
-  forged RA, stale target, missing authority, incompatible backing and false
-  child-return controls fail closed. Final 18-block suites passed release
-  **2,107/0/9 ignored** and no-default **1,511/0/3 ignored**; final-source
-  Global focused 16/16 and Sparse positive 1/1 passed. In Hookless/Sparse,
-  new same-slice callsites without an installed exact hook fail closed. Raw
-  direct pseudo compatibility, post-preflight whole-exit atomicity, full
-  Stage 3 and live iNavi remain open.
-  No live run or writable-mount action was made.
-- Bounded native COREDLL pseudo self-exit source/test gate
+- Decoded direct-kernel pseudo self-exit
+  ([receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md),
+  [broad](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)):
+  only a witnessed live JALR, its delay slot and exact caller/owner births
+  reach the shared D-011 finalizer, and forged or stale paths fail closed.
+  2,107/0/9 and 1,511/0/3. Raw direct pseudo exit stays fixture-only.
+- Native COREDLL pseudo self-exit
   ([receipt](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)):
-  the verified current-process pseudo-handle import stops MIPS before the next
-  guest instruction without mutating Kernel state in the hook. After native
-  owner closure, exact caller and child-launch or boot witnesses gate D-011
-  framebuffer preflight, canonical Task/VM retirement, wake publication and
-  CPU sealing. The root control retires its primary, worker and heap metadata;
-  a prior requested exit code takes precedence. Incompatible saved pixels or
-  unpreflighted modal backing refuse completion with typed recovery, and the
-  stopped owner cannot bypass that hold through another native attempt. Final
-  18-block suites passed release **2,096/0/9 ignored** and no-default
-  **1,510/0/3 ignored**; Unicorn-only and desktop-without-trace release
-  checks, format and diff checks passed. At this earlier seal, raw/decoded
-  pseudo exits remained synchronous compatibility paths; modal restoration,
-  post-preflight whole-exit atomicity and live iNavi/CE6 acceptance are open.
-  No live run or writable-mount action was made.
-- Bounded D-011 stopped host-exit framebuffer preflight/recovery source/test
-  gate ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
-  an exact-birth exit now validates every saved window backing against the
-  destination before changing windows, backing, sends, waits or process state.
-  A malformed/mismatched backing or missing destination returns a typed
-  recovery error; the stopped active, parked or pending CPU/launch remains
-  owned, and the live/monitor paths do not run another slice through that
-  refusal. A mismatched selected owner of the stopped boot CPU likewise
-  returns typed authority recovery instead of ordinary `false`. The original
-  behavioral red was 2/2; a later selected-owner red was 0/1 and turned
-  green 1/1, and corrected focused scheduler controls passed 4/4. A later
-  monitor red showed that saving a checkpoint after refusal could bypass its
-  hold; the corrected focused control passed 1/1. The monitor now blocks new
-  checkpoints after refusal and clears the hold only by restoring an earlier
-  checkpoint. Final 18-block suites passed release **2,094/0/9 ignored** and
-  no-default **1,510/0/3 ignored**; alternate feature, format and diff checks
-  passed.
-  At this earlier D-011 seal, canonical Task/VM retirement after a root pseudo
-  signal and atomicity of later exit effects were not proven; the later native
-  gate above bounds one import path, not every pseudo route or later failure.
-  No live iNavi run was made.
-- Bounded guest pseudo-exit caller-birth source/test gate
+  the import stops MIPS without Kernel mutation in the hook; after owner
+  close, exact witnesses gate D-011 preflight, Task/VM retirement and CPU
+  sealing. 2,096/0/9 and 1,510/0/3.
+- D-011 stopped host-exit framebuffer preflight
+  ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
+  every saved backing is validated before any exit mutation. A failure returns
+  typed recovery, holds the stopped CPU and blocks new checkpoints until a
+  restore. 2,094/0/9 and 1,510/0/3.
+- Guest pseudo-exit caller birth
   ([receipt](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)):
-  native COREDLL and decoded self-exit now require the captured live caller
-  birth and exact process lease before guest-ingress effects. Decoded self-PID
-  is classified before public-handle lookup. Preserved behavioral reds turned
-  green; focused positive/negative controls passed on the final sealed source.
-  The 18-block suites passed release **2,081/0/9 ignored** and no-default
-  **1,502/0/3 ignored**, with two alternate native feature checks green. The
-  tiny-MIPS negative missing-birth case is refused before guest entry;
-  immediate CPU stop, Task retirement and root return-stub caller authority
-  remained open; D-011 framebuffer refusal is covered only by the later
-  bounded gate above. No live iNavi run was made.
-- Bounded host-exit exact-window-set source/test gate
+  native and decoded self-exit require the live caller birth and exact
+  process lease. 2,081/0/9 and 1,502/0/3.
+- Host-exit exact window set
   ([receipt](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)):
-  GWES now retires only live windows selected by frozen process birth on
-  stopped host exit, without recursively claiming a foreign parent/owner
-  link. Kernel uses the retired set for payload, shell and timer cleanup and
-  wakes an exact A→B SendReply waiter when B's receiver window is retired.
-  Preserved parent/owner and send-wake reds turned green; same-birth child,
-  owned-popup, backing, shell and timer controls passed. Final 18-block
-  suites passed release **2,072/0/9 ignored** and no-default **1,500/0/3
-  ignored**; two alternate native feature checks passed. Guest
-  `DestroyWindow` recursion is unchanged. The synthetic foreign links do
-  not establish CE6 topology; pseudo-exit caller authority was bounded by
-  the later gate above, while whole-exit atomicity, full Stage 3 and live
-  iNavi remain open.
-- Bounded sender-ownership source/test gate
+  only birth-selected live windows retire, without following foreign
+  parent/owner links; an exact A->B SendReply waiter is woken.
+  2,072/0/9 and 1,500/0/3. Guest `DestroyWindow` recursion is unchanged.
+- Sender ownership
   ([receipt](evidence/stage3-sender-birth-20261015/validation.receipt.md)):
-  authenticated sender birth now owns the tested queued Send/Timeout through
-  publication, exact process/thread exit cleanup, and native wait/result
-  re-entry. Identified guest no-wait producers reject stale callers before
-  side effects. The original three red controls are enabled. Final 18-group
-  suites passed release **2,067/0/9 ignored** and no-default **1,495/0/3
-  ignored**. Direct WndProc paths, receiver-side cross-process writes,
-  conditional system-origin device notifications, and (at that earlier
-  seal) foreign GWE recursion remained open. CE6 parity, full Stage 3 and
-  live iNavi remain open.
-- Bounded host-exit independent-window PID-reuse source/test gate
+  the authenticated sender birth owns queued Send/Timeout through publication,
+  exit cleanup and native re-entry. 2,067/0/9 and 1,495/0/3.
+- Host-exit independent-window PID reuse
   ([receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
-  verified process-exit birth selects live windows and captured backing stores
-  by each window's frozen creation birth, not a recycled numeric PID. A
-  current-process pseudo-exit with no canonical birth now fails closed before
-  window teardown, exit signaling or waiter wakes. The prior-birth A window
-  and backing survive later-birth B's exit in the enabled normal control;
-  the synthetic decoded-exit and shell fixtures now register canonical
-  process births, while process-sweep creates birth-checked windows. Final
-  18-group broad suites passed release
-  **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**. The expected
-  red and superseded broad failures remain in the receipt. Recursive GWE
-  traversal of foreign parent/owner links and numeric sent-message sender
-  cleanup were not birth-filtered at this earlier host-exit seal; the later
-  sender gate narrows the latter. This is not full host teardown, Stage 3,
-  CE6 parity or a live iNavi run.
+  window and backing selection uses frozen creation birth, not a recycled
+  PID, and no-birth pseudo exit fails closed. 2,055/0/9 and 1,485/0/3.
+- Common open edges for these exit gates: whole-exit atomicity after
+  preflight, modal restoration, CE6 parity, full Stage 3 and live iNavi. The
+  full per-gate text is at `git show e75df3ec:PROGRESS.md`.
 - A13 same-birth orphaned `GetMessageW` source/test gate
   ([receipt](evidence/scheduler-source-cut-a13/validation.final.receipt.md)):
   the test-only expected red is preserved; saved-context recovery now leaves a
