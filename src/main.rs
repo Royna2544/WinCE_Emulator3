@@ -4371,6 +4371,7 @@ fn ce_module_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read as _;
     use wince_emulation_v3::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
 
     fn kernel_with_committed_private_slab() -> CeKernel {
@@ -4393,6 +4394,77 @@ mod tests {
         assert_ne!(kernel.memory.commit_prepared_private_vm(prepared), None);
         assert!(kernel.memory.has_stable_private_slabs());
         kernel
+    }
+
+    #[test]
+    fn remote_summary_publishes_stable_page_budget_and_freshness_identity() {
+        let kernel = kernel_with_committed_private_slab();
+        let expected_used = kernel.memory.private_commit_used_bytes();
+        assert_eq!(expected_used, 4096);
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().expect("loopback address"),
+            ..RemoteServerConfig::default()
+        })
+        .expect("loopback remote server starts");
+        let framebuffer = VirtualFramebuffer::default();
+
+        publish_remote_endpoint(Some(&server), None, &kernel, &framebuffer, None, false);
+
+        let fetch_summary = || {
+            let mut stream =
+                std::net::TcpStream::connect_timeout(&server.local_addr(), Duration::from_secs(1))
+                    .expect("connect to loopback remote server");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set summary read timeout");
+            stream
+                .write_all(b"GET /api/v1/debug/summary.txt HTTP/1.1\r\nHost: local\r\n\r\n")
+                .expect("request summary");
+            let mut response = String::new();
+            stream
+                .read_to_string(&mut response)
+                .expect("read summary response");
+            assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+            response
+                .split_once("\r\n\r\n")
+                .expect("HTTP response has a body")
+                .1
+                .to_owned()
+        };
+        let first = fetch_summary();
+        let repeated = fetch_summary();
+        assert_eq!(repeated, first, "a GET must not mint a new publication");
+
+        let field = |name: &str| -> &str {
+            first
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix(": "))
+                .unwrap_or_else(|| panic!("summary is missing {name}: {first}"))
+        };
+        assert_eq!(
+            field("live_guest_stable_page_budget_used_bytes")
+                .parse::<u64>()
+                .expect("stable-page budget is numeric"),
+            expected_used
+        );
+        assert!(
+            field("publication_sequence")
+                .parse::<u64>()
+                .expect("publication sequence is numeric")
+                > 0
+        );
+        assert!(
+            field("publication_host_monotonic_ns")
+                .parse::<u128>()
+                .expect("publication monotonic timestamp is numeric")
+                > 0
+        );
+        assert!(
+            field("publication_utc_unix_ms")
+                .parse::<u64>()
+                .expect("publication UTC milliseconds are numeric")
+                > 0
+        );
     }
 
     #[test]
