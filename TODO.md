@@ -16,16 +16,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - W-B1b remote touch/key target-birth validation before focus/input
-     mutation, explicit stale-target drop without rerouting, and coordinate-only
-     live delivery. W-B1a window creation, explicit HWND post and typed-payload
-     ownership is source-gated ([receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)).
-   - Separate mixed touch/key ordering gate immediately after W-B1b: first
-     execute an expected red that enqueues a key while A is focused, then a
+   - After the bounded W-B1b remote-input
+     [source gate](evidence/stage3-window-input-birth-20261015/validation.receipt.md),
+     gate mixed touch/key ordering separately. First execute an expected red
+     that enqueues a key while A is focused, then a
      DOWN on B that changes focus, and asserts the key reaches A. Only then
-     replace `remote.rs`'s separate drains with one sequenced host input queue.
-   - Owner-filtered host teardown, broadcast, HWND-owned timers, hotkeys,
-     sent/paint/modal and other numeric GWE producers need separate gates.
+     replace `src/ce/remote.rs`'s separate drains with one sequenced host input queue.
+   - Owner-filtered host teardown, full exit capture retirement and implicit
+     gesture ownership need separate gates; so do broadcast, HWND-owned
+     timers, hotkeys, sent/paint/modal and other numeric GWE producers.
    - Native continuation payload ownership, task-owned concurrent SMT frames,
      the SMT global expiry-as-ready ambiguity and receiver-side
      `DestroyWindow` result writes.

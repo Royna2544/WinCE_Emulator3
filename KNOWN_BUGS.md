@@ -78,12 +78,18 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     [GWE receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md),
     [timer receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md),
     [window receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)).
-    Broadcast, HWND-owned timers, hotkeys, sent/paint/modal producers, remote
-    input and host teardown remain outside W-B1a; their reuse isolation is
-    unproved.
+    W-B1b separately source-gates bounded remote touch/key target birth
+    ([input receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md)).
+    Broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other input
+    producers, full exit capture retirement, implicit gesture ownership and
+    host teardown remain outside these gates; their reuse isolation is unproved.
   - Remote input drains touches before keys without a shared sequence: a key
     queued before a focus-changing tap may reach the new focus owner. Mixed
     touch/key ordering is a separate gate after W-B1b.
+  - W-B1b removed hidden/off-point hint delivery and retention of input with
+    no live target. Earlier E-38 and callback-drive live tap-delivery evidence
+    predates this routing; the next approved live run must verify that taps
+    still reach the intended iNavi window.
   - Opaque non-task wait slots (queue, socket, serial tokens) and duplicated
     native wait payloads are unpinned despite exact-birth publication. Wait-ID
     wrap/reuse and live modal continuation behavior remain unproved.

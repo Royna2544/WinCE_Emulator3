@@ -12,6 +12,19 @@ first. Totals are passed/failed/ignored for release
 HEAD and patch, raw logs and EXE/PDB hashes. The per-slice text before this
 condense is at `git show d4263dde:PROGRESS.md`.
 
+- W-B1b remote touch/key window-owner birth
+  ([receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md)):
+  stale explicit host HWNDs consume/drop input before focus, queue/status,
+  timestamp, post-trace or wake effects; guest Get/Peek HWNDs remain retrieval
+  filters. Coordinate-only touch uses live capture/delivery-time hit-test;
+  keys use live focus/active ownership. Focused controls passed 27/27. The
+  earlier a33 release and a34 no-default suites failed on an obsolete hidden
+  integration fixture; a35 repaired that fixture and a36/a37 focused reruns
+  passed before the fresh a38 source seal. Sealed a38 release passed
+  1,988/0/9 and a39 no-feature 1,448/0/3 across 18 blocks each; a40/a41
+  alternate-feature checks passed. Patch SHA-256 is `ED7A3B48…962D40`.
+  Mixed touch/key ordering, full exit capture retirement, implicit gesture
+  ownership, host teardown, other producers and live iNavi remain open.
 - W-B1a window-owner birth
   ([receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)):
   windows retain one frozen creation owner; native creation ordinals 246/688/690
