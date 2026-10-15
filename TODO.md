@@ -31,15 +31,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Complete host teardown beyond the source-tested independent-window/backing
-     PID-reuse selection and the no-birth pseudo-exit fence
-     ([bounded gate receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
-     recursive foreign parent/owner links still lack birth proof. The later
-     [sender-ownership gate](evidence/stage3-sender-birth-20261015/validation.receipt.md)
-     covers tested queued sends, not direct WndProc paths, receiver-side
-     cross-process result writes or conditional system-origin device-change
-     broadcasts. Full exit capture retirement and implicit gesture ownership
-     need separate gates; so do HWND-owned timers, hotkeys, sent/paint/modal
+   - Complete exit-effect authority beyond exact-birth window/backing selection,
+     sender cleanup and the bounded
+     [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md):
+     capture the pseudo-exit's guest caller authority, preflight or recover
+     fallible whole-exit effects, and settle foreign-link topology under O-G4.
+     Direct WndProc paths, receiver-side cross-process result writes and
+     conditional system-origin device-change broadcasts remain separate.
+     Full exit capture retirement and implicit gesture ownership need their
+     own gates; so do HWND-timer producer ownership, hotkeys, sent/paint/modal
      and other numeric GWE producers.
    - Cross-process parked-sender restore, reciprocal shapes beyond A12's exact
      two-send case, legacy numeric-only HWNDs, post-wake MsgWait/sent
