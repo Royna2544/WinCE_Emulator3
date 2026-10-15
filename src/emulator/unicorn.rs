@@ -80957,13 +80957,6 @@ mod unicorn_tests {
                 live_pump: false,
             },
         );
-        eprintln!(
-            "DECODED_POSITIVE native={:?} raw_stop={:?} fault={:?}",
-            attempt.report.native_result(),
-            attempt.report.raw_stop_pc(),
-            cpu.last_debug_snapshot()
-                .and_then(|snapshot| snapshot.memory_fault.as_ref())
-        );
         attempt.result?;
         assert_eq!(
             attempt.report.final_outcome(),
@@ -81138,13 +81131,6 @@ mod unicorn_tests {
                 live_pump: false,
             },
         );
-        eprintln!(
-            "FORGED_RA native={:?} raw_stop={:?} fault={:?}",
-            attempt.report.native_result(),
-            attempt.report.raw_stop_pc(),
-            cpu.last_debug_snapshot()
-                .and_then(|snapshot| snapshot.memory_fault.as_ref())
-        );
         assert!(attempt.result.is_err(), "forged RA must not authorize exit");
         assert!(!cpu.active_process_execution_completed());
         assert!(matches!(
@@ -81261,6 +81247,7 @@ mod unicorn_tests {
             kernel.process_exit_code(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(!kernel.recent_process_ops().iter().any(|record| {
             record.op == "CreateProcessChildReturned"
                 && record.process_id == Some(launch.process_id)
