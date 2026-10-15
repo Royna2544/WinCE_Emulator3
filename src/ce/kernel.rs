@@ -3323,6 +3323,14 @@ impl CeKernel {
         std::mem::take(&mut self.pending_process_launches)
     }
 
+    /// Return unprocessed, already-published launches to the front after a
+    /// recoverable stopped-exit refusal. Their original birth witnesses stay
+    /// intact and later launches retain their relative order.
+    pub fn restore_pending_process_launches(&mut self, mut launches: Vec<PendingProcessLaunch>) {
+        launches.append(&mut self.pending_process_launches);
+        self.pending_process_launches = launches;
+    }
+
     pub fn mark_process_launch_exited(
         &mut self,
         launch: &PendingProcessLaunch,
@@ -3337,19 +3345,32 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
+        self.try_mark_process_launch_exited_with_framebuffer(launch, exit_code, framebuffer)
+            .unwrap_or(false)
+    }
+
+    /// Complete one stopped, exact-birth process only after every saved
+    /// window image can be restored to the current framebuffer. A recovery
+    /// error leaves the process and all its exit effects untouched.
+    pub fn try_mark_process_launch_exited_with_framebuffer(
+        &mut self,
+        launch: &PendingProcessLaunch,
+        exit_code: u32,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<bool> {
         // An original launch retains its exact birth even after both public
         // aliases close. Reject a delayed completion after PID/TID reuse
         // before it can touch windows, VM, or another process's workers.
         // A reconstructed launch without this witness cannot authorize any
         // cleanup, even its old primary-only path: its PID may have been reused.
         let Some(launch_birth) = launch.process_birth else {
-            return false;
+            return Ok(false);
         };
         let Some(exiting_birth) = self.handles.process_birth_key(launch.process_id) else {
-            return false;
+            return Ok(false);
         };
         if !self.handles.process_execution_live_by_birth(exiting_birth) {
-            return false;
+            return Ok(false);
         }
         if launch_birth != exiting_birth
             || launch.primary_thread_birth.is_some_and(|primary| {
@@ -3360,7 +3381,7 @@ impl CeKernel {
                         != Some(exiting_birth)
             })
         {
-            return false;
+            return Ok(false);
         }
         let exit_code = self
             .handles
@@ -3384,12 +3405,51 @@ impl CeKernel {
         };
         let backing_store_targets =
             self.process_window_backing_store_targets_for_birth(exiting_birth);
-        self.destroy_process_windows_for_birth(exiting_birth, cleanup_thread_id);
-        if let Some(framebuffer) = framebuffer {
-            let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
-        } else {
-            self.discard_window_backing_stores(&backing_store_targets);
+        // Keep one exclusive pixel lease across preflight and commit. The
+        // destination length cannot change between validation and copying,
+        // and no window/send/wait/process mutation precedes this full check.
+        let destination_info = framebuffer.as_ref().map(|target| target.info());
+        let mut destination_pixels = framebuffer.as_mut().map(|target| target.pixels_mut());
+        let mut prepared_restores = Vec::new();
+        for hwnd in backing_store_targets.iter().rev().copied() {
+            let Some(store) = self.window_backing_stores.get(&hwnd) else {
+                continue;
+            };
+            let Some(info) = destination_info else {
+                return Err(Error::HostExitRecoveryRequired {
+                    process_id: exiting_birth.process_id(),
+                    incarnation: exiting_birth.incarnation(),
+                    hwnd: Some(hwnd),
+                    reason: "saved window backing has no destination framebuffer",
+                });
+            };
+            let destination_len = destination_pixels.as_ref().map_or(0, |pixels| pixels.len());
+            let Some(prepared) = store.prepare_restore(info, destination_len) else {
+                return Err(Error::HostExitRecoveryRequired {
+                    process_id: exiting_birth.process_id(),
+                    incarnation: exiting_birth.incarnation(),
+                    hwnd: Some(hwnd),
+                    reason: "saved window backing is incompatible with the destination framebuffer",
+                });
+            };
+            prepared_restores.push(prepared);
         }
+        self.destroy_process_windows_for_birth(exiting_birth, cleanup_thread_id);
+        if let Some(pixels) = destination_pixels.as_deref_mut() {
+            for prepared in &prepared_restores {
+                assert!(
+                    prepared.apply_to(&mut *pixels),
+                    "the held framebuffer lease must match its preflight length"
+                );
+            }
+        }
+        drop(destination_pixels);
+        if let Some(framebuffer) = framebuffer.as_mut() {
+            for prepared in &prepared_restores {
+                framebuffer.mark_dirty(prepared.rect());
+            }
+        }
+        self.discard_window_backing_stores(&backing_store_targets);
         self.release_message_pointer_payloads_for_owner(exiting_birth);
         self.delivered_typed_payload_messages
             .retain(|(birth, _, _), _| *birth != exiting_birth);
@@ -3411,7 +3471,7 @@ impl CeKernel {
             error: None,
             detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
-        completed
+        Ok(completed)
     }
 
     /// Complete one stopped process CPU's canonical Task and VM lifetime.
@@ -8770,10 +8830,13 @@ impl CeKernel {
     ) -> usize {
         let mut restored = 0usize;
         for hwnd in hwnds.iter().rev().copied() {
-            if let Some(backing_store) = self.window_backing_stores.remove(&hwnd) {
-                if backing_store.restore(framebuffer) {
-                    restored = restored.saturating_add(1);
-                }
+            if self
+                .window_backing_stores
+                .get(&hwnd)
+                .is_some_and(|backing_store| backing_store.restore(framebuffer))
+            {
+                self.window_backing_stores.remove(&hwnd);
+                restored = restored.saturating_add(1);
             }
         }
         restored
@@ -14768,6 +14831,305 @@ mod tests {
         kernel.mark_process_launch_exited_with_framebuffer(&launch, 0, Some(&mut framebuffer));
 
         assert_eq!(framebuffer.pixels(), original.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_framebuffer_preflight_rejects_destroyed_and_live_backing_mismatch_before_effects()
+    -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (sender_handle, _) = kernel.create_guest_thread(0x401000, 0, false);
+        let sender = kernel
+            .handles
+            .thread_birth_key_for_handle(sender_handle)
+            .expect("sender birth");
+        let launch = kernel.queue_process_launch(None, None);
+        let owner = launch.process_birth.expect("exiting process birth");
+        let receiver = launch.primary_thread_birth.expect("receiver birth");
+        kernel.set_current_process_id(launch.process_id);
+
+        let mut source = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        for (index, byte) in source.pixels_mut().iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let original = source.snapshot().pixels;
+        let destroyed = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver,
+                "EXIT_BACKING_DEAD",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("destroyed HWND birth");
+        let live = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver,
+                "EXIT_BACKING_LIVE",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(4, 0, 4, 4),
+            )
+            .expect("live HWND birth");
+        assert!(kernel.capture_window_backing_store(destroyed, &source));
+        assert!(kernel.capture_window_backing_store(live, &source));
+        assert!(
+            kernel
+                .gwe
+                .destroy_window(destroyed, kernel.timers.tick_count())
+        );
+        assert!(!kernel.gwe.is_window(destroyed));
+        assert!(kernel.gwe.is_window(live));
+        assert_eq!(
+            kernel.process_window_backing_store_targets_for_birth(owner),
+            vec![destroyed, live],
+            "the dead HWND's backing must still be selected by its frozen birth"
+        );
+
+        kernel.set_current_process_id(1);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w_for_birth(
+                sender,
+                live,
+                crate::ce::gwe::WM_USER + 0xd1,
+                0,
+                0,
+                None,
+            )
+            .expect("queued A-to-B send");
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                sender,
+                sender_handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::SendMessage { send_id },
+                0,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact sender wait");
+        assert!(!kernel.sent_message_result_ready(send_id));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        let backings_before = kernel.window_backing_stores.clone();
+        let scheduler_before = kernel.scheduler_stats();
+        let message_trace_count = kernel.recent_message_ops.len();
+        let process_trace_count = kernel.recent_process_ops.len();
+
+        let mut incompatible = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        incompatible.pixels_mut().fill(0x5a);
+        let pixels_before = incompatible.snapshot().pixels;
+        let dirty_before = incompatible.dirty_rects().to_vec();
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
+
+        assert!(
+            !kernel.mark_process_launch_exited_with_framebuffer(
+                &launch,
+                0x42,
+                Some(&mut incompatible),
+            ),
+            "an incompatible saved backing must stop host exit before mutation"
+        );
+        assert!(matches!(
+            kernel.try_mark_process_launch_exited_with_framebuffer(
+                &launch,
+                0x42,
+                Some(&mut incompatible),
+            ),
+            Err(Error::HostExitRecoveryRequired { process_id, hwnd: Some(_), .. })
+                if process_id == launch.process_id
+        ));
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
+        assert!(kernel.handles.contains_thread_birth(receiver));
+        assert!(kernel.gwe.is_window(live));
+        assert!(!kernel.gwe.is_window(destroyed));
+        assert_eq!(kernel.window_backing_stores, backings_before);
+        assert!(!kernel.sent_message_result_ready(send_id));
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        assert_eq!(kernel.scheduler_stats(), scheduler_before);
+        assert_eq!(kernel.recent_message_ops.len(), message_trace_count);
+        assert_eq!(kernel.recent_process_ops.len(), process_trace_count);
+        assert_eq!(incompatible.pixels(), pixels_before.as_slice());
+        assert_eq!(incompatible.dirty_rects(), dirty_before.as_slice());
+
+        // The refused completion leaves the stopped process recoverable. A
+        // compatible destination can later restore both saved regions and
+        // perform the one authorized exit.
+        source.pixels_mut().fill(0xee);
+        assert!(kernel.mark_process_launch_exited_with_framebuffer(
+            &launch,
+            0x42,
+            Some(&mut source),
+        ));
+        let stride = source.info().stride;
+        for row in 0..4 {
+            let span = row * stride..row * stride + stride;
+            assert_eq!(&source.pixels()[span.clone()], &original[span]);
+        }
+        assert!(!kernel.gwe.is_window(live));
+        assert!(!kernel.window_backing_stores.contains_key(&destroyed));
+        assert!(!kernel.window_backing_stores.contains_key(&live));
+        assert!(kernel.sent_message_result_ready(send_id));
+        assert!(!kernel.handles.process_execution_live_by_birth(owner));
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_framebuffer_preflight_rejects_partial_multiwindow_restore() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(None, None);
+        let owner = launch.process_birth.expect("exiting process birth");
+        let receiver = launch.primary_thread_birth.expect("receiver birth");
+        kernel.set_current_process_id(launch.process_id);
+        let valid = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver,
+                "EXIT_VALID_BACKING",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("valid backing HWND");
+        let invalid = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver,
+                "EXIT_INVALID_BACKING",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(4, 0, 4, 4),
+            )
+            .expect("invalid backing HWND");
+        let mut destination = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        destination.pixels_mut().fill(0x11);
+        let mut wrong_format = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        wrong_format.pixels_mut().fill(0x22);
+        assert!(kernel.capture_window_backing_store(valid, &destination));
+        assert!(kernel.capture_window_backing_store(invalid, &wrong_format));
+        assert_eq!(
+            kernel.process_window_backing_store_targets_for_birth(owner),
+            vec![valid, invalid],
+            "the restorable store must precede the incompatible store"
+        );
+        let backings_before = kernel.window_backing_stores.clone();
+        destination.pixels_mut().fill(0xa5);
+        let pixels_before = destination.snapshot().pixels;
+        let dirty_before = destination.dirty_rects().to_vec();
+        let message_trace_count = kernel.recent_message_ops.len();
+        let process_trace_count = kernel.recent_process_ops.len();
+
+        assert!(
+            !kernel.mark_process_launch_exited_with_framebuffer(
+                &launch,
+                0x43,
+                Some(&mut destination),
+            ),
+            "one incompatible backing must reject the entire multiwindow exit"
+        );
+        assert_eq!(destination.pixels(), pixels_before.as_slice());
+        assert_eq!(destination.dirty_rects(), dirty_before.as_slice());
+        assert_eq!(kernel.window_backing_stores, backings_before);
+        assert!(kernel.gwe.is_window(valid));
+        assert!(kernel.gwe.is_window(invalid));
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
+        assert_eq!(kernel.recent_message_ops.len(), message_trace_count);
+        assert_eq!(kernel.recent_process_ops.len(), process_trace_count);
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_framebuffer_preflight_requires_destination_for_saved_backing() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let launch = kernel.queue_process_launch(None, None);
+        let owner = launch.process_birth.expect("exiting process birth");
+        let receiver = launch.primary_thread_birth.expect("receiver birth");
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver,
+                "EXIT_REQUIRES_FRAMEBUFFER",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("owned window");
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let backing_before = kernel.window_backing_stores[&hwnd].clone();
+
+        assert!(!kernel.mark_process_launch_exited(&launch, 0x44));
+        assert!(matches!(
+            kernel.try_mark_process_launch_exited_with_framebuffer(&launch, 0x44, None),
+            Err(Error::HostExitRecoveryRequired { process_id, hwnd: Some(_), .. })
+                if process_id == launch.process_id
+        ));
+        assert_eq!(
+            kernel.window_backing_stores.get(&hwnd),
+            Some(&backing_before)
+        );
+        assert!(kernel.gwe.is_window(hwnd));
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(launch.process_id),
+            Some(false)
+        );
+
+        assert!(kernel.try_mark_process_launch_exited_with_framebuffer(
+            &launch,
+            0x44,
+            Some(&mut framebuffer),
+        )?);
+        assert!(!kernel.gwe.is_window(hwnd));
+        assert!(!kernel.handles.process_execution_live_by_birth(owner));
         Ok(())
     }
 

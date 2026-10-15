@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::path::Path;
 
 use crate::{Error, Result};
@@ -77,6 +78,38 @@ pub struct FramebufferBackingStore {
     pixels: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreparedFramebufferRestore {
+    rect: FramebufferRect,
+    destination_len: usize,
+    rows: Vec<PreparedFramebufferRestoreRow>,
+    pixels: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedFramebufferRestoreRow {
+    source: Range<usize>,
+    destination: Range<usize>,
+}
+
+impl PreparedFramebufferRestore {
+    pub(crate) fn rect(&self) -> FramebufferRect {
+        self.rect
+    }
+
+    /// A changed destination length refuses the entire plan without copying a row.
+    /// Matching length makes every indexed span infallible: preparation checked them all.
+    pub(crate) fn apply_to(&self, destination: &mut [u8]) -> bool {
+        if destination.len() != self.destination_len {
+            return false;
+        }
+        for row in &self.rows {
+            destination[row.destination.clone()].copy_from_slice(&self.pixels[row.source.clone()]);
+        }
+        true
+    }
+}
+
 impl FramebufferBackingStore {
     pub fn capture(framebuffer: &dyn Framebuffer, rect: FramebufferRect) -> Option<Self> {
         let info = framebuffer.info();
@@ -101,37 +134,74 @@ impl FramebufferBackingStore {
         })
     }
 
-    pub fn restore(&self, framebuffer: &mut dyn Framebuffer) -> bool {
-        let info = framebuffer.info();
-        if info.format != self.info.format {
-            return false;
+    pub(crate) fn prepare_restore(
+        &self,
+        info: FramebufferInfo,
+        destination_len: usize,
+    ) -> Option<PreparedFramebufferRestore> {
+        if info.format != self.info.format || self.rect.is_empty() {
+            return None;
         }
-        let Some(rect) = self.rect.clipped_to(info.width, info.height) else {
+        let right = self.rect.x.checked_add(self.rect.width)?;
+        let bottom = self.rect.y.checked_add(self.rect.height)?;
+        if right > info.width || bottom > info.height {
+            return None;
+        }
+
+        let bytes_per_pixel = info.format.bytes_per_pixel();
+        let full_row_bytes = (info.width as usize).checked_mul(bytes_per_pixel)?;
+        let row_stride = (self.rect.width as usize).checked_mul(bytes_per_pixel)?;
+        let x_bytes = (self.rect.x as usize).checked_mul(bytes_per_pixel)?;
+        let row_end = x_bytes.checked_add(row_stride)?;
+        if info.stride < full_row_bytes || row_end > info.stride || row_stride != self.row_stride {
+            return None;
+        }
+        let height = self.rect.height as usize;
+        let source_len = row_stride.checked_mul(height)?;
+        let full_destination_len = info.stride.checked_mul(info.height as usize)?;
+        if self.pixels.len() != source_len || full_destination_len > destination_len {
+            return None;
+        }
+
+        let mut rows = Vec::new();
+        rows.try_reserve_exact(height).ok()?;
+        for row in 0..height {
+            let source_start = row.checked_mul(row_stride)?;
+            let source_end = source_start.checked_add(row_stride)?;
+            let destination_y = (self.rect.y as usize).checked_add(row)?;
+            let destination_start = destination_y
+                .checked_mul(info.stride)?
+                .checked_add(x_bytes)?;
+            let destination_end = destination_start.checked_add(row_stride)?;
+            if source_end > self.pixels.len() || destination_end > destination_len {
+                return None;
+            }
+            rows.push(PreparedFramebufferRestoreRow {
+                source: source_start..source_end,
+                destination: destination_start..destination_end,
+            });
+        }
+
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(self.pixels.len()).ok()?;
+        pixels.extend_from_slice(&self.pixels);
+        Some(PreparedFramebufferRestore {
+            rect: self.rect,
+            destination_len,
+            rows,
+            pixels,
+        })
+    }
+
+    pub fn restore(&self, framebuffer: &mut dyn Framebuffer) -> bool {
+        let Some(prepared) = self.prepare_restore(framebuffer.info(), framebuffer.pixels().len())
+        else {
             return false;
         };
-        if rect != self.rect {
+        if !prepared.apply_to(framebuffer.pixels_mut()) {
             return false;
         }
-        let bytes_per_pixel = info.format.bytes_per_pixel();
-        let row_stride = rect.width as usize * bytes_per_pixel;
-        if row_stride != self.row_stride {
-            return false;
-        }
-        let height = rect.height as usize;
-        if self.pixels.len() < row_stride * height {
-            return false;
-        }
-        let framebuffer_pixels = framebuffer.pixels_mut();
-        for row in 0..height {
-            let y = rect.y as usize + row;
-            let dst_start = y * info.stride + rect.x as usize * bytes_per_pixel;
-            let dst_end = dst_start + row_stride;
-            let src_start = row * self.row_stride;
-            let src_end = src_start + row_stride;
-            framebuffer_pixels[dst_start..dst_end]
-                .copy_from_slice(&self.pixels[src_start..src_end]);
-        }
-        framebuffer.mark_dirty(rect);
+        framebuffer.mark_dirty(prepared.rect());
         true
     }
 
@@ -364,5 +434,88 @@ mod tests {
         let err = VirtualFramebuffer::with_stride(10, 8, 9, PixelFormat::Rgb565).unwrap_err();
 
         assert!(err.to_string().contains("stride"));
+    }
+
+    #[test]
+    fn backing_restore_rejects_short_stride_or_pixels_before_copying_any_row() {
+        let mut source = VirtualFramebuffer::new(4, 2, PixelFormat::Gray8).unwrap();
+        source
+            .pixels_mut()
+            .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        let backing = FramebufferBackingStore::capture(&source, FramebufferRect::full(4, 2))
+            .expect("valid backing");
+        let mut destination = VirtualFramebuffer::new(4, 2, PixelFormat::Gray8).unwrap();
+        destination.pixels_mut().fill(0xaa);
+        let _ = destination.take_dirty_rects();
+
+        destination.info.stride = 3;
+        assert!(
+            backing
+                .prepare_restore(destination.info(), destination.pixels().len())
+                .is_none()
+        );
+        assert!(!backing.restore(&mut destination));
+        assert_eq!(destination.pixels(), &[0xaa; 8]);
+        assert!(destination.dirty_rects().is_empty());
+
+        destination.info.stride = 4;
+        destination.pixels.truncate(7);
+        assert!(
+            backing
+                .prepare_restore(destination.info(), destination.pixels().len())
+                .is_none()
+        );
+        assert!(!backing.restore(&mut destination));
+        assert_eq!(destination.pixels(), &[0xaa; 7]);
+        assert!(destination.dirty_rects().is_empty());
+    }
+
+    #[test]
+    fn prepared_restore_owns_source_and_rejects_changed_destination_length() {
+        let mut source = VirtualFramebuffer::new(4, 3, PixelFormat::Gray8).unwrap();
+        source
+            .pixels_mut()
+            .copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        let rect = FramebufferRect::new(1, 1, 2, 2);
+        let mut backing = FramebufferBackingStore::capture(&source, rect).expect("valid backing");
+        let prepared = backing
+            .prepare_restore(source.info(), source.pixels().len())
+            .expect("valid restore plan");
+        assert_eq!(prepared.rect(), rect);
+
+        backing.pixels.fill(0);
+        let mut short_destination = [0xaa; 11];
+        assert!(!prepared.apply_to(&mut short_destination));
+        assert_eq!(short_destination, [0xaa; 11]);
+
+        let mut destination = [0xaa; 12];
+        assert!(prepared.apply_to(&mut destination));
+        assert_eq!(
+            destination,
+            [0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 6, 7, 0xaa, 0xaa, 10, 11, 0xaa]
+        );
+    }
+
+    #[test]
+    fn backing_restore_rejects_malformed_source_and_overflowed_layout() {
+        let mut source = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565).unwrap();
+        source.pixels_mut().fill(0x33);
+        let mut backing = FramebufferBackingStore::capture(&source, FramebufferRect::full(2, 2))
+            .expect("valid backing");
+        let info = source.info();
+        let len = source.pixels().len();
+
+        backing.pixels.pop();
+        assert!(backing.prepare_restore(info, len).is_none());
+        backing.pixels.push(0x33);
+        backing.row_stride = 2;
+        assert!(backing.prepare_restore(info, len).is_none());
+        backing.row_stride = 4;
+
+        let overflowing = FramebufferInfo {
+            stride: usize::MAX,
+            ..info
+        };
+        assert!(backing.prepare_restore(overflowing, len).is_none());
     }
 }
