@@ -1721,7 +1721,7 @@ The [a02 source/build receipt](../../evidence/stage3-live-evidence-20261015/prel
 records the per-file/binary hashes, actual-ledger and synthetic-bridge checks,
 and the remaining prelaunch conditions together.
 
-The later runner candidate closes the observed post-spawn/pre-descriptor
+The later a04 runner candidate closes the observed post-spawn/pre-descriptor
 containment gap with an independent `WatchdogWorker`. The driver starts and
 identity/heartbeat-checks that worker before publishing `launch-request.json`.
 After the monitor records the post-mount-scan marker, the watchdog has a
@@ -1730,14 +1730,32 @@ stalls. It probes exact-app RSS and combined raw logs at two-second intervals,
 attempts exact monitor/app cleanup on deadline or worker error, and leaves the
 existing detached monitor's 390-second guard intact. The driver's missing-
 descriptor finalizer also performs exact cleanup while the monitor is alive;
-an unconfirmed cleanup leaves the independent watchdog active. No broad
-process-name kill is used. Offline candidate controls reached **123/123
-preflight, 66/66 runner, 14/14 backup, 9/9 observer**, plus atomic overwrite
-greens. A small exact-path matching correction still awaits final recheck and
-the a03 source/build seal. Claude's read-only review of the watchdog candidate
-identified no concrete launch blocker, but is not live dead-driver
-integration proof or permission to run. There has been no second real backup,
-runner reservation, guest launch or guest write from this workflow.
+an unconfirmed cleanup leaves the independent watchdog active. An atomic
+`launch-began.json` marker is flushed after reservation and before
+`Start-Process`. If it exists, an empty WMI search is not proof that no app
+spawned: the watchdog retains the unresolved attempt and repeats exact cleanup
+sweeps. A confirmed no-spawn requires the exact monitor stopped, marker and
+process descriptors absent, and no spent ledger row. No broad process-name
+kill is used. Independent containment assumes the D: evidence/mount volume
+makes I/O progress; while the whole volume is stalled, guest writes to these
+original mounts stall too.
+
+The current [a04 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json)
+is SHA-256 `C495AB5324BABB1DCF252B8DCCB6A0B5EC4A58C3D04632E3728D39C6AFFA376C`,
+the [full W-B1c-scoped patch](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch)
+is SHA-256 `B9FBE5F1DA42453BE8213D2FD45B4553126B62F9641A2003FEB4D2FC26C35CCB`,
+and the [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+is SHA-256 `3C84522E0D5DF2B6B0BA7BFD8DA8BB14747E4270BDB93BBA61C058D0F2B1ACFE`.
+The [offline gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
+is SHA-256 `759017B61C36897C0FDCE658003AED41E450B0B573894245B2F496DDBE3627BD`:
+**123/123 preflight, 73/73 runner, 14/14 backup, 9/9 summary** and D:
+atomic JSON overwrite passed. A01, a02 and intermediate a03 are historical,
+not live-usable. Rust/Cargo source and the preserved EXE/PDB remain unchanged;
+the bridge is not a new Rust build, live containment test or app result.
+Claude's read-only and peer reviews found no concrete source blocker, but did
+not prove a live dead-driver integration path or grant a new one-run approval.
+There has been no second real backup, runner reservation, guest launch or
+guest write from this workflow.
 
 ## Chat-project validation notes (not in this repository)
 

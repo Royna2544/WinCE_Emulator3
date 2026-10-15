@@ -6,12 +6,15 @@ backup or launch the runner/guest. The pre-watchdog scripts had a
 [22-file a02 seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
 and [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json);
 the earlier [21-file preparation gate](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-is historical, not the current script identity. A02 and interim a01 are
-superseded and not live-usable after the independent watchdog source change.
-The new candidate awaits final offline recheck and an a03 source/build seal.
-Claude's read-only review found no concrete launch blocker, but is not a live
-dead-driver integration test or run approval. Neither gate establishes full
-CE6 bring-up.
+is historical, not the current script identity. A01, a02 and intermediate a03
+are superseded and not live-usable. The current [a04 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+[full patch](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch),
+[script-only bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+and [offline gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
+bind the independent watchdog candidate to the unchanged clean-built EXE/PDB.
+Claude's read-only and peer reviews found no concrete source blocker, but are
+not a live dead-driver integration test or run approval. Neither gate
+establishes full CE6 bring-up.
 
 The [common anchor](../ARCHITECTURE.md) A1, A5 and A6 owns guest authority,
 time and evidence semantics; the [migration plan](../PLAN.md) owns runtime
@@ -33,7 +36,8 @@ a02 source-only gate, its seal enumerated 22 required source files and a
 full W-B1c-scoped patch; the preserved release EXE and PDB share an RSDS
 GUID+age and are outside disposable `target/`. The bridge binds the repaired
 scripts to that unchanged [clean-built binary](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-clean-build-receipt.md);
-it is **not** a new Rust build. The old 21-file seal remains historical.
+it is **not** a new Rust build. The a04 bridge supersedes a02's script
+identity; the old 21-file seal remains historical.
 The test-pass flags and patch identity in the build receipt are reviewed
 attestations tied to preserved receipts, **not** cryptographic proof that the
 runner executed those tests. An old EXE, a same-named PDB, a Git HEAD alone,
@@ -173,13 +177,20 @@ heartbeats and exact identities. Once `Start-Process` returns, the monitor
 holds the process object; a throwing post-spawn identity/spend/descriptor
 commit closes it before propagating the error. It writes a pre-spend
 `spawned-process.json` and then an active `process.json` after the spent
-append. The driver's no-descriptor finalizer now attempts exact pre-descriptor
-cleanup even if the monitor is still alive, leaving the independent watchdog
-active when that cleanup cannot be confirmed. The earlier driver/monitor-only
-post-spawn gap is therefore addressed in source and offline controls, not yet
-in a live dead-driver integration run. Simultaneous loss of all containment
-workers, or an operating-system failure preventing them from running, remains
-a residual risk.
+append. Before calling `Start-Process`, the monitor atomically publishes
+`launch-began.json` after reservation. With the exact monitor stopped, absence
+of the launch marker, process descriptors and spent row supports a no-spawn
+proof;
+an empty WMI search **after** the marker cannot prove app absence. In that
+unresolved case the watchdog stays active and repeats exact sweeps under the
+same approval instead of recording success. The driver's no-descriptor
+finalizer attempts exact pre-descriptor cleanup even if the monitor is still
+alive, and retains the independent watchdog when cleanup cannot be confirmed.
+The earlier driver/monitor-only post-spawn gap is addressed in source and
+offline controls, not yet in a live dead-driver integration run. Independent
+containment assumes the D: evidence/mount volume makes I/O progress; while
+the whole volume is stalled, guest writes to these original mounts stall too.
+Simultaneous loss of all containment workers remains a residual risk.
 
 ## Observation and terminal evidence
 
