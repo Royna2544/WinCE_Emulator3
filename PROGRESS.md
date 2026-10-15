@@ -4,6 +4,32 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Architecture and measurement design refresh (no source/run)
+
+The common [Stage 7 plan](docs/PLAN.md) now requires reviewed, device- and
+interaction-grounded footprint/responsiveness budgets before “small” or “fast”
+acceptance; the two-second frame observer currently supplies bounds, not exact
+visual lag. [App evidence](docs/app-evidence-lane.md) and
+[verification](docs/subsystems/verification.md) point to the a04 script-only
+seal and preserve its no-backup/no-run/no-approval limit. The raw-NMEA payload
+is new, not an exact E-38 input match.
+
+The proposed [event-to-frame lineage gate](docs/subsystems/remote-observability.md)
+separates host ACK, machine adoption, guest dispatch/read, and a machine-sequenced
+frame commit; a later changed image alone cannot prove input causation. The
+[finite-Sleep Task/Frame plan](docs/subsystems/tasks-scheduler.md) now uses
+CE-reachable sent-message deferral and GetMessage→WNDPROC→Sleep continuation
+controls. The earlier two-simultaneous-Sleeps-on-one-thread expected red was
+withdrawn after local CE6 source review: positive Sleep blocks its caller and
+does not dispatch a WNDPROC. These are design/test specifications only; no
+Rust/script change, new native test, backup or guest run followed this refresh.
+
+The user then chose to **skip the a04 run and begin the scheduler source cut**
+(reply to `call_49d1b609465a4e668da30a31361beb44`). No new mount backup or
+guest launch was authorized by that choice. Once the cut changes source, a04
+is historical evidence only; any later live attempt needs a fresh source/build
+seal and a new specific approval covering its backups and bounded run.
+
 ## 2026-10-15 Live-run preparation and aborted backup (no app run)
 
 The repaired pre-watchdog D: source had a [22-file script-only a02 seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)

@@ -16,6 +16,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
+   - The user skipped the sealed a04 run; add real-MIPS finite-Sleep /
+     sent-callout expected reds and migrate that complete Task/Frame family
+     per `docs/subsystems/tasks-scheduler.md`. A non-alertable Sleep cannot
+     host a nested same-thread WNDPROC; do not stage two concurrent Sleeps as
+     a CE-reachable app path.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
@@ -88,7 +93,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   a volume-wide stall also stalls guest writes on these mounts. Claude's
   read-only and peer reviews found no concrete source blocker, but are not
   live dead-driver proof or a new one-run approval. No new backup or guest run
-  has occurred. Obtain a distinct fresh approval before the next backup/run.
+  has occurred. The user chose the scheduler source cut instead; a04 is not
+  the next live candidate. After source changes, a future run needs a fresh
+  source/build seal and a distinct approval before the next backup/run.
   Note the required `192.168.0.39:8765` LAN endpoint exposure. Report input
   ACK, drain/post, guest WNDPROC and frame separately, with phase-aligned busy-
   slice MIPS, per-slice setup cost, host RSS/private memory and the narrow guest
@@ -96,6 +103,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   evidence and any monitor failure as separate acceptance gates.
 - Host idle polling must not decide from debug snapshots. Derive it from
   canonical wait state (`docs/evidence/stale-snapshot-host-routing-design-20261014.md`).
+- Before claiming exact input-to-visual lag, implement the proposed
+  lineage-checked ingress→guest-work→frame-commit gate in
+  `docs/subsystems/remote-observability.md`; until then report poll brackets,
+  not a causal response time.
 - Child `WM_ACTIVATE` stale-return stub (A-6): the controls pass (ledger E-27).
   Any recovery change needs identity-matched live evidence.
 - Stage 8 native lane is paused. The E-33 commit-tail clamp landed as the D-009
