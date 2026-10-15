@@ -36,10 +36,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
      and [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md):
      [D-011's bounded framebuffer gate](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
-     now stops before mutation when a saved backing cannot restore. Next,
-     prove native self-exit CPU/Task/VM retirement, handle failures after
-     successful preflight without claiming whole-exit atomicity, and settle
-     foreign-link topology under O-G4.
+     now stops before mutation when a saved backing cannot restore. Finish the
+     bounded native-import pseudo self-exit source/test seal: the candidate
+     stops its CPU before another guest instruction, closes the native owner,
+     and completes the exact child or boot Task/VM lifetime after preflight.
+     Raw/decoded pseudo paths remain compatibility behavior; extend their
+     ownership/stop contract separately. Preflight modal backings before
+     allowing that native exit, handle failures after successful preflight
+     without claiming whole-exit atomicity, and settle foreign-link topology
+     under O-G4.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their

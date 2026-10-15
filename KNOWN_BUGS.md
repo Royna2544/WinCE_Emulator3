@@ -106,9 +106,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     typed authority recovery. The monitor blocks new checkpoints after
     refusal; only an earlier checkpoint restore clears its hold. Release
     **2,094/0/9 ignored** and no-default **1,510/0/3 ignored** passed.
-    Full host teardown remains open: failures after preflight are not proven
-    whole-exit atomic, and immediate pseudo-exit native CPU stop/canonical
-    Task/VM retirement, CE6 foreign-link topology, direct WndProc,
+    Full host teardown remains open: the current bounded native-import pseudo
+    self-exit candidate stops and retires its exact child or boot Task/VM only
+    after native owner closure and framebuffer preflight; its final broad
+    source gate is pending. Raw/decoded pseudo exits remain synchronous
+    compatibility paths, and modal backing is refused rather than restored
+    under the new native path. Failures after preflight are not proven
+    whole-exit atomic. CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin
     device broadcasts are not established. No live-app or CE6 parity follows.
   - W-B1c does not establish physical arrival order across HTTP and desktop
