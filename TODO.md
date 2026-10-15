@@ -68,45 +68,27 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   any/all mode of the TID 10 wait; wait id 833 needs a boot-forward trace. Each
   writable-mount live run needs fresh user approval and a verified backup
   (`scripts/backup_rw_mounts.ps1`).
-- The historical [22-file a02 script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
-  and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
-  superseded the older 21-file gate, but a02 and interim a01 are now **not
-  live-usable**: the runner changed again to add a separate watchdog. The
-  clean-built EXE/PDB pair is unchanged, not rebuilt. The a02 offline gate passed 123
-  preflight, 40 runner, 14 backup, 9 observer and atomic overwrite controls.
-  The attempted adjacent backup under approval
-  `call_9b35e9d31fdf402ea082a3eb6a40ae16` failed after one verified SD ZIP;
-  no ResidentFlash/EmulatorRoot ZIP, runner or guest launch followed. The
-  approval is withdrawn and the SD ZIP is barred from reuse
+- Live run: none approved. a02 and a04 are historical and not live-usable;
+  the user chose the scheduler cut over a04
+  (`call_49d1b609465a4e668da30a31361beb44`). Approval
+  `call_9b35e9d31fdf402ea082a3eb6a40ae16` was withdrawn after an SD-only
+  backup failure, and that ZIP must not be reused
   ([disposition](evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)).
-  Preserve the incomplete archive pending the user's disposal choice. Before
-  **any further backup or launch**, obtain a fresh, distinct approval and
-  independently check its chat citation; make and SHA-verify a new complete
-  adjacent triplet after that approval. Keep the writable folders quiescent,
-  validate the post-backup inventory and current mount content, then use only
-  the newly source/build-sealed EXE/PDB approved for that one bounded run.
-  The historical [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
-  [full patch](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch),
-  [script-only build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
-  and [offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
-  supersede intermediate a03 too. The watchdog starts and verifies an independent worker
-  before requesting launch; it has a 355-second post-scan monotonic deadline,
-  two-second RSS/raw-log checks and exact process cleanup. An atomic
-  `launch-began` marker precedes spawn; an empty WMI search after it remains
-  unresolved, retaining the watchdog for repeated exact sweeps. The a04 offline
-  gate passed 123 preflight, 73 runner, 14 backup, 9 summary and D: atomic
-  overwrite controls. Independent containment assumes D: volume I/O progress;
-  a volume-wide stall also stalls guest writes on these mounts. Claude's
-  read-only and peer reviews found no concrete source blocker, but are not
-  live dead-driver proof or a new one-run approval. No new backup or guest run
-  has occurred. The user chose the scheduler source cut instead; a04 is not
-  the next live candidate. After source changes, a future run needs a fresh
-  source/build seal and a distinct approval before the next backup/run.
-  Note the required `192.168.0.39:8765` LAN endpoint exposure. Report input
-  ACK, drain/post, guest WNDPROC and frame separately, with phase-aligned busy-
-  slice MIPS, per-slice setup cost, host RSS/private memory and the narrow guest
-  page budget (not total guest commit). Treat the run's source/backup/terminal
-  evidence and any monitor failure as separate acceptance gates.
+  Keep the incomplete archive until the user decides on disposal. History:
+  [a04 seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+  [offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
+  and PROGRESS.md. A future run needs, in order:
+  - a fresh, distinct approval whose chat citation is checked;
+  - a new SHA-verified adjacent backup triplet, with the writable folders
+    quiescent and the inventory validated;
+  - a freshly source/build-sealed EXE/PDB (llvm libclang) and the
+    `192.168.0.39:8765` endpoint.
+
+  The a04 watchdog (independent worker, 355 s deadline) is the base for that
+  rebuild. Report input ACK, drain/post, guest WNDPROC and frame separately,
+  plus phase-aligned busy-slice MIPS, per-slice setup cost, host RSS/private
+  memory and the narrow guest page budget. Source, backup and terminal
+  evidence and any monitor failure are separate acceptance gates.
 - Host idle polling must not decide from debug snapshots. Derive it from
   canonical wait state (`docs/evidence/stale-snapshot-host-routing-design-20261014.md`).
 - Before claiming exact input-to-visual lag, implement the proposed
