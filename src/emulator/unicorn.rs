@@ -2161,9 +2161,15 @@ fn validate_native_guest_writable_u32<D>(
 
 #[cfg(feature = "unicorn")]
 fn mapped_blob_is_static_code(blob: &MappedBlob) -> bool {
-    blob.name.starts_with("image:")
-        || blob.name.starts_with("dll:")
-        || blob.name.starts_with("trampoline:")
+    // Loader trampolines are fixed synthesized instructions. An image/DLL
+    // name alone is not proof: Owned runs can change during this native slice
+    // and are copied back only after it ends, so decode their live native bytes.
+    blob.name.starts_with("trampoline:")
+        || ((blob.name.starts_with("image:") || blob.name.starts_with("dll:"))
+            && matches!(
+                &blob.bytes,
+                crate::emulator::pe_loader::BlobBytes::Sealed(_)
+            ))
 }
 
 impl UnicornMips {
@@ -70414,23 +70420,101 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn mapped_code_index_reads_static_code_before_unicorn_memory() {
-        let static_code = 0x27bd_ffe0u32;
-        let live_code = 0x03e0_0008u32;
+    fn mapped_code_index_reads_static_code_before_unicorn_memory() -> crate::Result<()> {
+        let cpu = sealed_spinner_cpu()?;
+        let blob = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| blob.bytes.sealed_pin().is_some())
+            .expect("production loader's sealed main-image run");
+        let mapped_code = super::MappedCodeIndex::new(&cpu.mapped_blobs);
+        let static_code = mapped_code
+            .read_static_code_u32(blob.base)
+            .expect("sealed entry instruction");
+        let live_code = static_code ^ u32::MAX;
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(blob.base), blob.bytes.len() as u64, Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(blob.base), &live_code.to_le_bytes())
+            .unwrap();
+
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, blob.base),
+            Some(static_code)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_code_index_keeps_synthesized_trampoline_static() {
+        let trampoline_code = 0x03e0_0008u32;
+        let live_code = 0x2408_0002u32;
         let blobs = vec![super::MappedBlob {
-            name: "image:main.exe".to_owned(),
-            base: 0x0004_0000,
-            bytes: static_code.to_le_bytes().to_vec().into(),
+            name: "trampoline:fixture".to_owned(),
+            base: 0x0010_0000,
+            bytes: trampoline_code.to_le_bytes().to_vec().into(),
         }];
         let mapped_code = super::MappedCodeIndex::new(&blobs);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        uc.mem_map(0x0004_0000, 0x1000, Prot::ALL).unwrap();
-        uc.mem_write(0x0004_0000, &live_code.to_le_bytes()).unwrap();
+        uc.mem_map(0x0010_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(0x0010_0000, &live_code.to_le_bytes()).unwrap();
 
         assert_eq!(
-            super::read_unicorn_code_u32(&uc, &mapped_code, 0x0004_0000),
-            Some(static_code)
+            super::read_unicorn_code_u32(&uc, &mapped_code, 0x0010_0000),
+            Some(trampoline_code)
         );
+    }
+
+    #[test]
+    fn mapped_code_index_live_decodes_real_mips_writable_main_image_store() -> crate::Result<()> {
+        const ENTRY: u32 = 0x0040_2000;
+        const TARGET: u32 = ENTRY + 4;
+        const STALE_INSTRUCTION: u32 = 0x2408_0001; // addiu t0,zero,1
+        const WRITTEN_INSTRUCTION: u32 = 0x2408_0002; // addiu t0,zero,2
+
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x1400, 0);
+        write_vec_u32(&mut bytes, 0x98 + 16, 0x2000); // Entry RVA.
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000); // SizeOfImage.
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x2000); // .text VirtualSize.
+        write_vec_u32(&mut bytes, 0x178 + 16, 0x1200); // .text SizeOfRawData.
+        write_vec_u32(&mut bytes, 0x178 + 36, 0xe000_0020); // Writable code.
+        write_vec_u32(&mut bytes, 0x1200, 0xac49_0004); // sw t1,4(v0).
+        write_vec_u32(&mut bytes, 0x1204, STALE_INSTRUCTION);
+        let image = crate::pe::PeImage::parse_bytes("mutable-code-read.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let blob = cpu
+            .mapped_blobs
+            .iter()
+            .find(|blob| {
+                blob.name.starts_with("image:")
+                    && ENTRY >= blob.base
+                    && (TARGET - blob.base) as usize + 4 <= blob.bytes.len()
+            })
+            .expect("production loader's writable main-image run");
+        assert!(blob.bytes.sealed_pin().is_none());
+        assert_eq!(blob.base & 0xfff, 0);
+        let mapped_code = super::MappedCodeIndex::new(&cpu.mapped_blobs);
+        assert_eq!(mapped_code.read_u32(TARGET), Some(STALE_INSTRUCTION));
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let map_len = (blob.bytes.len() + 0xfff) & !0xfff;
+        uc.mem_map(u64::from(blob.base), u64::try_from(map_len).unwrap(), Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(blob.base), &blob.bytes).unwrap();
+        uc.reg_write(RegisterMIPS::V0, u64::from(ENTRY)).unwrap();
+        uc.reg_write(RegisterMIPS::T1, u64::from(WRITTEN_INSTRUCTION))
+            .unwrap();
+        uc.emu_start(u64::from(ENTRY), u64::from(TARGET), 0, 1)
+            .unwrap();
+        assert_eq!(super::read_unicorn_u32(&uc, TARGET), Some(WRITTEN_INSTRUCTION));
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, TARGET),
+            Some(WRITTEN_INSTRUCTION),
+            "same-slice decoder must see the actual instruction written by MIPS"
+        );
+        Ok(())
     }
 
     #[test]
@@ -70439,6 +70523,8 @@ mod unicorn_tests {
         let live_trap = 0x03e0_0008u32;
         let stale_heap = 0x1111_2222u32;
         let live_heap = 0x3333_4444u32;
+        let stale_dll = 0x2408_0001u32;
+        let live_dll = 0x2408_0002u32;
         let blobs = vec![
             super::MappedBlob {
                 name: "ce-import-traps".to_owned(),
@@ -70450,6 +70536,11 @@ mod unicorn_tests {
                 base: 0x4800_0000,
                 bytes: stale_heap.to_le_bytes().to_vec().into(),
             },
+            super::MappedBlob {
+                name: "dll:mutable-code.dll".to_owned(),
+                base: 0x4900_0000,
+                bytes: stale_dll.to_le_bytes().to_vec().into(),
+            },
         ];
         let mapped_code = super::MappedCodeIndex::new(&blobs);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
@@ -70460,12 +70551,14 @@ mod unicorn_tests {
         )
         .unwrap();
         uc.mem_map(0x4800_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x4900_0000, 0x1000, Prot::ALL).unwrap();
         uc.mem_write(
             crate::emulator::imports::IMPORT_TRAP_BASE.into(),
             &live_trap.to_le_bytes(),
         )
         .unwrap();
         uc.mem_write(0x4800_0000, &live_heap.to_le_bytes()).unwrap();
+        uc.mem_write(0x4900_0000, &live_dll.to_le_bytes()).unwrap();
 
         assert_eq!(
             super::read_unicorn_code_u32(
@@ -70478,6 +70571,10 @@ mod unicorn_tests {
         assert_eq!(
             super::read_unicorn_code_u32(&uc, &mapped_code, 0x4800_0000),
             Some(live_heap)
+        );
+        assert_eq!(
+            super::read_unicorn_code_u32(&uc, &mapped_code, 0x4900_0000),
+            Some(live_dll)
         );
     }
 
