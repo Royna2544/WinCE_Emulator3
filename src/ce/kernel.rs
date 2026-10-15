@@ -3444,7 +3444,10 @@ impl CeKernel {
     ) -> Result<bool> {
         if self.current_process_birth_key() != Some(expected_birth)
             || !self.handles.process_execution_live_by_birth(expected_birth)
-            || self.handles.process_signaled_by_id(expected_birth.process_id()) != Some(false)
+            || self
+                .handles
+                .process_signaled_by_id(expected_birth.process_id())
+                != Some(false)
         {
             return Ok(false);
         }
@@ -15185,9 +15188,12 @@ mod tests {
     }
 
     #[test]
-    fn stopped_root_exit_requires_exact_birth_and_restorable_backing_before_effects() -> Result<()> {
+    fn stopped_root_exit_requires_exact_birth_and_restorable_backing_before_effects() -> Result<()>
+    {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
-        let root = kernel.current_process_birth_key().expect("root process birth");
+        let root = kernel
+            .current_process_birth_key()
+            .expect("root process birth");
         let (thread_handle, _) = kernel.create_guest_thread(0x401000, 0, false);
         let thread = kernel
             .handles
@@ -15217,20 +15223,24 @@ mod tests {
         let original = source.snapshot().pixels;
         assert!(kernel.capture_window_backing_store(hwnd, &source));
         let backing_before = kernel.window_backing_stores[&hwnd].clone();
-        let message_trace_count = kernel.recent_message_ops.len();
-        let process_trace_count = kernel.recent_process_ops.len();
-
         let other = kernel.queue_process_launch(None, None);
         kernel.set_current_process_id(other.process_id);
-        assert!(!kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
-            root,
-            0x51,
-            Some(&mut source),
-        )?);
+        assert!(
+            !kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                root,
+                0x51,
+                Some(&mut source),
+            )?
+        );
         assert!(kernel.handles.process_execution_live_by_birth(root));
         assert!(kernel.gwe.is_window(hwnd));
-        assert_eq!(kernel.window_backing_stores.get(&hwnd), Some(&backing_before));
+        assert_eq!(
+            kernel.window_backing_stores.get(&hwnd),
+            Some(&backing_before)
+        );
         kernel.set_current_process_id(root.process_id());
+        let message_trace_count = kernel.recent_message_ops.len();
+        let process_trace_count = kernel.recent_process_ops.len();
 
         assert!(matches!(
             kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
@@ -15257,20 +15267,28 @@ mod tests {
                 if process_id == root.process_id() && rejected == hwnd
         ));
         assert!(kernel.handles.process_execution_live_by_birth(root));
-        assert_eq!(kernel.handles.process_signaled_by_id(root.process_id()), Some(false));
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(root.process_id()),
+            Some(false)
+        );
         assert!(kernel.gwe.is_window(hwnd));
-        assert_eq!(kernel.window_backing_stores.get(&hwnd), Some(&backing_before));
+        assert_eq!(
+            kernel.window_backing_stores.get(&hwnd),
+            Some(&backing_before)
+        );
         assert_eq!(kernel.recent_message_ops.len(), message_trace_count);
         assert_eq!(kernel.recent_process_ops.len(), process_trace_count);
         assert_eq!(incompatible.pixels(), incompatible_before.as_slice());
         assert_eq!(incompatible.dirty_rects(), dirty_before.as_slice());
 
         source.pixels_mut().fill(0xee);
-        assert!(kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
-            root,
-            0x51,
-            Some(&mut source),
-        )?);
+        assert!(
+            kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                root,
+                0x51,
+                Some(&mut source),
+            )?
+        );
         for row in 0..4 {
             let start = row * source.info().stride;
             let end = start + 4 * source.info().format.bytes_per_pixel();
@@ -15278,8 +15296,11 @@ mod tests {
         }
         assert!(!kernel.gwe.is_window(hwnd));
         assert!(!kernel.window_backing_stores.contains_key(&hwnd));
-        assert_eq!(kernel.handles.process_signaled_by_id(root.process_id()), Some(true));
-        assert_eq!(kernel.current_process_exit_code(), 0x51);
+        assert_eq!(
+            kernel.handles.process_signaled_by_id(root.process_id()),
+            Some(true)
+        );
+        assert_eq!(kernel.current_process_state().exit_code, 0x51);
         Ok(())
     }
 
