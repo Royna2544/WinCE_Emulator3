@@ -1966,10 +1966,44 @@ altering the raw logs.
 The ordinary production SD main-image loader remains copy-backed and DLL
 families are not migrated. The synthetic backing reports physical status
 `Unclassified` and charges zero guest-budget bytes; it cannot close O-M3 or
-authorize production image physical-memory accounting. Native `mem_map_ptr`
-failure/abort coverage, full host-write inventory, machine checkpoint
-relineage and production activation remain separate gates. No app, mount,
-LAN, RSS, throughput, map-readiness or full Stage 2 result follows.
+authorize production image physical-memory accounting.
+
+The later [synthetic native-map failure gate](../../evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+passed its final focused release control **1/1**. A test-only collision after
+pinning the second writable main-image run forces a real `mem_map_ptr` error;
+both runs remain inaccessible while pinned. Checked abort-close retires the
+native slot and staged continuation, and the last retained pin clone fences
+bytes until dropped. This tests a map failure, **not** a failure of native
+owner close. Its first default-harness broad release attempt crashed before
+any test-result block on a WINDOWPOS test-thread overflow and is uncredited
+([failed broad receipt](../../evidence/stage2-writable-image-native-failure-20261016/broad-validation.receipt.md)).
+The [serial-harness complete suites](../../evidence/stage2-writable-image-native-failure-20261016/serial-broad-validation.receipt.md)
+then passed release **2,117/0/9 ignored** and no-default **1,515/0/3
+ignored**, and a later [default-harness full release retry](../../evidence/stage2-writable-image-native-failure-20261016/default-retry.addendum.receipt.md)
+passed **2,117/0/9 ignored**. Those passes do not explain the intermittent
+test-thread crash.
+
+The [writable-image/legacy file-view overlap gate](../../evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)
+passed focused release **5/5** and no-default **1/1**: exact guest-range
+preflight rejects same/foreign PID partial overlap before legacy seed or
+readback mutates VM, native or file bytes. It fences retired runs while their
+last pin/guard remains, and accepts adjacent nonoverlapping sync. Its
+[complete default-harness suites](../../evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
+used stable Rust source hashes and passed 18-block release **2,119/0/9
+ignored** and no-default **1,516/0/3 ignored**. The release HEAD advanced
+only across a `KNOWN_BUGS.md` documentation backup; this is not a source
+drift claim. The transient WINDOWPOS stack issue remains independently open:
+an [isolated direct-EXE probe](../../evidence/stage2-windowpos-stack-20261016/validation.receipt.md)
+passed at requested 128 KiB but overflowed at 64 KiB, while
+[three later default release library reruns](../../evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)
+had **0/3** crashes, versus **1/3** in an earlier, separate full-suite
+default-harness sequence. Neither denominator establishes cause or production
+stack safety.
+
+Other direct host-write/restore/rebind and exact exit/module-retirement
+fences, machine checkpoint relineage, DLL migration and production activation
+remain separate gates. No app, mount, LAN, RSS, throughput, map-readiness or
+full Stage 2 result follows.
 
 ## Chat-project validation notes (not in this repository)
 

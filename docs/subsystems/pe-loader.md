@@ -169,8 +169,14 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    the production path. The bounded [mapped-code gate](../../evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)
    now reads mutable code from live native memory and refuses a stale mutable
    blob fallback if native reading fails; the real-MIPS same-slice control
-   passed. Keep static classification tied to proven immutable backing and
-   retain a native-map-failure/abort control before production activation.
+   passed. The [synthetic second-run map failure](../../evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+   now retains exact pins through checked abort-close without publishing a
+   reusable continuation; it does not test a failed native close. The
+   [legacy file-view overlap fence](../../evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)
+   refuses seed/readback collisions with active or retired pinned image runs.
+   Keep static classification tied to proven immutable backing; fence other
+   host-write and exact exit/module-retirement paths before production
+   activation.
 3. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
    Dynamic mapping, import refresh, attach/detach, unload/reload and parked
    process restoration must reconcile exact generation/pins before returning

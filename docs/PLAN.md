@@ -176,13 +176,19 @@ separate gates.
 The bounded [VM backing](../evidence/stage2-writable-image-vm-20261016/validation.receipt.md),
 [opt-in main-image adoption](../evidence/stage2-writable-image-green-20261016/validation.receipt.md),
 and [mutable-code fallback](../evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
-source/test gates pass, but normal SD-app loading remains copy-backed. The
+source/test gates pass. The later
+[second-run native-map failure](../evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+and [legacy file-view overlap](../evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
+synthetic gates pass too, but normal SD-app loading remains copy-backed. The
 next connected sequence is production writable main-image integration,
 preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
 persistence through the old copy path as the ownership proof. Each cut needs
 real-MIPS bytes, exact birth/module-generation pins, native copy/readback
-exclusion and failure controls, including a native `mem_map_ptr` failure and
-checked abort/close before production activation. The
+exclusion and failure controls. The tested second-run `mem_map_ptr` collision
+retains pins through checked abort-close; direct host-write/restore/rebind
+paths and exact exit/module-retirement effects still need synthetic fences
+before production activation. A native owner-close failure itself was not
+injected. The
 [memory](subsystems/guest-memory.md) and [loader](subsystems/pe-loader.md)
 plans detail those gates. [O-M3](DECISIONS.md)
 keeps ROM/XIP versus RAM page provenance and `GlobalMemoryStatus` charge timing

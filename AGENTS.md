@@ -220,10 +220,13 @@ Raw direct pseudo compatibility remains fixture-only and fail-closed; this is
 not full Task/VM authority or live-app proof. No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
-but normal SD-app loading remains copy-backed. Native failure controls,
-preloaded/runtime DLL ownership and O-M3 `PrivatePageBudget` treatment are
-the immediate Stage 2 priority ahead of any live acceptance or next MsgWait
-gate.
+but normal SD-app loading remains copy-backed. The later bounded
+[native-map failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+and [legacy file-view overlap](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
+synthetic gates pass; the intermittent WINDOWPOS test-thread stack overflow
+is not resolved. Other host-write/exit fences, preloaded/runtime DLL
+ownership and O-M3 `PrivatePageBudget` treatment are the immediate Stage 2
+priority ahead of any live acceptance or next MsgWait gate.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in

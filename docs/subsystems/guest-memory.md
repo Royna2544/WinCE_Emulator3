@@ -320,9 +320,12 @@ Native or hook-time writes, host restore, process parking and DLL rebinding
 must go through that same checked authority. A future independent machine
 clone must relineage owner/module keys and copy private bytes; a CPU Context alone
 does not clone RAM. A stale birth, unloaded generation or mismatched pin
-must refuse the operation before byte or metadata publication. A failed native
-map/protect/unmap must keep pins until checked owner close; the dedicated
-native-failure control is still open. Already-live guest writes are not
+must refuse the operation before byte or metadata publication. The bounded
+[second-run native-map failure control](../../evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
+shows that an injected `mem_map_ptr` collision retains both exact VM pins
+until checked abort-close and the final pin-clone drop; no staged native
+continuation can be reused. It does not inject a native owner-close failure
+or prove all protect/unmap failures. Already-live guest writes are not
 promised rollback.
 
 Guest physical accounting is a separate **unresolved policy gate**. The
@@ -362,10 +365,15 @@ shared or already included in the boot-reserved amount. Record the actual
 loader/pager provenance and page events before assigning a physical charge.
 
 The historical real-MIPS writable main-image and mapped-code reds now have
-bounded opt-in synthetic greens. Before changing the production path, retain
-their store/load across fresh owners and zero image copy-in/readback
-assertions, and add a native `mem_map_ptr` failure/abort control, A/B same-VA
-isolation, IAT patch, stale birth/generation and native-write-guard refusal.
+bounded opt-in synthetic greens. The [legacy file-view overlap gate](../../evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)
+also rejects same- and foreign-PID partial overlap with active or
+retired-but-pinned image runs before either seed or readback can mutate
+bytes, while adjacent nonoverlapping sync still works. Before changing the
+production path, retain real-MIPS fresh-owner and zero image
+copy-in/readback assertions, the native `mem_map_ptr` failure/abort and
+file-view overlap controls, and add other direct host-write/restore/rebind
+and exact exit/module-retirement fences, A/B same-VA isolation, IAT patch,
+stale birth/generation and native-write-guard refusal.
 The current synthetic map helper excludes adopted pages from ordinary blob
 copy mapping; the production map/sync cut must preserve that exclusion.
 Then test the corresponding preloaded/dynamic DLL store, park,
