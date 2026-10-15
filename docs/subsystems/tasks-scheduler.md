@@ -1,6 +1,12 @@
 # Tasks and scheduler
 
 Status: target subsystem plan with bounded birth, alias, wait-pin, parked-continuation and resealed finite-Sleep Task/Frame source gates passed. Only finite Sleep has a canonical active frame; general Task/Frame dispatch, live acceptance and full Stage 3 acceptance remain open. The [architecture anchor](../ARCHITECTURE.md) defines shared identities, ownership, time, outcomes and snapshot contracts. The [migration plan](../PLAN.md) controls sequencing. This document uses those contracts; it does not define competing TaskIdentity, FrameIdentity, RunOutcome or SnapshotEpoch types.
+The follow-on connected A→B Send/GetMessage work remains a source candidate:
+A07 broad suites passed on earlier source, A08 exposed sender-restore
+corruption and its repaired candidate passed focused Send 30/30 and Kernel
+1/1, but the sealed A09 release-feature suite failed four existing native
+same-process Send controls. No-default was not run; a narrow liveness guard
+and tests are being validated for a new seal.
 
 ## Responsibility and scope
 
@@ -108,36 +114,39 @@ The two formerly expected-red controls are source-green: one exercises the activ
 
 The pre-cut a04 inventory found numeric-TID wait removal, scheduler selection without active-frame identity, and native wait/pin retirement before register restoration. The finite-Sleep path now requires exact frame identity, claims completion once, uses checked capture/restore, and retires the exact frame and wait only after its result/context boundary. Its deferred-send marker persists after that retirement so pre-run callout selection cannot bypass real `GetMessageW`, `PeekMessageW(PM_REMOVE)` or `GetMessageWNoWait` retrieval. Exact-birth receiver exit retires only marked sends for that birth and wakes their senders with a failure result. The focused KData activation failure and stale birth-owned HWND controls test exact cancellation and rejection before native side effects. The broader compatibility wait families still need their own checked transition and failure-path coverage; this cut must not be generalized to them by assumption. Keep the existing parked-Sleep birth gates and add or retain wrong-generation, reused-TID birth, alias-close, cancellation/exit and failed capture/restore negatives. Reciprocal cross-Send and post-wake MsgWait delivery remain open; the finite-Sleep cut's broad suites and source seal are recorded in the receipt above.
 
-#### Next fixtures: receiver context, then reciprocal cross-Send
+#### Connected A→B candidate, then reciprocal cross-Send
 
-First isolate the ordinary same-process A→B send while B is blocked in
-`GetMessageW`. This uses the existing receiver-context callout rather than
-the finite-Sleep deferral. A real-MIPS expected-red control must distinguish
-A and B by exact birth and disjoint native stacks, then check that B's
-WNDPROC actually enters on B's captured stack and verified birth, while A's
-SendMessage wait retains its PC/RA/SP/S0/HI/LO/FPU context. One callback
-result must resume A once and retire only its send/wait IDs. This is a
-source-inferred contract risk across *all* such cross-thread sends: today's
-callout derives callback SP from the live sender register, then changes only
-the receiver TID/KData label. Do not broaden that shortcut or mark a runtime
-failure until the control records the actual stop. The production design must
-name a frame-owned receiver dispatch, rollback on missing/stale frame or
-failed context transfer, and a checked native-stop provenance witness before
-changing the hook.
+The bounded ordinary same-process A→B cut uses B's birth-verified blocked
+`GetMessageW` source rather than the finite-Sleep deferral. Its real-MIPS
+controls distinguish A and B by exact birth and disjoint native stacks,
+exercise WNDPROC on B's captured stack across a native slice, and require one
+result to resume A while retiring only its exact send/wait IDs. The pre-cut
+in-hook shortcut instead derived callback SP from A's live register and
+changed B's TID/KData label without a native-context transfer. It is not a
+general cross-thread dispatch contract; cross-process calls and legacy
+numeric-only HWNDs remain outside this bounded cut.
 
-Three ignored real-MIPS controls now reach this ordinary cross-thread path
-and stop with `native staged context has stale or unverified thread birth` after
-verified `GetMessageW` waits and A's activation
+Before the repair, three ignored real-MIPS controls stopped with
+`native staged context has stale or unverified thread birth` after verified
+`GetMessageW` waits and A's activation
 ([expected-red receipt](../../evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)).
-They stop before callback stack, return and retirement assertions; the a03
-control also records a native count stop inside B's WNDPROC. They do not
-reproduce the reciprocal cycle or establish a live-app failure. A separate
-ignored [Kernel control](../../evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
-reproduces an ordinary queued send reaching B-prime after exact B exit and
-numeric TID reuse, without delivering A a failure result.
+Those receipts are historical pre-repair evidence: a03 recorded a native
+count stop within B's WNDPROC, while the separate
+[Kernel control](../../evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
+showed B-prime taking B's ordinary queued send after B exited. They establish
+neither a reciprocal cycle nor a live-app failure. A07 broad suites passed on
+the prior connected source. A08's expected-red sender-restore fault exposed
+reply/wait/result corruption; the repaired candidate then passed focused Send
+30/30 and Kernel 1/1. Its sealed A09 release-feature broad run failed four
+existing native same-process Send controls (1,048 passed, 4 failed, 6 ignored)
+([receipt](../../evidence/scheduler-source-cut-a09/validation.receipt.md));
+no-default was not run. Three failures include an intentional next-lease
+handoff, but stricter extra-lease controls also exposed a real liveness gap:
+a recovery helper can revive B from saved context while B still occupies its
+separate blocked-GetMessage slot. A narrow guard and tests need a new seal.
+Neither A09 nor that unsealed follow-up is a passed Stage 3 or live-iNavi gate.
 
-Candidate connected handoff design, pending source review and red-to-green
-proof:
+The connected handoff contract, still subject to current-candidate validation:
 
 1. The common authority is A2's exact `ThreadBirthKey` and A3's checked
    native-frame provenance. Use an immutable receiver-source locator, not a
@@ -153,10 +162,10 @@ proof:
    checked-capture the sender's complete context. A missing or mismatched
    receiver source is a typed failure, not permission to run its WNDPROC on
    the sender stack. `SentMessage` itself must freeze receiver birth at queue
-   time from the HWND owner, including ordinary sends (today only finite-Sleep
-   sends carry that indirectly). A queued send must be invisible to a later
-   incarnation reusing the numeric TID and must fail/reply once when its
-   original receiver exits. Keep sender birth, receiver birth, source wait,
+   time from the HWND owner, including ordinary sends. A queued send must be
+   invisible to a later incarnation reusing the numeric TID and must
+   fail/reply once when its original receiver exits. Keep sender birth,
+   receiver birth, source wait,
    new send and sender wait IDs in the return token. Legacy numeric-only
    windows remain an explicit fixture boundary, not an inferred production
    owner.
@@ -177,20 +186,18 @@ proof:
    sender return is validated. A post-execution restore failure is terminal
    with partial-effects evidence, never a fabricated CE success.
 
-For the ordinary blocked-GetMessage source, the smaller connected cut is to
-queue A's send and block A, then let the existing birth-verified
-`try_resume_blocked_get_message_with_active_pc` bridge restore B at the next
-slice/selection boundary. Do not switch to B inside A's import hook. That
-bridge must select the *target birth* and exact ready wait ID. The current
-ready-ID lookup can locate a displaced receiver; the two-receiver red is a
-regression gate, not proof of a wrong-first-record bug. The bridge currently
-consumes the send and B's wait before unchecked native register/KData restore;
-make that transfer checked and rollback-safe before consuming either. The
-pre-run active-send callout path must not bypass the designated Get/Peek
-receiver retrieval. A different-thread guest WNDPROC
-must have no fallback that executes on the sender's stack; delete the old
-receiver-context shortcut once the queue/bridge path is complete. A receiver
-not currently blocked keeps its send queued until its own Get/Peek retrieval.
+For the ordinary blocked-GetMessage source, the connected candidate queues A's
+send and blocks A, then uses the birth-verified
+`try_resume_blocked_get_message_with_active_pc` bridge to restore B at the next
+slice/selection boundary, not inside A's import hook. The bridge must select
+the *target birth* and exact ready wait ID. The displaced-receiver control is
+a regression gate, not proof that the old ready-ID lookup chose a wrong-first
+record. Checked receiver register/KData restore must precede consumption of
+the send and B's wait; the pre-run active-send callout must not bypass the
+designated Get/Peek retrieval. A different-thread guest WNDPROC must not fall
+back to A's stack. A receiver not currently blocked keeps the send queued
+until its own Get/Peek retrieval. These are candidate behavior and contract,
+not a claim that the pending current-source suite has passed.
 This matches the documented CE-family retrieval boundary
 ([CE 5.0 SendMessage reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms939980%28v%3Dmsdn.10%29));
 the local real-MIPS and later CE6 app gates, not that older reference alone,
@@ -208,32 +215,34 @@ consuming the send or B's wait. A failed prepare leaves A parked and both
 records intact with a typed backend error; a failure after irreversible
 guest output must report partial effects rather than a fabricated result.
 This is a default-lifetime requirement, not merely a persistent-engine risk.
-The current in-hook cross-birth GetMessage bridge also lacks a blank-state
-witness and cannot borrow this pre-entry proof. For runnable B, queueing A's
-send is only a first step: a real-MIPS gate must show B is scheduled from its
-own context, reaches Get/Peek, and A's blocked import is not replayed by a
-process-rotation heuristic. B blocked in an outgoing Send or MsgWait has a
-different receiver source and remains a separate gate.
+An in-hook cross-birth bridge without a blank-state witness cannot borrow this
+pre-entry proof. For runnable B, queueing A's send is only a first step: its
+real-MIPS control must show B scheduled from its own context, reaching Get/Peek
+without replaying A's blocked import through a process-rotation heuristic.
+B blocked in an outgoing Send or MsgWait has a different receiver source and
+remains a separate gate.
 
-The sender-side legacy SendMessage return path also currently consumes its
-result/removes its wait before unchecked context restore and ignores a KData
-write error. Restore and validate A's exact native context first, then retire
-only its completed send/wait. Callback return must be keyed to the exact send
-ID and pop one active send only; a nested second completion path may otherwise
-pop an ancestor. These are connected implementation and negative-test gates,
-not green behavior claims.
+The A08 expected-red fault exposed the sender-side legacy return path
+consuming its completed reply/removing its wait before a failed native restore.
+The current candidate prepares and checks A's exact native context and KData
+before retiring only its completed send/wait; focused A08 Send 30/30 and Kernel
+1/1 checks passed on that repair, but A09 broad failed elsewhere in the native
+same-process Send paths. On restore failure, A must stay parked, its exact reply
+and wait must remain, and its result pointer must remain untouched; no CE
+success may be fabricated. Callback return must be keyed to the exact send ID
+and pop one active send only, never an ancestor.
 
-The first implementation cut must make the ordinary blocked-GetMessage red
-green and add slice-spanning WNDPROC and second-of-two blocked-receiver reds,
-plus receiver-exit/TID-reuse, two-senders/one-receiver, checked-restore
-failure, and one-return/parent-continuation negatives, before the
-reciprocal blocked-Send case. This design does not claim those transitions
-are already implemented.
-All five currently preserved reds (three native, one Kernel exit/reuse and
-one GWE nested double-completion) must become ordinary, unignored tests in
-one connected production cut and one source seal. Focused hidden-state,
-restore-failure and runnable-B real-MIPS controls precede that seal; a green
-birth label alone is not a hidden-state or one-return proof.
+The original three native A→B reds, Kernel exit/reuse red and GWE nested
+double-completion red are historical controls now promoted into the connected
+cut. A07 broad suites were green on the prior source, not this candidate.
+A08's new negative was red and its repair passed focused checks, but A09's
+sealed broad release-feature suite failed; no-default was not run. The strict
+extra-lease liveness negative and narrow guard require validation and a new
+exact-source seal before any passed gate can be claimed. Hidden native state,
+restore failure, two-sender exact completion, one-return/parent continuation
+and runnable-B controls remain part of that exact-source proof. Cross-process
+callback transfer, legacy numeric-only HWNDs and overloaded `SMF_TIMEOUT`
+semantics remain separate from this cut.
 
 Only after that simpler gate, add the reciprocal finite-Sleep scenario:
 

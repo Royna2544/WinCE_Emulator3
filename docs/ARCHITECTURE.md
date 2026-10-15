@@ -62,6 +62,19 @@ ignored). It connects one exact-birth frame through wait selection and native
 resume, not a general `CeMachine`/TaskDirectory, completed Stage 3 or a live
 iNavi result. A1-A3 below remain the target shared contracts.
 
+The follow-on ordinary A→B `SendMessageW` → blocked `GetMessageW` bridge is a
+bounded source candidate, not another accepted architecture migration. A07
+broad suites passed on prior source; A08's expected-red sender-restore fault
+exposed a further return-boundary defect. The repaired candidate passed focused
+Send 30/30 and Kernel 1/1, but its sealed A09 broad release-feature suite
+failed four existing native same-process Send controls (1,048 passed, 4 failed,
+6 ignored); no-default was not run
+([receipt](../evidence/scheduler-source-cut-a09/validation.receipt.md)).
+Strict extra-lease controls exposed a blocked-GetMessage liveness gap, so a
+narrow guard and tests need a new seal. This work does not establish
+cross-process sends, legacy numeric-only HWND ownership, post-wake MsgWait,
+`SMF_TIMEOUT` semantics, completed Stage 3 or live-iNavi behavior.
+
 ## A1. Machine authority
 
 `CeMachine` is the proposed common execution anchor: one sequenced owner of
