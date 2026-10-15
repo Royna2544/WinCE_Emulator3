@@ -69,7 +69,9 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   - CE caller wait/timeout behavior is not implemented. An old-MIPS
     direct-kernel real-handle continuation fails closed, the root process has
     no owned child-launch handoff for real-handle requests, and the
-    current-process pseudo-handle keeps a separate synchronous path.
+    raw direct current-process pseudo-handle calls keep a separate synchronous
+    compatibility path. The decoded self-exit shape has a later bounded
+    stopped-owner gate, not a general real-handle continuation.
   - `TaskWaitStore` separates exact births from explicit legacy-unknown TIDs;
     thread-directed post/quit delivery, status and wake, HWND-less thread
     timers, and W-B1a window creation/explicit HWND post/typed payloads now
@@ -110,8 +112,11 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     [native-import pseudo self-exit gate](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
     source-tested exact child or boot CPU stop before the next guest
     instruction and Task/VM retirement after native owner closure and
-    framebuffer preflight. Raw/decoded pseudo
-    exits remain synchronous compatibility paths, and unpreflighted modal
+    framebuffer preflight. At that earlier native-import seal, raw/decoded
+    pseudo exits remained synchronous compatibility paths. The later bounded
+    [decoded self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+    now routes the witnessed direct-kernel pseudo call through the stopped
+    finalizer; raw direct compatibility remains separate. Unpreflighted modal
     backing is refused rather than restored under the new native path.
     Failures after preflight are not proven
     whole-exit atomic. CE6 foreign-link topology, direct WndProc,

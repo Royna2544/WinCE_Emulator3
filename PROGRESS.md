@@ -48,6 +48,22 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded decoded direct-kernel pseudo self-exit source/test gate
+  ([focused receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md),
+  [broad validation](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)):
+  a decoded PC-zero snapshot or static exit-shaped bytes cannot retire a
+  process. The stopped native attempt must witness the live canonical JALR,
+  its delay slot, exact caller/owner births and stop state before the shared
+  post-owner finalizer applies D-011 preflight and Task/VM retirement. The
+  deferred-child path no longer infers completion from a static snapshot;
+  forged RA, stale target, missing authority, incompatible backing and false
+  child-return controls fail closed. Final 18-block suites passed release
+  **2,107/0/9 ignored** and no-default **1,511/0/3 ignored**; final-source
+  Global focused 16/16 and Sparse positive 1/1 passed. In Hookless/Sparse,
+  new same-slice callsites without an installed exact hook fail closed. Raw
+  direct pseudo compatibility, post-preflight whole-exit atomicity, full
+  Stage 3 and live iNavi remain open.
+  No live run or writable-mount action was made.
 - Bounded native COREDLL pseudo self-exit source/test gate
   ([receipt](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)):
   the verified current-process pseudo-handle import stops MIPS before the next
@@ -60,10 +76,10 @@ result. The per-slice text before this condense is at
   stopped owner cannot bypass that hold through another native attempt. Final
   18-block suites passed release **2,096/0/9 ignored** and no-default
   **1,510/0/3 ignored**; Unicorn-only and desktop-without-trace release
-  checks, format and diff checks passed. Raw/decoded pseudo exits remain
-  synchronous compatibility paths; modal restoration, post-preflight
-  whole-exit atomicity and live iNavi/CE6 acceptance are open. No live run or
-  writable-mount action was made.
+  checks, format and diff checks passed. At this earlier seal, raw/decoded
+  pseudo exits remained synchronous compatibility paths; modal restoration,
+  post-preflight whole-exit atomicity and live iNavi/CE6 acceptance are open.
+  No live run or writable-mount action was made.
 - Bounded D-011 stopped host-exit framebuffer preflight/recovery source/test
   gate ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
   an exact-birth exit now validates every saved window backing against the
