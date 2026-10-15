@@ -91668,6 +91668,134 @@ mod unicorn_tests {
     }
 
     #[test]
+    #[ignore = "expected red until writable main-image pages have one pinned byte authority"]
+    fn writable_main_image_store_survives_fresh_owner_without_blob_readback() -> crate::Result<()> {
+        const ENTRY: u32 = 0x0040_2000;
+        const TARGET: u32 = 0x0040_2100;
+        const VALUE: u32 = 0x51a7_c0de;
+
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x1400, 0);
+        write_vec_u32(&mut bytes, 0x98 + 16, 0x2000); // Entry RVA.
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000); // SizeOfImage.
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x2000); // .text VirtualSize.
+        write_vec_u32(&mut bytes, 0x178 + 16, 0x1200); // .text SizeOfRawData.
+        write_vec_u32(&mut bytes, 0x178 + 36, 0xe000_0020); // Writable code section.
+        write_vec_u32(&mut bytes, 0x1200, 0xac49_0000); // sw t1,0(v0).
+        write_vec_u32(&mut bytes, 0x1204, 0x8c4a_0000); // lw t2,0(v0).
+        let image = crate::pe::PeImage::parse_bytes("writable-image-red.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let image_blobs: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .filter(|blob| {
+                blob.name.starts_with("image:")
+                    && TARGET >= blob.base
+                    && (TARGET - blob.base) as usize + 4 <= blob.bytes.len()
+            })
+            .cloned()
+            .collect();
+        assert_eq!(image_blobs.len(), 1, "production loader's target run");
+        let blob = &image_blobs[0];
+        assert!(ENTRY >= blob.base);
+        assert!((ENTRY - blob.base) as usize + 8 <= blob.bytes.len());
+        let mut image_memory = MemoryMap::default();
+        image_memory.map(
+            blob.base,
+            blob.bytes.len() as u32,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "pe-image",
+        )?;
+        let guard = super::SealedHostWriteGuard::from_mapped_blobs(&image_blobs)?;
+        let empty_sealed = BTreeMap::new();
+
+        let mut first = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let first_pins = super::NativeMappingPins::default();
+        let mut first_mapped = super::KernelMemoryMappings::new(&image_blobs);
+        first_mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+            &mut first,
+            &image_memory,
+            &image_blobs,
+            &HashSet::new(),
+            &BTreeMap::new(),
+            &empty_sealed,
+        )?;
+        super::map_sealed_image_runs(
+            &mut first,
+            &image_blobs,
+            &mut first_mapped,
+            &empty_sealed,
+            &first_pins,
+        )?;
+        let first_copy_bytes =
+            super::sync_persisted_blobs_to_native(&mut first, &image_blobs, false, &guard)?;
+        first.reg_write(RegisterMIPS::V0, u64::from(TARGET)).unwrap();
+        first.reg_write(RegisterMIPS::T1, u64::from(VALUE)).unwrap();
+        first.emu_start(u64::from(ENTRY), u64::from(ENTRY + 4), 0, 1).unwrap();
+        assert_eq!(super::read_unicorn_u32(&first, TARGET), Some(VALUE));
+        let offset = (TARGET - blob.base) as usize;
+        // Deliberately do not call sync_mapped_blobs_from_unicorn: the migrated
+        // writable page must already be the one byte authority after real MIPS.
+        let canonical_after_store = u32::from_le_bytes(
+            blob.bytes[offset..offset + 4]
+                .try_into()
+                .expect("target word in loader-backed run"),
+        );
+        drop(first); // Native owner closes before its pointer pins.
+        drop(first_mapped);
+        drop(first_pins);
+
+        let mut fresh = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let fresh_pins = super::NativeMappingPins::default();
+        let mut fresh_mapped = super::KernelMemoryMappings::new(&image_blobs);
+        fresh_mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+            &mut fresh,
+            &image_memory,
+            &image_blobs,
+            &HashSet::new(),
+            &BTreeMap::new(),
+            &empty_sealed,
+        )?;
+        super::map_sealed_image_runs(
+            &mut fresh,
+            &image_blobs,
+            &mut fresh_mapped,
+            &empty_sealed,
+            &fresh_pins,
+        )?;
+        let fresh_copy_bytes =
+            super::sync_persisted_blobs_to_native(&mut fresh, &image_blobs, false, &guard)?;
+        fresh.reg_write(RegisterMIPS::V0, u64::from(TARGET)).unwrap();
+        fresh.reg_write(RegisterMIPS::T2, 0).unwrap();
+        fresh
+            .emu_start(u64::from(ENTRY + 4), u64::from(ENTRY + 8), 0, 1)
+            .unwrap();
+        let fresh_load = fresh.reg_read(RegisterMIPS::T2).unwrap() as u32;
+        drop(fresh);
+        drop(fresh_mapped);
+        drop(fresh_pins);
+
+        eprintln!(
+            "writable_image_red first_copy_bytes={first_copy_bytes} fresh_copy_bytes={fresh_copy_bytes} canonical_after_store=0x{canonical_after_store:08x} fresh_load=0x{fresh_load:08x}"
+        );
+        assert_eq!(
+            canonical_after_store, VALUE,
+            "real MIPS store must update the birth-owned backing without blob readback"
+        );
+        assert_eq!(fresh_load, VALUE, "fresh native owner must read that backing");
+        assert_eq!(
+            first_copy_bytes, 0,
+            "writable target run must not take initial per-slice copy-in"
+        );
+        assert_eq!(
+            fresh_copy_bytes, 0,
+            "fresh owner must pointer-map the same backing, not copy its bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn patched_branch_likely_final_bytes_are_sealed_and_execute_in_fresh_owners()
     -> crate::Result<()> {
         const ORIGIN: u32 = 0x0040_1000;
