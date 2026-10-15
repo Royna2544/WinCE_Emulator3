@@ -410,8 +410,8 @@ fn native_sent_has_sender_birth(
     process: crate::ce::object::ProcessBirthKey,
 ) -> bool {
     sent.sender_owner == (crate::ce::gwe::SentMessageSenderOwner::Birth { thread, process })
-        && sent.sender_thread_id == Some(thread.thread_id())
-        && sent.sender_process_id == Some(process.process_id())
+        && sent.sender_thread_id() == Some(thread.thread_id())
+        && sent.sender_process_id() == Some(process.process_id())
 }
 
 #[cfg(feature = "unicorn")]
@@ -459,6 +459,10 @@ fn native_send_import_requires_verified_birth(
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
                 | Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT)
                 | Some(crate::ce::coredll_ordinals::ORD_SEND_DLG_ITEM_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_SEND_NOTIFY_MESSAGE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_DEF_DLG_PROC_W)
+                | Some(crate::ce::coredll_ordinals::ORD_DEF_WINDOW_PROC_W)
+                | Some(crate::ce::coredll_ordinals::ORD_CALL_WINDOW_PROC_W)
         )
 }
 
@@ -3831,12 +3835,15 @@ impl UnicornMips {
                     kernel
                         .live_thread_birth_key_by_id(yielded.sender_thread_id)
                         .is_some_and(|thread| {
-                            kernel.gwe.sent_message(yielded.send_id).is_some_and(|sent| {
-                                native_sent_has_sender_birth(sent, thread, process)
-                                    && sent.receiver_thread_id == yielded.target_thread_id
-                                    && sent.message.hwnd == yielded.hwnd
-                                    && sent.message.msg == yielded.msg
-                            })
+                            kernel
+                                .gwe
+                                .sent_message(yielded.send_id)
+                                .is_some_and(|sent| {
+                                    native_sent_has_sender_birth(sent, thread, process)
+                                        && sent.receiver_thread_id == yielded.target_thread_id
+                                        && sent.message.hwnd == yielded.hwnd
+                                        && sent.message.msg == yielded.msg
+                                })
                         })
                 })
                 && !kernel.sent_message_result_ready(yielded.send_id)
@@ -28114,9 +28121,7 @@ fn verified_scheduler_send_wait_owner(
         kernel
             .handles
             .thread_creation_owner_by_id(wait.thread_id)
-            .is_some_and(|owner| {
-                native_sent_has_sender_birth(sent, birth, owner)
-            })
+            .is_some_and(|owner| native_sent_has_sender_birth(sent, birth, owner))
     })
 }
 
@@ -54518,9 +54523,12 @@ mod guest_thread_stack_tests {
             kernel.create_window_ex_w(receiver_thread, "RECEIVER", "", None, 0, 0, 0);
         kernel.set_current_process_state(saved_state);
 
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 receiver_hwnd,
                 crate::ce::gwe::WM_USER + 1,
                 0,
@@ -54644,9 +54652,12 @@ mod guest_thread_stack_tests {
             kernel.create_window_ex_w(receiver_thread, "RECEIVER", "", None, 0, 0, 0);
         kernel.set_current_process_state(saved_state);
 
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 receiver_hwnd,
                 crate::ce::gwe::WM_USER + 1,
                 0,
@@ -55073,7 +55084,7 @@ mod guest_thread_stack_tests {
             kernel
                 .gwe
                 .sent_message(send_id)
-                .and_then(|s| s.sender_process_id),
+                .and_then(|s| s.sender_process_id()),
             Some(parent_process_id),
         );
 
@@ -58348,10 +58359,7 @@ fn try_enter_send_message_callout<D>(
     };
     let import_sender_process = kernel.current_process_birth_key();
     if import_sender_process.is_none()
-        || kernel
-            .handles
-            .thread_creation_owner_by_id(active_thread_id)
-            != import_sender_process
+        || kernel.handles.thread_creation_owner_by_id(active_thread_id) != import_sender_process
     {
         stop_native_opaque_wait_error(
             uc,
@@ -80944,7 +80952,7 @@ mod unicorn_tests {
         assert_eq!(outer_ids.len(), 1, "S real outer Send must be queued once");
         let outer_id = outer_ids[0];
         let outer_sent = kernel.gwe.sent_message(outer_id).expect("outer GWE send");
-        assert_eq!(outer_sent.sender_thread_id, Some(sender_thread));
+        assert_eq!(outer_sent.sender_thread_id(), Some(sender_thread));
         assert_eq!(outer_sent.receiver_thread_id, receiver_thread);
         assert_eq!(outer_sent.receiver_birth, Some(receiver_birth));
         assert_eq!(outer_sent.result, None);
@@ -81103,7 +81111,7 @@ mod unicorn_tests {
         let inner_id = inner_ids[0];
         assert_ne!(outer_id, inner_id);
         let inner_sent = kernel.gwe.sent_message(inner_id).expect("inner GWE send");
-        assert_eq!(inner_sent.sender_thread_id, Some(receiver_thread));
+        assert_eq!(inner_sent.sender_thread_id(), Some(receiver_thread));
         assert_eq!(inner_sent.receiver_thread_id, sender_thread);
         assert_eq!(inner_sent.receiver_birth, Some(sender_birth));
         assert_eq!(inner_sent.result, None);
@@ -82737,6 +82745,37 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn native_send_imports_require_captured_caller_birth() {
+        use crate::ce::coredll_ordinals::{
+            ORD_CALL_WINDOW_PROC_W, ORD_DEF_DLG_PROC_W, ORD_DEF_WINDOW_PROC_W,
+            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
+            ORD_SEND_NOTIFY_MESSAGE_W,
+        };
+        use crate::emulator::imports::ImportModuleKind;
+
+        for ordinal in [
+            ORD_SEND_MESSAGE_W,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            ORD_SEND_NOTIFY_MESSAGE_W,
+            ORD_DEF_DLG_PROC_W,
+            ORD_DEF_WINDOW_PROC_W,
+            ORD_CALL_WINDOW_PROC_W,
+        ] {
+            assert!(super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Coredll,
+                Some(ordinal),
+                0x1234,
+            ));
+            assert!(!super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Fsdmgr,
+                Some(ordinal),
+                0x1234,
+            ));
+        }
+    }
+
+    #[test]
     fn send_message_direct_wndproc_captures_caller_registers() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
@@ -84194,7 +84233,7 @@ mod unicorn_tests {
             assert_eq!(ready_id, next_id);
             assert_eq!(kernel.gwe.active_sent_message_id(1), None);
             assert_eq!(
-                kernel.gwe.sent_message(next_id).unwrap().sender_thread_id,
+                kernel.gwe.sent_message(next_id).unwrap().sender_thread_id(),
                 Some(3)
             );
             super::prepare_native_message_pointer_payload(
