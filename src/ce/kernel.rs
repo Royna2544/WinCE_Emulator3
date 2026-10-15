@@ -17019,4 +17019,70 @@ mod tests {
         assert_eq!(kernel.dispatch_message_w_for_thread(11, dispatched), 0);
         assert!(kernel.message_pointer_payload(owner, ptr).is_none());
     }
+
+    #[test]
+    fn finite_sleep_kernel_frame_selects_once_and_retires_after_completion() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, thread_id) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let birth = kernel.handles.thread_birth_key_for_handle(handle).unwrap();
+        let frame = kernel
+            .try_publish_finite_sleep_wait_for_birth(birth, handle, 100, 10)
+            .unwrap();
+        assert!(kernel.is_blocked_finite_sleep_frame(frame));
+        assert!(
+            kernel
+                .try_publish_finite_sleep_wait_for_birth(birth, handle, 101, 10)
+                .is_err(),
+            "one birth cannot publish a second active finite-Sleep frame"
+        );
+        assert!(kernel.close_handle(handle).unwrap());
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 111, |_, _| false),
+            Some(frame.wait_id())
+        );
+        assert!(kernel.begin_finite_sleep_completion(frame));
+        assert!(!kernel.begin_finite_sleep_completion(frame));
+        assert_eq!(kernel.select_ready_blocked_waiter(1, 111, |_, _| false), None);
+        assert!(kernel.retire_finite_sleep_completion(frame));
+        assert!(kernel.blocked_waiter(frame.wait_id()).is_none());
+        assert_eq!(kernel.handles.active_finite_sleep_frame(birth), None);
+        assert!(kernel.handles.thread_execution_live_by_id(thread_id));
+    }
+
+    #[test]
+    fn finite_sleep_cancel_and_exit_keep_neighbor_wait_identity() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (handle, _) = kernel.create_guest_thread(0x0040_1000, 0, false);
+        let birth = kernel.handles.thread_birth_key_for_handle(handle).unwrap();
+        let neighbor = kernel
+            .try_register_opaque_waiter_for_birth(
+                birth,
+                handle,
+                Vec::new(),
+                SchedulerBlockedWaitKind::GetMessage {
+                    hwnd: None,
+                    min_msg: 0,
+                    max_msg: 0,
+                },
+                100,
+                crate::ce::timer::INFINITE,
+            )
+            .unwrap();
+        let first = kernel
+            .try_publish_finite_sleep_wait_for_birth(birth, handle, 100, 10)
+            .unwrap();
+        assert!(kernel.remove_blocked_waiter(first.wait_id()).is_some());
+        assert!(kernel.blocked_waiter(neighbor).is_some());
+        assert_eq!(kernel.handles.active_finite_sleep_frame(birth), None);
+
+        let second = kernel
+            .try_publish_finite_sleep_wait_for_birth(birth, handle, 200, 10)
+            .unwrap();
+        assert_ne!(first.key(), second.key());
+        assert_ne!(first.wait_id(), second.wait_id());
+        assert!(kernel.mark_guest_thread_exited_by_birth(birth, 0));
+        assert!(kernel.blocked_waiter(neighbor).is_none());
+        assert!(kernel.blocked_waiter(second.wait_id()).is_none());
+        assert_eq!(kernel.handles.active_finite_sleep_frame(birth), None);
+    }
 }
