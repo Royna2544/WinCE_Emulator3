@@ -467,6 +467,27 @@ fn native_send_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_no_wait_effect_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && matches!(
+            ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_TRANSLATE_ACCELERATOR_W)
+                | Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA)
+                | Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA_ALLOC)
+                | Some(crate::ce::coredll_ordinals::ORD_SET_LOCAL_TIME)
+                | Some(crate::ce::coredll_ordinals::ORD_SET_SYSTEM_TIME)
+                | Some(crate::ce::coredll_ordinals::ORD_SET_REAL_TIME)
+                | Some(crate::ce::coredll_ordinals::ORD_CHANGE_DISPLAY_SETTINGS_EX)
+                | Some(crate::ce::coredll_ordinals::ORD_SYSTEM_PARAMETERS_INFO_W)
+                | Some(crate::ce::coredll_ordinals::ORD_ADD_FONT_RESOURCE_W)
+                | Some(crate::ce::coredll_ordinals::ORD_REMOVE_FONT_RESOURCE_W)
+        )
+}
+
+#[cfg(feature = "unicorn")]
 fn native_import_requires_verified_thread_birth(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -475,6 +496,7 @@ fn native_import_requires_verified_thread_birth(
     native_gwe_queue_import_requires_verified_birth(module_kind, ordinal)
         || native_window_creation_import_requires_verified_birth(module_kind, ordinal)
         || native_send_import_requires_verified_birth(module_kind, ordinal)
+        || native_no_wait_effect_import_requires_verified_birth(module_kind, ordinal)
         || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
             && first_arg == 0
             && matches!(
@@ -31089,8 +31111,8 @@ mod wait_scheduler_tests {
             .gwe
             .create_window(receiver_thread_id, "SendDeadline", "send");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                thread_id,
+            .begin_cross_thread_send_message_w_for_birth(
+                new_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 214,
                 0,
@@ -49281,8 +49303,8 @@ mod guest_thread_stack_tests {
         let receiver_thread = 3;
         let hwnd = kernel.create_window_ex_w(receiver_thread, "SEND_TARGET", "", None, 0, 0, 0);
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER,
                 0,
@@ -54753,9 +54775,12 @@ mod guest_thread_stack_tests {
             kernel.create_window_ex_w(receiver_thread, "RECEIVER", "", None, 0, 0, 0);
         kernel.set_current_process_state(saved_state);
 
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread)
+            .expect("boot sender birth");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 receiver_hwnd,
                 crate::ce::gwe::WM_USER + 1,
                 0x0e,
@@ -55041,7 +55066,10 @@ mod guest_thread_stack_tests {
         let mut kernel = CeKernel::boot(config);
 
         let parent_process_id = kernel.current_process_id();
-        let parent_thread = 9;
+        let parent_thread = super::MAIN_GUEST_THREAD_ID;
+        let parent_birth = kernel
+            .live_thread_birth_key_by_id(parent_thread)
+            .expect("boot parent thread birth");
 
         let launch = kernel.queue_process_launch(
             Some("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned()),
@@ -55063,11 +55091,11 @@ mod guest_thread_stack_tests {
         kernel.set_current_process_state(parent_state);
         assert_ne!(child_hwnd, 0);
 
-        // Parent thread 9 queues a BLOCKING cross-thread send to child's window.
-        // begin_cross_thread_send_message_w records current_process_id as sender.
+        // The live parent primary queues a blocking cross-thread send to the
+        // child. Its frozen birth, not a synthetic numeric TID, owns the send.
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                parent_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                parent_birth,
                 child_hwnd,
                 crate::ce::gwe::WM_USER + 0x99,
                 1,
@@ -55088,8 +55116,7 @@ mod guest_thread_stack_tests {
             Some(parent_process_id),
         );
 
-        // Parent exits. terminate_sent_messages_from_process should remove the
-        // queued (not-yet-active) sent message for the parent's process_id.
+        // Parent exit retires only its birth-owned queued send.
         assert!(kernel.terminate_process(crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
 
         // Sent message must be gone from the child's queue.
@@ -73478,8 +73505,8 @@ mod unicorn_tests {
             0,
         );
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 0x76,
                 0,
@@ -79545,8 +79572,8 @@ mod unicorn_tests {
         );
 
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread_id,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 0x7a,
                 0x55,
@@ -82776,6 +82803,41 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn native_no_wait_effect_imports_require_captured_caller_birth() {
+        use crate::ce::coredll_ordinals::{
+            ORD_ADD_FONT_RESOURCE_W, ORD_CHANGE_DISPLAY_SETTINGS_EX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_REMOVE_FONT_RESOURCE_W, ORD_SET_LOCAL_TIME,
+            ORD_SET_REAL_TIME, ORD_SET_SYSTEM_TIME, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_TRANSLATE_ACCELERATOR_W,
+        };
+        use crate::emulator::imports::ImportModuleKind;
+
+        for ordinal in [
+            ORD_TRANSLATE_ACCELERATOR_W,
+            ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_SET_LOCAL_TIME,
+            ORD_SET_SYSTEM_TIME,
+            ORD_SET_REAL_TIME,
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_ADD_FONT_RESOURCE_W,
+            ORD_REMOVE_FONT_RESOURCE_W,
+        ] {
+            assert!(super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Coredll,
+                Some(ordinal),
+                0x1234,
+            ));
+            assert!(!super::native_import_requires_verified_thread_birth(
+                ImportModuleKind::Fsdmgr,
+                Some(ordinal),
+                0x1234,
+            ));
+        }
+    }
+
+    #[test]
     fn send_message_direct_wndproc_captures_caller_registers() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
@@ -85379,8 +85441,8 @@ mod unicorn_tests {
             .gwe
             .create_window(receiver_thread, "SendResume", "send");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 212,
                 0,
@@ -85527,8 +85589,8 @@ mod unicorn_tests {
             )
             .expect("birth-owned receiver HWND");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 213,
                 0,
@@ -85663,6 +85725,9 @@ mod unicorn_tests {
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let sender_birth = kernel
+            .live_thread_birth_key_by_id(sender_thread)
+            .expect("sender birth");
         let (receiver_handle, receiver_thread) = kernel.create_guest_thread(0x0040_4000, 0, false);
         let receiver_birth = kernel.live_thread_birth_key_by_id(receiver_thread).unwrap();
         let hwnd = kernel
@@ -85679,8 +85744,8 @@ mod unicorn_tests {
             )
             .expect("birth-owned receiver HWND");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 214,
                 0,
@@ -87190,8 +87255,8 @@ mod unicorn_tests {
             .gwe
             .create_window(receiver_thread, "SendResumeFallback", "send");
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                sender_thread,
+            .begin_cross_thread_send_message_w_for_birth(
+                sender_birth,
                 hwnd,
                 crate::ce::gwe::WM_USER + 213,
                 0,
