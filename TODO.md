@@ -74,14 +74,21 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   adjacent triplet after that approval. Keep the writable folders quiescent,
   validate the post-backup inventory and current mount content, then use only
   the preserved sealed EXE/PDB in one bounded run.
-  The current watchdog candidate starts and verifies an independent worker
+  The current [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+  [full patch](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch),
+  [script-only build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+  and [offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
+  supersede intermediate a03 too. The watchdog starts and verifies an independent worker
   before requesting launch; it has a 355-second post-scan monotonic deadline,
-  two-second RSS/raw-log checks and exact process cleanup. Its offline controls
-  reached 123 preflight, 66 runner, 14 backup, 9 observer and atomic overwrite
-  greens. Recheck after the last path-matching correction and seal the new a03
-  source/build identity before proposing any run. Claude's read-only review
-  found no concrete launch blocker, but is not a live dead-driver proof or
-  approval. Do not start backups or the guest while that gate is unfinished.
+  two-second RSS/raw-log checks and exact process cleanup. An atomic
+  `launch-began` marker precedes spawn; an empty WMI search after it remains
+  unresolved, retaining the watchdog for repeated exact sweeps. The a04 offline
+  gate passed 123 preflight, 73 runner, 14 backup, 9 summary and D: atomic
+  overwrite controls. Independent containment assumes D: volume I/O progress;
+  a volume-wide stall also stalls guest writes on these mounts. Claude's
+  read-only and peer reviews found no concrete source blocker, but are not
+  live dead-driver proof or a new one-run approval. No new backup or guest run
+  has occurred. Obtain a distinct fresh approval before the next backup/run.
   Note the required `192.168.0.39:8765` LAN endpoint exposure. Report input
   ACK, drain/post, guest WNDPROC and frame separately, with phase-aligned busy-
   slice MIPS, per-slice setup cost, host RSS/private memory and the narrow guest

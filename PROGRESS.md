@@ -36,17 +36,27 @@ byte-identical ledgers to seven rows (SHA-256
 `53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`).
 See the [ledger](docs/evidence/ledger.md) for the evidence chain and limits.
 A new, distinct approval is required before any further backup or launch.
-The current runner candidate adds an independent `WatchdogWorker`: its exact
+The current [a04 source seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json)
+(SHA-256 `C495AB5324BABB1DCF252B8DCCB6A0B5EC4A58C3D04632E3728D39C6AFFA376C`),
+[full patch](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-full-scoped.patch)
+(SHA-256 `B9FBE5F1DA42453BE8213D2FD45B4553126B62F9641A2003FEB4D2FC26C35CCB`)
+and [script-only build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
+(SHA-256 `3C84522E0D5DF2B6B0BA7BFD8DA8BB14747E4270BDB93BBA61C058D0F2B1ACFE`)
+bind the unchanged clean-built EXE/PDB to the new scripts. Intermediate a03
+is also superseded, not live-usable. The [a04 offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
+(SHA-256 `759017B61C36897C0FDCE658003AED41E450B0B573894245B2F496DDBE3627BD`)
+passed 123/123 preflight, 73/73 runner, 14/14 backup, 9/9 summary and the
+D: atomic JSON overwrite test. The runner adds an independent `WatchdogWorker`: its exact
 process identity and heartbeat are checked before the launch request, and it
 enforces a monotonic 355-second deadline from the post-mount scan, with
 two-second RSS/raw-log probes and exact-identity cleanup on failure. The
-existing detached monitor's 390-second guard remains. Offline controls reached
-123/123 preflight, 66/66 runner, 14/14 backup, 9/9 observer plus atomic JSON
-overwrite tests; a final check after a small path-matching correction and a
-new a03 source/build seal are pending. Claude's read-only review of this
-watchdog candidate found no concrete launch blocker, but did not prove a live
-dead-driver integration path or authorize a run. No new backup or guest run
-followed the aborted attempt.
+existing detached monitor's 390-second guard remains. An atomic `launch-began`
+marker precedes guest spawn; an empty WMI search after that marker is unresolved,
+so the watchdog stays active and retries exact cleanup. Independent containment
+assumes the D: evidence/mount volume makes I/O progress; a volume-wide stall
+also stalls guest writes on these mounts. Claude's read-only and peer reviews
+found no concrete source blocker, but did not prove a live dead-driver path or
+authorize a run. No new backup or guest run followed the aborted attempt.
 
 ## 2026-10-15 Stage 3 source gates
 
