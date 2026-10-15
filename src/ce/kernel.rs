@@ -3570,9 +3570,10 @@ impl CeKernel {
         {
             return false;
         }
-        // A native mapping pin keeps its page and budget alive until checked
-        // native owner close; only canonical VM records retire here.
+        // A native mapping pin keeps its backing alive until checked native
+        // owner close; only canonical, exact-birth VM records retire here.
         self.memory.retire_fixed_private_ranges_for_owner(owner);
+        self.memory.retire_writable_image_runs_for_owner(owner);
         self.memory.retire_heap_state_for_owner(owner);
         if was_signaled == Some(false) {
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(owner));
@@ -12679,6 +12680,7 @@ mod tests {
                 BS_DEFPUSHBUTTON, WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
                 WM_SETFOCUS, WS_CHILD, WS_VISIBLE,
             },
+            memory::{WritableImageRunAccessError, WritableImageRunIdentity},
             registry::RegistryDump,
         },
         config::{ObjectStoreConfig, RootConfig, RuntimeConfig, StorageConfig},
@@ -15313,6 +15315,225 @@ mod tests {
         );
         assert_eq!(kernel.current_process_state().exit_code, 0x51);
         assert!(kernel.current_process_state().signaled);
+        Ok(())
+    }
+
+    #[test]
+    fn host_exit_writable_image_retirement_waits_for_framebuffer_and_exact_birth() -> Result<()> {
+        const MODULE_BASE: u32 = 0x6400_0000;
+        const RUN_BASE: u32 = MODULE_BASE + 0x1000;
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let foreign = kernel.current_process_birth_key().expect("boot birth");
+        let launch = kernel.queue_process_launch(None, None);
+        let owner = launch.process_birth.expect("child birth");
+        let primary = launch.primary_thread_birth.expect("child primary birth");
+        let identity = WritableImageRunIdentity::new(owner, MODULE_BASE, 1, RUN_BASE)
+            .expect("child image identity");
+        let foreign_identity = WritableImageRunIdentity::new(foreign, MODULE_BASE, 1, RUN_BASE)
+            .expect("foreign image identity at the same VA");
+        let bytes = vec![0x5a; 0x1000];
+        let pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(
+                kernel
+                    .memory
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare child image"),
+            )
+            .expect("publish child image");
+        let foreign_pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(
+                kernel
+                    .memory
+                    .prepare_writable_image_run(foreign_identity, &[0x7b; 0x1000])
+                    .expect("prepare foreign image"),
+            )
+            .expect("publish foreign image");
+        let future_identity =
+            WritableImageRunIdentity::new(owner, MODULE_BASE + 0x10000, 1, MODULE_BASE + 0x11000)
+                .expect("detached future image identity");
+        let stale_prepared = kernel
+            .memory
+            .prepare_writable_image_run(future_identity, &bytes)
+            .expect("prepare before process exit");
+
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                primary,
+                "IMAGE_EXIT_BACKING",
+                "",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("child-owned window");
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        let mut incompatible = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+
+        let mut no_birth = launch.clone();
+        no_birth.process_birth = None;
+        assert!(!kernel.try_mark_process_launch_exited_with_framebuffer(
+            &no_birth,
+            0x51,
+            Some(&mut framebuffer),
+        )?);
+        let mut wrong_birth = launch.clone();
+        wrong_birth.process_birth = Some(foreign);
+        assert!(!kernel.try_mark_process_launch_exited_with_framebuffer(
+            &wrong_birth,
+            0x51,
+            Some(&mut framebuffer),
+        )?);
+        assert!(matches!(
+            kernel.try_mark_process_launch_exited_with_framebuffer(
+                &launch,
+                0x51,
+                Some(&mut incompatible),
+            ),
+            Err(Error::HostExitRecoveryRequired { process_id, hwnd: Some(rejected), .. })
+                if process_id == launch.process_id && rejected == hwnd
+        ));
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert!(kernel.memory.contains_writable_image_run_pin(&pin));
+        assert!(kernel.memory.contains_writable_image_run_pin(&foreign_pin));
+        let mut original = [0; 4];
+        pin.read_bytes(0, &mut original)
+            .expect("refused exit preserves live image bytes");
+        assert_eq!(original, [0x5a; 4]);
+
+        // A stopped native owner may still have a strong backing pin. VM
+        // retirement removes publication authority, not that allocation.
+        let native_access = pin.begin_native_access().expect("native pin");
+        let retained_pin = pin.clone();
+        assert!(kernel.try_mark_process_launch_exited_with_framebuffer(
+            &launch,
+            0x51,
+            Some(&mut framebuffer),
+        )?);
+        assert!(!kernel.handles.process_execution_live_by_birth(owner));
+        assert!(!kernel.memory.contains_writable_image_run_pin(&pin));
+        assert!(kernel.memory.contains_writable_image_run_pin(&foreign_pin));
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
+        );
+        assert_eq!(
+            pin.read_bytes(0, &mut original),
+            Err(WritableImageRunAccessError::NativeExecutionActive)
+        );
+        assert!(
+            kernel
+                .memory
+                .commit_prepared_writable_image_run(stale_prepared)
+                .is_none()
+        );
+        assert!(
+            kernel
+                .memory
+                .prepare_writable_image_run(future_identity, &bytes)
+                .is_none()
+        );
+        assert_eq!(
+            kernel
+                .memory
+                .retire_writable_image_module(owner, MODULE_BASE, 1),
+            None
+        );
+        assert!(!kernel.try_mark_process_launch_exited_with_framebuffer(
+            &launch,
+            0x51,
+            Some(&mut framebuffer),
+        )?);
+
+        drop(pin);
+        assert!(
+            kernel
+                .memory
+                .overlaps_writable_image_guest_range_for_owner(owner, RUN_BASE, 0x1000)
+        );
+        drop(native_access);
+        retained_pin
+            .read_bytes(0, &mut original)
+            .expect("retained pin keeps retired bytes alive after native close");
+        assert_eq!(original, [0x5a; 4]);
+        assert!(
+            kernel
+                .memory
+                .overlaps_writable_image_guest_range_for_owner(owner, RUN_BASE, 0x1000)
+        );
+        drop(retained_pin);
+        assert!(
+            !kernel
+                .memory
+                .overlaps_writable_image_guest_range_for_owner(owner, RUN_BASE, 0x1000)
+        );
+        assert!(
+            kernel
+                .memory
+                .overlaps_writable_image_guest_range_for_owner(foreign, RUN_BASE, 0x1000)
+        );
+        foreign_pin
+            .read_bytes(0, &mut original)
+            .expect("foreign same-VA image survives child exit");
+        assert_eq!(original, [0x7b; 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn stopped_root_exit_retires_only_root_writable_image_birth() -> Result<()> {
+        const MODULE_BASE: u32 = 0x6500_0000;
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let root = kernel.current_process_birth_key().expect("root birth");
+        let identity = WritableImageRunIdentity::new(root, MODULE_BASE, 1, MODULE_BASE)
+            .expect("root image identity");
+        let pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(
+                kernel
+                    .memory
+                    .prepare_writable_image_run(identity, &[0x5a; 0x1000])
+                    .expect("prepare root image"),
+            )
+            .expect("publish root image");
+        let foreign_launch = kernel.queue_process_launch(None, None);
+        kernel.set_current_process_id(foreign_launch.process_id);
+        assert!(
+            !kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                root, 0x52, None,
+            )?
+        );
+        assert!(kernel.memory.contains_writable_image_run_pin(&pin));
+
+        kernel.set_current_process_id(root.process_id());
+        assert!(
+            kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                root, 0x52, None,
+            )?
+        );
+        assert!(!kernel.memory.contains_writable_image_run_pin(&pin));
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
+        );
+        assert!(
+            kernel.handles.process_execution_live_by_birth(
+                foreign_launch.process_birth.expect("foreign birth")
+            )
+        );
         Ok(())
     }
 
