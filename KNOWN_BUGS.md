@@ -9,10 +9,12 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   `guest_thread_stack_tests::direct_visible_message_payload_windowpos_matches_raw_and_mips_reads`
   overflowing its test-thread stack, then exited `0xc0000005`
   ([raw log](evidence/stage2-writable-image-native-failure-20261016/broad-release-attempt02.raw.log)).
-  Of three stamped default-harness full release runs so far, one crashed and
-  two passed (that native-failure attempt 02, its retry 04, and the
-  [file-view attempt 01](evidence/stage2-writable-image-file-view-20261016/broad-release-attempt01.raw.log));
-  this small count is not a stable reproduction-rate estimate.
+  In the earlier three stamped default-harness full release runs, one crashed
+  and two passed (that native-failure attempt 02, its retry 04, and the
+  [file-view attempt 01](evidence/stage2-writable-image-file-view-20261016/broad-release-attempt01.raw.log)).
+  A fourth, later [VM-allocation full release run](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
+  passed on changed source, giving one crash among four observed full-release
+  attempts, not a stable reproduction-rate estimate.
   Three later separately stamped, default-harness release `--lib` reruns
   passed (**0/3** WINDOWPOS crashes); those library-only runs are not pooled
   with the earlier full-suite denominator
@@ -91,6 +93,11 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   Legacy file-view seed/readback now refuses overlap with active or
   retired-but-pinned writable-image runs before byte mutation
   ([receipt](evidence/stage2-writable-image-file-view-20261016/validation.receipt.md)).
+  The bounded VM-allocation gate also fences same-birth LegacySeed,
+  private/shared reservations, pending holes, fixed heap and heap cursor,
+  and native seed/reclaim/fault/map collisions; foreign births may still
+  reuse a numeric VA
+  ([receipt](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)).
   Other direct host-write/restore/rebind and exact exit/module-retirement
   fences, DLL unload/reload, full machine checkpoint relineage, O-M3 guest
   physical accounting and an approved matched app run remain open. The synthetic

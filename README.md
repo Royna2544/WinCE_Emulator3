@@ -27,9 +27,10 @@ remote-control HTTP/WebSocket surface.
   spillover. An opt-in synthetic writable-main-image VM/pin path, monitor
   checkpoint refusal and live-native mutable-code reads pass bounded source
   controls. A synthetic second-run native-map failure/checked abort and a
-  legacy file-view overlap fence also pass; the latest complete source suites
-  passed release **2,119/0/9 ignored** and no-default **1,516/0/3 ignored**
-  ([receipt](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)).
+  legacy file-view overlap fence pass. The next synthetic VM-allocation
+  collision fence also passes; its complete source suites passed release
+  **2,127/0/9 ignored** and no-default **1,520/0/3 ignored**
+  ([receipt](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)).
   An intermittent WINDOWPOS test-thread overflow remains unexplained despite
   later clean reruns ([receipt](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)).
   Production SD activation, other host-write/exit fences, DLL ownership and

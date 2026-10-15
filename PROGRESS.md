@@ -49,11 +49,24 @@ bytes, including same/foreign PID and retired-but-pinned runs; adjacent
 nonoverlapping views retain ordinary behavior. Focused release **5/5** and
 no-default **1/1** passed. Its [stable-source complete suites](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
 passed release **2,119/0/9 ignored** and no-default **1,516/0/3 ignored**
-across 18 result blocks each with the default test harness. These are
-source/test results, not an iNavi run, a release EXE/PDB seal, a footprint
-or speed result, O-M3 physical-page accounting, or full Stage 2 acceptance.
-Other direct host writes, exact process-exit/module-retirement fences, DLL
-migration, checkpoint relineage and production activation remain open. The
+across 18 result blocks each with the default test harness.
+
+The next [writable-image/VM-allocation overlap gate](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
+preflights `LegacySeed` in both publication orders, same-birth stable
+private/shared reservations and pending holes, fixed heap/heap cursor, and
+native seed/reclaim/fault/map paths against active or retired-pinned image
+ranges. Foreign-birth private backing may reuse the numeric VA. Focused
+release **13/0/0** and no-default **8/0/0** passed; default-harness complete
+suites passed release **2,127/0/9 ignored** and no-default **1,520/0/3
+ignored** across 18 blocks each. Six Rust source hashes remained stable
+through all four attempts despite a backup-only HEAD change during the first
+focused run. Unicorn-only and Unicorn-plus-desktop feature checks also passed
+on that stable source seal. These are source/test results, not an iNavi run,
+a release EXE/PDB seal, a footprint or speed result, O-M3 physical-page
+accounting, or full Stage 2 acceptance.
+Other direct host writes, restore/rebind and exact process-exit/module-
+retirement fences, DLL migration, checkpoint relineage and production
+activation remain open. The
 intermittent WINDOWPOS stack failure remains under investigation
 ([stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
 [three clean library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md));

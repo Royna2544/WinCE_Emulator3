@@ -7,9 +7,11 @@ AV-versus-stack-overflow lead remains unconfirmed. After the file-view broad
 seal, three separately stamped default-harness release `--lib` trials passed
 without a WINDOWPOS crash (**0/3**); the earlier full-suite default-harness
 sequence had **1/3** crash. These are different denominators and do not
-establish cause or safety
+establish cause or safety; a later VM-allocation full release run also passed
+on changed source
 ([library reruns](evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md),
-[stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md)).
+[stack probe](evidence/stage2-windowpos-stack-20261016/validation.receipt.md),
+[latest full suite](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)).
 The direct Claude bridge ACK is still queued behind an earlier
 `sent_unconfirmed` message, so this is the in-repo ACK without bypassing it.
 
@@ -55,10 +57,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 0. Complete writable-image production safety gates before enabling adoption
    for the SD app. VM backing, opt-in real-MIPS fresh-owner behavior,
    mapped-code fallback, the synthetic second-run native `mem_map_ptr`
-   failure/abort-close control, and the legacy file-view seed/readback
-   overlap fence pass their bounded source gates
+   failure/abort-close control, the legacy file-view seed/readback fence,
+   and the VM-allocation/heap/native-mapper collision fences pass their
+   bounded source gates
    ([native failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md),
-   [file-view broad](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md));
+   [file-view broad](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md),
+   [VM allocation](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md));
    the normal app loader is still copy-backed. Next, fence other direct
    host-write/restore/rebind paths and exact process-exit/module-retirement
    races with synthetic controls. Then migrate preloaded and runtime DLLs
