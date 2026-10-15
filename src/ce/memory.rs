@@ -3221,6 +3221,33 @@ impl MemorySystem {
             .is_some_and(|run| Rc::ptr_eq(run, &pin.run))
     }
 
+    /// Legacy file-view sync is keyed by guest VA, not by process birth. A
+    /// view from any PID must not seed or read back over an active image run,
+    /// or over a retired run still kept alive by a VM/native-owner pin.
+    pub fn overlaps_writable_image_guest_range(&self, base: u32, size: u32) -> bool {
+        if size == 0 {
+            return false;
+        }
+        let start = u64::from(base);
+        let end = start + u64::from(size);
+        let overlaps = |identity: &WritableImageRunIdentity, run: &StableWritableImageRun| {
+            let run_start = u64::from(identity.run_base);
+            let run_end = run_start + run.len as u64;
+            start < run_end && run_start < end
+        };
+        self.writable_image_runs
+            .iter()
+            .any(|(identity, run)| overlaps(identity, run))
+            || self
+                .retired_writable_image_pins
+                .iter()
+                .any(|(identity, weak_run)| {
+                    weak_run
+                        .upgrade()
+                        .is_some_and(|run| overlaps(identity, &run))
+                })
+    }
+
     /// Retire one exact module load. Wrong or stale generations do nothing.
     /// Retired backing stays alive while a native owner still holds a pin;
     /// that pin also fences overlapping same-birth VA reuse.
@@ -3996,6 +4023,37 @@ mod tests {
                 .commit_prepared_writable_image_run(terminal)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn writable_image_guest_range_overlap_tracks_active_and_retired_pins() {
+        let owner = boot_owner();
+        let mut memory = MemorySystem::default();
+        let base = 0x6300_1000;
+        let identity = writable_image_identity(owner, 0x6300_0000, 1, base);
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(identity, &vec![0x5a; 2 * STABLE_PRIVATE_PAGE_SIZE])
+                    .expect("prepare image run"),
+            )
+            .expect("publish image run");
+        assert!(memory.overlaps_writable_image_guest_range(base - 2, 4));
+        assert!(memory.overlaps_writable_image_guest_range(base + 0x1fff, 2));
+        assert!(!memory.overlaps_writable_image_guest_range(base - 4, 4));
+        assert!(!memory.overlaps_writable_image_guest_range(base + 0x2000, 4));
+        assert!(!memory.overlaps_writable_image_guest_range(base, 0));
+
+        let native_access = pin.begin_native_access().expect("retain native backing");
+        assert_eq!(
+            memory.retire_writable_image_module(owner, 0x6300_0000, 1),
+            Some(1)
+        );
+        assert!(memory.overlaps_writable_image_guest_range(base - 2, 4));
+        drop(pin);
+        assert!(memory.overlaps_writable_image_guest_range(base - 2, 4));
+        drop(native_access);
+        assert!(!memory.overlaps_writable_image_guest_range(base - 2, 4));
     }
 
     #[test]
