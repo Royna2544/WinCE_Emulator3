@@ -120,16 +120,15 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     failures or live-iNavi results. Only the runnable-receiver fixture checks
     a later no-replay slice; the three finite-Sleep controls stop at A's
     continuation. Full scheduler/Stage 3 and live-app behavior remain open.
-  - **Reproduced source-control failure, not a live-app deadlock:** the ignored
-    real-MIPS [A11b reciprocal fixture](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md)
-    has S's outer send to T and T's inner send back to S after a finite Sleep.
-    At the safe first stop, send IDs 1/2 and exact scheduler/native waits 2/3
-    remain intact. On the next bounded lease T replays its inner Send import,
-    creating third send ID 3 and duplicate native wait 4 instead of entering
-    S's WNDPROC on S's own stack. The earlier same-call A11 timing assertion
-    was invalid and is historical only. No production repair, broad suite or
-    end-to-end reciprocal return is established; the one-way A10 gate does not
-    close this nested receiver boundary.
+  - **Reciprocal Send shape remains narrow:** the A11b next-lease replay is a
+    [historical source red](evidence/scheduler-source-cut-a11-reciprocal-red/validation.next-lease.receipt.md);
+    A12's post-format focused controls cover one birth-owned, same-process,
+    plain S→T→S pair and its exact inner/outer return. A third concurrent
+    sender, timed/result-pointer Send, second pending return or deeper nesting,
+    and cross-process pairs are not supported by that handoff. An ineligible
+    blocked Send fails closed with terminal `Backend` instead of replaying its
+    import; this is a live-run risk, not CE parity or a reproduced iNavi
+    deadlock. A12 broad validation and live behavior remain separate gates.
   - Live-run risk: a second concurrent cross-thread SendMessageTimeout now
     stops with an explicit backend error until task-owned SMT frames exist
     ([receipt](evidence/stage3-smt-occupied-20261015/validation.receipt.md)).
