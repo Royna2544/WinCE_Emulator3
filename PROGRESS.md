@@ -48,6 +48,19 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded host-exit exact-window-set source/test gate
+  ([receipt](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)):
+  GWES now retires only live windows selected by frozen process birth on
+  stopped host exit, without recursively claiming a foreign parent/owner
+  link. Kernel uses the retired set for payload, shell and timer cleanup and
+  wakes an exact A→B SendReply waiter when B's receiver window is retired.
+  Preserved parent/owner and send-wake reds turned green; same-birth child,
+  owned-popup, backing, shell and timer controls passed. Final 18-block
+  suites passed release **2,072/0/9 ignored** and no-default **1,500/0/3
+  ignored**; two alternate native feature checks passed. Guest
+  `DestroyWindow` recursion is unchanged. The synthetic foreign links do
+  not establish CE6 topology; pseudo-exit caller authority, whole-exit
+  atomicity, full Stage 3 and live iNavi remain open.
 - Bounded sender-ownership source/test gate
   ([receipt](evidence/stage3-sender-birth-20261015/validation.receipt.md)):
   authenticated sender birth now owns the tested queued Send/Timeout through
@@ -56,8 +69,9 @@ result. The per-slice text before this condense is at
   side effects. The original three red controls are enabled. Final 18-group
   suites passed release **2,067/0/9 ignored** and no-default **1,495/0/3
   ignored**. Direct WndProc paths, receiver-side cross-process writes,
-  conditional system-origin device notifications, foreign GWE recursion,
-  CE6 parity, full Stage 3 and live iNavi remain open.
+  conditional system-origin device notifications, and (at that earlier
+  seal) foreign GWE recursion remained open. CE6 parity, full Stage 3 and
+  live iNavi remain open.
 - Bounded host-exit independent-window PID-reuse source/test gate
   ([receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
   verified process-exit birth selects live windows and captured backing stores
