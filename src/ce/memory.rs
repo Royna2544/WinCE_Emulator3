@@ -910,6 +910,11 @@ impl StableWritableImageRunPin {
         offset: usize,
         bytes: &[u8],
     ) -> std::result::Result<(), WritableImageRunAccessError> {
+        // A retained pin keeps retired bytes alive for diagnostics and native
+        // teardown, but it no longer authorizes a host-side restore/write.
+        if self.run.retired.get() {
+            return Err(WritableImageRunAccessError::Retired);
+        }
         self.check_access(offset, bytes.len())?;
         // SAFETY: the guard excludes native execution and this bounded copy
         // creates no reference to the canonical backing.
@@ -4098,6 +4103,161 @@ mod tests {
                 .commit_prepared_writable_image_run(terminal)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn retired_writable_image_module_refuses_retained_host_restore_before_same_va_reuse() {
+        let owner = boot_owner();
+        let mut memory = MemorySystem::default();
+        let module_base = 0x6400_0000;
+        let run_base = module_base + 0x1000;
+        let identity = writable_image_identity(owner, module_base, 1, run_base);
+        let original = vec![0x5a; STABLE_PRIVATE_PAGE_SIZE];
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(identity, &original)
+                    .expect("prepare first module generation"),
+            )
+            .expect("publish first module generation");
+        let retained = pin.clone();
+        let native_access = pin.begin_native_access().expect("pin native owner");
+
+        assert_eq!(
+            memory.retire_writable_image_module(owner, module_base, 2),
+            None
+        );
+        assert!(memory.contains_writable_image_run_pin(&pin));
+        assert_eq!(
+            memory.retire_writable_image_module(owner, module_base, 1),
+            Some(1)
+        );
+        assert_eq!(
+            retained.write_bytes(0, &[0xaa]),
+            Err(WritableImageRunAccessError::Retired)
+        );
+        assert_eq!(
+            pin.write_bytes(0, &[]),
+            Err(WritableImageRunAccessError::Retired)
+        );
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
+        );
+        let mut old = [0; 4];
+        assert_eq!(
+            retained.read_bytes(0, &mut old),
+            Err(WritableImageRunAccessError::NativeExecutionActive)
+        );
+        drop(native_access);
+        retained
+            .read_bytes(0, &mut old)
+            .expect("retired bytes stay readable for diagnostics");
+        assert_eq!(old, [0x5a; 4]);
+
+        let next_identity = writable_image_identity(owner, module_base, 2, run_base);
+        assert!(
+            memory
+                .prepare_writable_image_run(next_identity, &original)
+                .is_none()
+        );
+        drop(pin);
+        assert!(
+            memory
+                .prepare_writable_image_run(next_identity, &original)
+                .is_none()
+        );
+        drop(retained);
+
+        let next_bytes = vec![0x3c; STABLE_PRIVATE_PAGE_SIZE];
+        let next_pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(next_identity, &next_bytes)
+                    .expect("reuse VA only after final old pin closes"),
+            )
+            .expect("publish next module generation");
+        let mut current = [0; 4];
+        next_pin.read_bytes(0, &mut current).expect("read new run");
+        assert_eq!(current, [0x3c; 4]);
+        next_pin
+            .write_bytes(0, &[0x77])
+            .expect("new run stays writable");
+        next_pin
+            .read_bytes(0, &mut current)
+            .expect("read new write");
+        assert_eq!(current, [0x77, 0x3c, 0x3c, 0x3c]);
+    }
+
+    #[test]
+    fn retired_writable_image_owner_refuses_old_host_write_after_foreign_same_va_publish() {
+        let (owner, foreign_owner) = two_owners();
+        let mut memory = MemorySystem::default();
+        let module_base = 0x6500_0000;
+        let run_base = module_base + 0x1000;
+        let identity = writable_image_identity(owner, module_base, 1, run_base);
+        let original = vec![0x29; STABLE_PRIVATE_PAGE_SIZE];
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(identity, &original)
+                    .expect("prepare first owner"),
+            )
+            .expect("publish first owner");
+        let retained = pin.clone();
+        let native_access = retained.begin_native_access().expect("pin old owner");
+
+        assert_eq!(memory.retire_writable_image_runs_for_owner(owner), 1);
+        assert_eq!(
+            pin.write_bytes(0, &[0xee]),
+            Err(WritableImageRunAccessError::Retired)
+        );
+        drop(native_access);
+        assert_eq!(
+            retained.write_bytes(0, &[0xee]),
+            Err(WritableImageRunAccessError::Retired)
+        );
+        let mut old = [0; 4];
+        retained.read_bytes(0, &mut old).expect("read old owner");
+        assert_eq!(old, [0x29; 4]);
+
+        let foreign_identity = writable_image_identity(foreign_owner, module_base, 1, run_base);
+        let foreign_bytes = vec![0x83; STABLE_PRIVATE_PAGE_SIZE];
+        let foreign_pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(foreign_identity, &foreign_bytes)
+                    .expect("foreign birth may use same numeric VA"),
+            )
+            .expect("publish foreign owner");
+        let mut current = [0; 4];
+        foreign_pin
+            .read_bytes(0, &mut current)
+            .expect("read foreign owner");
+        assert_eq!(current, [0x83; 4]);
+        assert_eq!(
+            retained.write_bytes(0, &[0x11]),
+            Err(WritableImageRunAccessError::Retired)
+        );
+        retained
+            .read_bytes(0, &mut old)
+            .expect("read unchanged old owner");
+        foreign_pin
+            .read_bytes(0, &mut current)
+            .expect("read unchanged foreign owner");
+        assert_eq!(old, [0x29; 4]);
+        assert_eq!(current, [0x83; 4]);
+
+        drop(pin);
+        drop(retained);
+        let later_old_identity = writable_image_identity(owner, module_base, 2, run_base);
+        assert!(
+            memory
+                .prepare_writable_image_run(later_old_identity, &original)
+                .is_none(),
+            "owner retirement forbids every later generation"
+        );
+        assert_eq!(memory.retire_writable_image_runs_for_owner(owner), 0);
     }
 
     #[test]
