@@ -4,8 +4,8 @@ use wince_emulation_v3::{
     Result,
     ce::{
         coredll::{
-            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue,
-            dispatch_toolhelp_import_raw,
+            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllRawContext,
+            CoredllValue, dispatch_toolhelp_import_raw,
         },
         coredll_ordinals::{
             ORD_ACTIVATE_DEVICE, ORD_ACTIVATE_DEVICE_EX, ORD_BATTERY_DRVR_GET_LEVELS,
@@ -112,10 +112,11 @@ use wince_emulation_v3::{
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         framebuffer::{Framebuffer, PixelFormat, VirtualFramebuffer},
         gwe::{
-            Message, MessagePointerPayload, PeekFlags, QS_POSTMESSAGE, QS_TIMER, Rect, SC_CLOSE,
-            WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_NOTIFY, WM_PAINT, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WM_SYSCOMMAND,
-            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE, WindowPos,
+            Message, MessagePointerPayload, PeekFlags, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER,
+            Rect, SC_CLOSE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NOTIFY, WM_PAINT, WM_RENDERALLFORMATS,
+            WM_RENDERFORMAT, WM_SYSCOMMAND, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE,
+            WindowPos,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -27624,6 +27625,160 @@ fn clipboard_raw_ordinals_track_lock_owner_formats_and_names() -> Result<()> {
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn raw_delayed_clipboard_reads_reject_stale_same_tid_before_render_send() -> Result<()> {
+    const CF_TEXT: u32 = 1;
+    const CF_UNICODETEXT: u32 = 13;
+    const SENTINEL_ERROR: u32 = 0x5151_0681;
+
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let process = kernel
+        .current_process_birth_key()
+        .expect("boot process birth");
+    let (a_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+    let a_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(a_handle)
+        .expect("A caller birth");
+    assert!(kernel.handles.mark_thread_exited_by_birth(a_birth, 0));
+    kernel.handles.close(a_handle)?;
+    let b_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(process, thread_id, 0x0040_4000, 0, false)?;
+    let b_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(b_handle)
+        .expect("B caller birth");
+    assert_ne!(a_birth, b_birth);
+    let owner = kernel.create_window_ex_w(thread_id, "CLIP_STALE_OWNER", "", None, 0, 0, 0);
+
+    for (ordinal, args, expected) in [
+        (ORD_OPEN_CLIPBOARD, vec![owner], CoredllValue::Bool(true)),
+        (ORD_EMPTY_CLIPBOARD, vec![], CoredllValue::Bool(true)),
+        (
+            ORD_SET_CLIPBOARD_DATA,
+            vec![CF_TEXT, 0],
+            CoredllValue::Handle(0),
+        ),
+        (
+            ORD_SET_CLIPBOARD_DATA,
+            vec![CF_UNICODETEXT, 0],
+            CoredllValue::Handle(0),
+        ),
+        (ORD_CLOSE_CLIPBOARD, vec![], CoredllValue::Bool(true)),
+        (ORD_OPEN_CLIPBOARD, vec![owner], CoredllValue::Bool(true)),
+    ] {
+        match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ordinal,
+            args,
+        ) {
+            CoredllDispatch::Returned { value, .. } => assert_eq!(value, expected),
+            other => panic!("clipboard setup ordinal {ordinal} failed: {other:?}"),
+        }
+    }
+    assert_eq!(
+        kernel.gwe.clipboard_delayed_render_owner(CF_TEXT),
+        Some(owner)
+    );
+    assert_eq!(
+        kernel.gwe.clipboard_delayed_render_owner(CF_UNICODETEXT),
+        Some(owner)
+    );
+    let before_ids = kernel.gwe.sent_message_ids_for_windows(&[owner]);
+    let before_sends = kernel.gwe.stats().send_transaction_count;
+    let before_status = kernel
+        .gwe
+        .peek_queue_status_for_birth(b_birth, QS_SENDMESSAGE);
+    let before_ready = kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0);
+    let before_wakes = kernel.scheduler_stats().message_input_wake_candidate_count;
+    let before_trace = kernel.recent_message_ops().len();
+    kernel.threads.set_last_error(thread_id, SENTINEL_ERROR);
+    let stale = CoredllRawContext {
+        thread_id,
+        caller_birth: Some(a_birth),
+        ..Default::default()
+    };
+
+    for (ordinal, format) in [
+        (ORD_GET_CLIPBOARD_DATA, CF_TEXT),
+        (ORD_GET_CLIPBOARD_DATA_ALLOC, CF_UNICODETEXT),
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_framebuffer_and_context(
+                &mut kernel,
+                &mut memory,
+                None,
+                stale.clone(),
+                ordinal,
+                [format],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), SENTINEL_ERROR);
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[owner]),
+            before_ids
+        );
+        assert_eq!(kernel.gwe.clipboard_render_window(), None);
+    }
+    assert_eq!(kernel.gwe.stats().send_transaction_count, before_sends);
+    assert_eq!(
+        kernel
+            .gwe
+            .peek_queue_status_for_birth(b_birth, QS_SENDMESSAGE),
+        before_status
+    );
+    assert_eq!(
+        kernel.get_message_queue_ready_time_stamp_for_thread(thread_id, 0),
+        before_ready
+    );
+    assert_eq!(
+        kernel.scheduler_stats().message_input_wake_candidate_count,
+        before_wakes
+    );
+    assert_eq!(kernel.recent_message_ops().len(), before_trace);
+
+    let current = CoredllRawContext {
+        thread_id,
+        caller_birth: Some(b_birth),
+        ..Default::default()
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            current,
+            ORD_GET_CLIPBOARD_DATA,
+            [CF_TEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    let ids = kernel.gwe.sent_message_ids_for_windows(&[owner]);
+    assert_eq!(ids.len(), before_ids.len() + 1);
+    let sent = kernel
+        .gwe
+        .sent_message(*ids.last().unwrap())
+        .expect("B render send");
+    assert_eq!(sent.message.msg, WM_RENDERFORMAT);
+    assert_eq!(sent.message.wparam, CF_TEXT);
+    assert_eq!(sent.sender_thread_id(), None);
+    assert_eq!(kernel.gwe.clipboard_render_window(), Some(owner));
     Ok(())
 }
 

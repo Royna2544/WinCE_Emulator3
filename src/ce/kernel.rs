@@ -14809,7 +14809,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: reused PID host exit must select queued sends by sender process birth"]
     fn reused_pid_host_exit_preserves_stranded_prior_birth_send() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x401000, 0, false);
@@ -14908,7 +14907,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: reused PID host exit must not detach a prior-birth active send"]
     fn reused_pid_host_exit_preserves_stranded_prior_birth_active_send() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let (receiver_a_handle, receiver_a_tid) = kernel.create_guest_thread(0x401000, 0, false);

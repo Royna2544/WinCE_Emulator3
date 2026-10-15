@@ -2040,6 +2040,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_SET_SYSTEM_TIME | ORD_SET_LOCAL_TIME | ORD_SET_REAL_TIME => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Bool(false));
+            }
             kernel.send_notify_message_w(
                 thread_id,
                 crate::ce::gwe::HWND_BROADCAST,
@@ -2049,9 +2052,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             );
             Some(CoredllValue::Bool(true))
         }
-        ORD_CHANGE_DISPLAY_SETTINGS_EX => Some(CoredllValue::U32(change_display_settings_ex_raw(
-            kernel, memory, thread_id, args,
-        ))),
+        ORD_CHANGE_DISPLAY_SETTINGS_EX => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::U32(DISP_CHANGE_BADPARAM));
+            }
+            Some(CoredllValue::U32(change_display_settings_ex_raw(
+                kernel, memory, thread_id, args,
+            )))
+        }
         ORD_ENUM_DISPLAY_SETTINGS => {
             // EnumDisplaySettings(lpszDeviceName, iModeNum, lpDevMode)
             // iModeNum=0xffff_ffff (ENUM_CURRENT_SETTINGS): write current screen mode.
@@ -2293,9 +2301,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
-        ORD_SYSTEM_PARAMETERS_INFO_W => Some(CoredllValue::Bool(system_parameters_info_w_raw(
-            kernel, memory, thread_id, args,
-        ))),
+        ORD_SYSTEM_PARAMETERS_INFO_W => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Bool(false));
+            }
+            Some(CoredllValue::Bool(system_parameters_info_w_raw(
+                kernel, memory, thread_id, args,
+            )))
+        }
         ORD_GET_STORE_INFORMATION => Some(CoredllValue::Bool(write_store_information(
             kernel,
             memory,
@@ -6348,18 +6361,28 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_REMOVE_FONT_MEM_RESOURCE_EX => Some(CoredllValue::Bool(
             remove_font_mem_resource_ex_raw(kernel, thread_id, raw_arg(args, 0)),
         )),
-        ORD_ADD_FONT_RESOURCE_W => Some(CoredllValue::U32(add_font_resource_w_raw(
-            kernel,
-            memory,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
-        ORD_REMOVE_FONT_RESOURCE_W => Some(CoredllValue::Bool(remove_font_resource_w_raw(
-            kernel,
-            memory,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
+        ORD_ADD_FONT_RESOURCE_W => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::U32(0));
+            }
+            Some(CoredllValue::U32(add_font_resource_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
+        ORD_REMOVE_FONT_RESOURCE_W => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Bool(false));
+            }
+            Some(CoredllValue::Bool(remove_font_resource_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
         ORD_CREATE_FONT_INDIRECT_W => Some(CoredllValue::Handle(create_font_indirect_w_raw(
             kernel,
             memory,
@@ -8244,17 +8267,27 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_GET_CLIPBOARD_DATA => Some(CoredllValue::Handle(get_clipboard_data_raw(
-            kernel,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
-        ORD_GET_CLIPBOARD_DATA_ALLOC => Some(CoredllValue::Handle(get_clipboard_data_alloc_raw(
-            kernel,
-            memory,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
+        ORD_GET_CLIPBOARD_DATA => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Handle(0));
+            }
+            Some(CoredllValue::Handle(get_clipboard_data_raw(
+                kernel,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
+        ORD_GET_CLIPBOARD_DATA_ALLOC => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::Handle(0));
+            }
+            Some(CoredllValue::Handle(get_clipboard_data_alloc_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
         ORD_IS_CLIPBOARD_FORMAT_AVAILABLE => Some(CoredllValue::Bool(
             kernel.gwe.is_clipboard_format_available(raw_arg(args, 0)),
         )),
@@ -8462,14 +8495,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_TRANSLATE_ACCELERATOR_W => Some(CoredllValue::U32(translate_accelerator_w_raw(
-            kernel,
-            memory,
-            thread_id,
-            raw_arg(args, 0),
-            raw_arg(args, 1),
-            raw_arg(args, 2),
-        ))),
+        ORD_TRANSLATE_ACCELERATOR_W => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::U32(0));
+            }
+            Some(CoredllValue::U32(translate_accelerator_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+            )))
+        }
         ORD_LOAD_IMAGE_W => Some(CoredllValue::Handle(load_image_w_raw(
             kernel, memory, thread_id, args,
         ))),

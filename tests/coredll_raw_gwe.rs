@@ -114,7 +114,7 @@ use wince_emulation_v3::{
             ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
             ORD_SET_KEYBOARD_TARGET, ORD_SET_LAYOUT, ORD_SET_LOCAL_TIME, ORD_SET_MENU,
             ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_PIXEL,
-            ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
+            ORD_SET_REAL_TIME, ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_RECT_RGN, ORD_SET_ROP2,
             ORD_SET_STRETCH_BLT_MODE, ORD_SET_SYS_COLORS, ORD_SET_SYSTEM_TIME, ORD_SET_TEXT_ALIGN,
             ORD_SET_TEXT_CHARACTER_EXTRA, ORD_SET_TEXT_COLOR, ORD_SET_TIME_ZONE_INFORMATION,
             ORD_SET_TIMER, ORD_SET_VIEWPORT_ORG_EX, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_ORG_EX,
@@ -29677,6 +29677,170 @@ fn coredll_raw_message_ipc_state_tracks_source_send_and_timeout() -> Result<()> 
 }
 
 #[test]
+fn coredll_raw_indirect_no_wait_sends_reject_stale_caller_before_side_effects() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let process = kernel
+        .current_process_birth_key()
+        .expect("boot process birth");
+    let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+    let receiver_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(receiver_handle)
+        .expect("receiver birth");
+    let hwnd = kernel.create_window_ex_w(receiver_tid, "NO_WAIT_TARGET", "", None, 0, 0, 0);
+    let (a_handle, sender_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+    let a_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(a_handle)
+        .expect("A sender birth");
+    assert!(kernel.handles.mark_thread_exited_by_birth(a_birth, 0));
+    kernel.handles.close(a_handle)?;
+    let b_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(process, sender_tid, 0x0040_3000, 0, false)?;
+    let b_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(b_handle)
+        .expect("B sender birth");
+    assert_ne!(a_birth, b_birth);
+
+    let accel = kernel.resources.create_accelerator(
+        0,
+        ResourceId::Integer(0x860),
+        None,
+        vec![AcceleratorEntry {
+            flags: 0x01, // FVIRTKEY
+            key: u16::from(b'S'),
+            command: 0x861,
+        }],
+    );
+    let msg_ptr = 0x0001_8600;
+    memory.map_words(msg_ptr, 7);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'S'), 0)?;
+    let stale = CoredllRawContext {
+        thread_id: sender_tid,
+        caller_birth: Some(a_birth),
+        ..Default::default()
+    };
+    let current = CoredllRawContext {
+        thread_id: sender_tid,
+        caller_birth: Some(b_birth),
+        ..Default::default()
+    };
+    const SENTINEL_ERROR: u32 = 0x5151_0860;
+    kernel.threads.set_last_error(sender_tid, SENTINEL_ERROR);
+    let before_ids = kernel.gwe.sent_message_ids_for_windows(&[hwnd]);
+    let before_sends = kernel.gwe.stats().send_transaction_count;
+    let before_status = kernel
+        .gwe
+        .peek_queue_status_for_birth(receiver_birth, QS_SENDMESSAGE);
+    let before_ready = kernel.get_message_queue_ready_time_stamp_for_thread(receiver_tid, 0);
+    let before_wakes = kernel.scheduler_stats().message_input_wake_candidate_count;
+    let before_trace = kernel.recent_message_ops().len();
+
+    for (ordinal, args, expected) in [
+        (
+            ORD_TRANSLATE_ACCELERATOR_W,
+            vec![hwnd, accel, msg_ptr],
+            CoredllValue::U32(0),
+        ),
+        (ORD_SET_SYSTEM_TIME, vec![], CoredllValue::Bool(false)),
+        (ORD_SET_LOCAL_TIME, vec![], CoredllValue::Bool(false)),
+        (ORD_SET_REAL_TIME, vec![], CoredllValue::Bool(false)),
+        (
+            ORD_CHANGE_DISPLAY_SETTINGS_EX,
+            vec![0, 0, 0, 0, 0],
+            CoredllValue::U32((-5i32) as u32),
+        ),
+        (
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            vec![0x69, 3, 0, 2], // SPI_SETWHEELSCROLLLINES | SPIF_SENDCHANGE
+            CoredllValue::Bool(false),
+        ),
+        (ORD_ADD_FONT_RESOURCE_W, vec![0], CoredllValue::U32(0)),
+        (
+            ORD_REMOVE_FONT_RESOURCE_W,
+            vec![0],
+            CoredllValue::Bool(false),
+        ),
+    ] {
+        let result = table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            stale.clone(),
+            ordinal,
+            args,
+        );
+        match result {
+            CoredllDispatch::Returned { value, .. } => {
+                assert_eq!(value, expected, "ordinal {ordinal}")
+            }
+            other => panic!("stale no-wait ordinal {ordinal} did not return: {other:?}"),
+        }
+        assert_eq!(kernel.threads.get_last_error(sender_tid), SENTINEL_ERROR);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), before_ids);
+    }
+    assert_eq!(kernel.gwe.stats().send_transaction_count, before_sends);
+    assert_eq!(
+        kernel
+            .gwe
+            .peek_queue_status_for_birth(receiver_birth, QS_SENDMESSAGE),
+        before_status
+    );
+    assert_eq!(
+        kernel.get_message_queue_ready_time_stamp_for_thread(receiver_tid, 0),
+        before_ready
+    );
+    assert_eq!(
+        kernel.scheduler_stats().message_input_wake_candidate_count,
+        before_wakes
+    );
+    assert_eq!(kernel.recent_message_ops().len(), before_trace);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            current.clone(),
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            current,
+            ORD_SET_SYSTEM_TIME,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let ids = kernel.gwe.sent_message_ids_for_windows(&[hwnd]);
+    assert_eq!(ids.len(), before_ids.len() + 2);
+    let messages = ids
+        .iter()
+        .filter_map(|id| kernel.gwe.sent_message(*id).map(|sent| sent.message.msg))
+        .collect::<Vec<_>>();
+    assert!(messages.contains(&WM_COMMAND));
+    assert!(messages.contains(&WM_TIMECHANGE));
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -30292,7 +30456,6 @@ fn coredll_raw_get_message_expires_timed_out_cross_thread_send() -> Result<()> {
 }
 
 #[test]
-#[ignore = "expected red: raw Send/Timeout must reject a stale captured caller birth before queue publication"]
 fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<()> {
     let table = CoredllExportTable::default();
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
