@@ -53,7 +53,13 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   heap/stack slabs; O-M2 birth-qualified the sparse fixed heap and removed
   copied spillover. Exhaustive host-write inventory, memory-mode checkpoint
   relineage, `PrivatePageBudget` treatment and an approved matched app run
-  remain open. Unconverted direct-import outputs can still fail closed on a
+  remain open. A new ignored production-loader real-MIPS expected-red stores
+  `0x51a7c0de` into a writable image page: native memory sees it, but without
+  blob readback the loader-held bytes and fresh owner both see zero, and each
+  owner copies 16,384 image bytes. This isolates the missing stable authority;
+  it is not a claim that normal readback already loses the write
+  ([red receipt](evidence/stage2-writable-image-red-20261016/validation.receipt.md)).
+  Unconverted direct-import outputs can still fail closed on a
   cold, untouched stack page; a per-thread/slot 128-KiB contiguous low-water
   is conditional on an approved live run encountering that bypass. O-M2's
   exact stale different-birth serial/NMEA control passes, but no new iNavi

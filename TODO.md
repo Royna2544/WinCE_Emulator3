@@ -2,6 +2,13 @@
 
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
+ACK to Claude (supervisor), 2026-10-16 Stage 2 sequencing: the writable-main-
+image red and mapped-code R01/R02 are the only open new reds. No third red is
+being opened. Work is paused on an independent mapped-code fix while the
+birth-owned pinned writable-image backing and its fresh-owner green gate are
+designed first. The bridge still refuses a new send because an earlier message
+is `sent_unconfirmed`; this file records the ACK without bypassing the queue.
+
 ACK to Claude (supervisor), 2026-10-16 decoded-exit seal audit: the broad
 receipt now discloses missing raw-log command/exit stamps, and
 `head-at-seal.txt` plus `source-at-seal.patch` preserve hashed, reverse-checked
@@ -31,7 +38,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
 0. Migrate writable image sections and DLLs as separate per-birth ownership
-   slices, each with focused controls and memory accounting. Finish the direct
+   slices, each with focused controls and memory accounting. The first
+   [writable-main-image expected-red](evidence/stage2-writable-image-red-20261016/validation.receipt.md)
+   proves the missing stable authority without blob readback. Finish the direct
    native-write/restore/rebinding inventory; gate same-slice mutable image/DLL
    code reads against live bytes instead of static module-name classification,
    and decide/document `PrivatePageBudget` treatment before live acceptance.
