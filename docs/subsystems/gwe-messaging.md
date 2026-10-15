@@ -94,6 +94,68 @@ This does not birth-filter `destroy_window`'s recursive parent/owner traversal
 or numeric sent-message process cleanup. Foreign-link recovery, full host
 teardown, exit capture retirement and live-app/CE6 acceptance remain open.
 
+### Next proposed gate: sender-owned process-exit send cleanup (not implemented)
+
+The [A2 exit-effect contract](../ARCHITECTURE.md) requires one canonical
+exiting birth. Today `SentMessage` freezes the receiver birth but stores only
+numeric sender thread/process IDs; `CeKernel::begin_cross_thread_send_message_w`
+queues first and then stamps the mutable selected PID. Host exit verifies its
+process birth for window selection but calls numeric
+`terminate_sent_messages_from_process` and
+`terminate_sent_messages_from_sender`. The earlier independent-window pass
+does not cover those sends.
+
+The owning GWES send record should retain an immutable sender process birth
+obtained at admission from an authenticated caller thread/frame and its
+creation process, not inferred from the latest selected PID or caller-supplied
+TID alone. The native caller has a captured `NativeCurrentThread` birth and
+raw COREDLL dispatch has `CoredllRawContext.caller_birth`; their Send/Timeout
+paths must carry and validate those identities rather than discarding them.
+Kernel/native/API adapters request the checked transition; GWES owns the send
+ID, queue, active-receiver phase and reply/cancellation effects. The production
+admission path must prepare the owner and destination before publishing the
+send, so a missing or mismatched
+caller birth cannot leave an unowned queued send, wake, status bit or result
+pointer. Direct numeric-only fixture/compatibility records remain explicitly
+unknown; [O-G5](../DECISIONS.md) is open rather than guessing their birth.
+
+The connected consumer inventory includes native sent-message authorization
+that still compares only `sender_process_id` with a numeric PID. Birth-stamped
+admission without migrating those result/re-entry checks would leave a stale
+acceptance route, so they must either require exact provenance or fail closed
+in this gate. Raw Send/Timeout and the Kernel helper must share the same
+prepared identity rule; a test-only numeric adapter cannot become production
+authority.
+
+The first source gate should isolate the process selector: queue A's real
+primary-thread send to a separate live receiver, retire A's canonical
+thread/process through test-only HandleTable operations that deliberately
+bypass normal GWES cleanup, then reuse only A's PID for B with a distinct TID.
+Queue B's send to the same receiver and complete B through normal host exit.
+The expected red is that numeric process cleanup removes both sends; the
+required green preserves A's stranded send and retires B's, without touching
+the receiver HWND. This is a defensive stale-artifact fixture, not a claim
+that ordinary A exit strands sends. Name the raw log before its first run and
+never overwrite or rename it. Add normal same-birth queued cleanup and
+plain-send active-receiver detachment controls, keeping exact send IDs and
+one-time
+reply/wake effects. Current GWE active-send cleanup marks the sender
+terminated while allowing the callback to finish; queued sends are removed.
+Separately, inject stale A caller birth into raw Send/Timeout after PID/TID
+reuse and require rejection before any B-owned send ID, queue/status/wake,
+trace or result effect. A normal same-birth caller remains a positive control.
+Do not silently broaden this gate to active-send result-pointer safety or
+numeric thread-exit cleanup, which remain open.
+The local CE6 process-exit send-cancellation rule has not yet been established
+from `C:\WINCE600` or the dumped device binaries; these controls establish
+emulator birth-identity safety, not CE6 cancellation parity.
+
+Explicit guest `DestroyWindow` still has recursive child/owner semantics.
+Host-exit recursion through a foreign link is a separate target-selection
+question under [O-G4](../DECISIONS.md); a cross-birth parent/owner survival
+fixture is synthetic safety evidence, not CE6 parity. Do not globally remove
+normal `DestroyWindow` recursion to make such a fixture pass.
+
 ## Failure and lifetime rules
 
 Preserve the existing prepare-before-consume boundary: preflight mapped writable MSG output, map/init persistent guest payload, then consume the exact message/send ID and expose its pointer. A missing destination-memory context must retain typed work for a real resume path, not deliver a host placeholder. Queue expiry/replacement between peek and commit must reject a mismatched ID without consuming its successor. Preparation failure preserves live queue/wait/caller state and authentic API failure; it is not an unhandled import fallthrough.

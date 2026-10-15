@@ -82,6 +82,22 @@ frame and outcome ownership. A fixture's event signal is not live input-delivery
 proof. Full task-context transfer waits for Stage 3 canonical identity and
 Stage 4 continuation ownership.
 
+Next bounded Stage 3 design gate: the [host-exit receipt](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+closes only direct window/backing selection. Before changing sent cleanup,
+inventory synchronous queued-send admission and cancellation through raw
+COREDLL, native and Kernel paths, identify the captured canonical caller/lease
+that can authorize an immutable sender birth, and review the legacy-unknown
+policy against [anchor A2](ARCHITECTURE.md). Stage two attempt-numbered
+expected-red controls: (1) a fixture-only stranded A queued send, a later B
+reusing A's PID but not its TID, and B exit, where A's send must remain while
+B's is retired; (2) stale A caller provenance at raw Send/Timeout admission
+after PID/TID reuse, which must publish no B-owned send or wake. Preserve a
+normal same-birth B cleanup control and queued-versus-active behavior. A pass
+would close only process-birth selection for this send family; numeric
+thread-exit cleanup, active-send pointer writes, foreign window traversal and
+full Stage 3 remain separate gates. Independent design
+and source review precede code, and a focused green alone is not acceptance.
+
 Stage 7 budgets are a design gate, not values inferred from the current
 splash-only E-38 observation. Before calling memory or responsiveness "small"
 or "fast," record the target device's configured CE RAM and real navigation

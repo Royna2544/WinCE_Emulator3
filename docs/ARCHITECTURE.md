@@ -91,6 +91,11 @@ reciprocal forms, legacy numeric-only HWND ownership, post-wake MsgWait,
 and live-iNavi behavior remain open. Ineligible blocked reciprocal sends fail
 closed with terminal `Backend`, a live-run risk; no app or mount run was made.
 
+The later bounded [host-exit source gate](../evidence/stage3-host-teardown-20261015/validation.receipt.md)
+selects direct HWNDs and backing stores by verified process birth. It does not
+birth-filter sent-message sender cleanup or recursive foreign window links;
+the target exit-effect contract below is not implemented by that gate.
+
 ## A1. Machine authority
 
 `CeMachine` is the proposed common execution anchor: one sequenced owner of
@@ -151,6 +156,29 @@ Lineage changes are one machine/checkpoint operation that remaps canonical
 birth, pending launch, current selection, VM/view and CPU/parked owner keys
 together. Independently deriving `Clone` for those owners cannot relineage a
 partial machine; a key from the original must fail in its clone.
+
+### Exit-effect ownership (target contract)
+
+Process or task exit is a transition of one verified canonical birth, not a
+numeric PID/TID command. Before any teardown effect, guest-initiated exit
+needs a captured caller lease/frame, while stopped host completion needs its
+verified launch/stop witness and canonical exiting birth. A mutable selected
+PID or a freshly resolved occupant of the same number cannot authenticate an
+old caller. Each consumer identifies its affected windows, backing stores,
+sends, waits and payloads from frozen creation/admission ownership, then revalidates
+exact identities before mutation. Numeric IDs remain public projections and
+diagnostic labels, never the sole selector for process-exit effects. An
+unknown-owner compatibility record cannot silently be claimed by a later
+birth that reuses its numeric ID.
+
+Cancellation, reply and wake effects are keyed to the selected exact object or
+send IDs and occur once. An unavailable owner or failed preparation must stop
+before publication; an irreversible partial teardown must be reported as such,
+not as a completed exit. Guest-requested `DestroyWindow` recursion and
+machine-driven process-exit target selection are different operations; the
+policy for foreign parent/owner links remains an open GWES decision. This is
+the shared boundary for Stage 3 designs, not a claim about current Kernel/GWES
+implementation or CE6 topology.
 
 ## A3. Execution and continuation boundary
 

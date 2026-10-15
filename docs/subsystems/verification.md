@@ -126,25 +126,36 @@ Report primary native-start owner separately from helpers and end-of-slice selec
 
 Track whole-host RSS/private/virtual/CPU peaks and phase samples alongside logical blob length/capacity, allocation live/reserved extents, native regions/context/translation residency and retained queue/snapshot storage. Missing capacity/native-engine metrics remain missing. One active cached PID bracket is not whole-machine memory, an atomic epoch or proof of ownership. The 650 growth recorded in ledger E-2 requires investigation before a memory acceptance claim.
 
-### Bounded iNavi measurement contract (a04 source-tested, live result pending)
+### Proposed bounded iNavi measurement contract (a04 historical)
 
-The current [a04 validation receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)
-binds its [source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
+The historical [a04 validation receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)
+binds its then-tested [source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
 [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-build-bridge.json)
 and [offline runner gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt).
-It carries forward the unchanged clean-built EXE/PDB. The earlier 21-file
-source/build seal and runner gate are historical, not the current runner
-identity. The a04 gate has no new mount backup, guest run, live dead-driver proof or
-one-run approval; CE6 boot delay, full footprint and responsiveness remain
-unmeasured. A future separately approved run uses the monitor's actual
-process-launch monotonic tick as `t0`, not the run tag, observer startup or first
-HTTP response. The observer starts
-before launch and records when it sees the process descriptor, then requests
-the first frame before status/summary. Its first request and response must
+It carried forward an unchanged clean-built EXE/PDB for that candidate only.
+The user skipped the a04 run in favor of the scheduler source cut; neither a04
+nor the earlier 21-file seal identifies current source/build or authorizes a
+live run. No a04 mount backup, guest run or live dead-driver proof followed;
+CE6 boot delay, full footprint and responsiveness remain unmeasured. The
+recipe below is a proposed contract for a future run, not permission to run
+the old binary. That run requires a distinct approval, fresh SHA-verified
+adjacent backups of all three writable mounts, and a new matching source/build
+seal and preflight. It uses the monitor's actual process-launch monotonic tick
+as `t0`, not the run tag, observer startup or first HTTP response. The observer
+starts before launch and records when it sees the process descriptor, then
+requests the first frame before status/summary. Its first request and response must
 fall within launch +2 s for the early-frame coverage check; failure remains
 explicitly incomplete evidence, not a delayed boot result. Subsequent frame,
-status and summary requests target two-second slots, but use each recorded
-request/receive clock rather than assuming exact spacing. The first observed
+status and summary requests target two-second slots, but their actual spacing
+may slip behind sequential GETs. The a04 observer records the first frame's
+monotonic request and receive ticks; later generic frame GETs record UTC
+start/receive and a monotonic receive tick, but no monotonic request-start
+tick. The current runner's process-free-tested generic GET helper now retains
+`startedTicks` and `receivedTicks` from one host Stopwatch in every
+`observer-get.jsonl` frame row, including failed GETs; the first-frame
+`requestTicks` is that same helper start tick. This does not repair historical
+a04 evidence or establish a live result. Use the recorded clocks to measure
+each GET duration, not the nominal two-second slot spacing. The first observed
 status with `running=true` and `gpsTarget=COM7:` is the *input schedule origin*,
 not proof that the guest has finished booting. The raw-NMEA burst at that
 origin +93..108 s and tap at +153 s are therefore input-ready-relative,
@@ -153,10 +164,13 @@ not launch-relative.
 Measure launch-to-first retained frame, launch-to-first genuine iNavi splash,
 progress/settled splash, splash teardown, first genuine map, and first
 navigation response as separate milestones. Label visual classifications with
-the saved frame hash, request/receive interval and preceding successful poll;
-a frame change alone does not identify a map. If the last successful poll is
-still splash, report map readiness as *not observed through that poll*, not as
-a completed boot time or proof that no transient frame occurred between polls.
+the saved frame hash, available GET clocks and preceding successful poll; a
+frame change alone does not identify a map. For later frames, the two-second
+polling cadence gives only a bracket between successful observations, widened
+by delayed or failed requests, not an exact frame-publication time or
+request-to-frame lag. If the last successful poll is still splash, report map
+readiness as *not observed through that poll*, not as a completed boot time or
+proof that no transient frame occurred between polls.
 For input, keep HTTP acceptance, remote drain/post, positive guest `COM7:`
 `ReadFile`, parsed location effect, touch WNDPROC entry/return and later
 frame/state change separate. Cached debug rings and independently published
