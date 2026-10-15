@@ -169,6 +169,11 @@ risks and does not claim atomic whole-process exit or framebuffer rollback;
 they need a separate preflight/recovery gate. This source gate neither accepts
 full Stage 3 nor authorizes a writable-mount iNavi run.
 
+[D-011](../DECISIONS.md) now chooses strict framebuffer preflight for that
+separate stopped-exit gate: a mismatched saved backing must refuse completion
+before any window/process mutation and leave the stopped owner for recovery.
+The current source does not yet implement this policy.
+
 ### Bounded guest self-exit caller gate (planned)
 
 The native COREDLL `TerminateProcess` import already has a captured

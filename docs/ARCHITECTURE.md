@@ -184,6 +184,14 @@ policy for foreign parent/owner links remains an open GWES decision. This is
 the shared boundary for Stage 3 designs, not a claim about current Kernel/GWES
 implementation or CE6 topology.
 
+For stopped host exit with saved window backing, [D-011](DECISIONS.md)
+chooses strict framebuffer preflight: if any selected backing cannot restore
+to the supplied destination, refuse completion before **any** exit effect and
+hold the stopped process for recovery. Do not turn that refusal into an
+ordinary CPU continuation or a successful best-effort exit. This is a target
+policy pending a red control and implementation, not a claim that current
+Kernel teardown is atomic.
+
 ## A3. Execution and continuation boundary
 
 `RunOutcome` distinguishes guest exit, unrecoverable native/backend or
