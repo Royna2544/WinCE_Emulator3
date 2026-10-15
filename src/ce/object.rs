@@ -1302,7 +1302,10 @@ impl HandleTable {
                 next_generation: next.generation,
             });
         }
-        let record = &mut self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        let record = self
+            .threads
+            .get_mut(&frame.key.owner_birth.thread_id)
+            .unwrap();
         record.last_frame_generation = frame.key.generation;
         record.active_frame = Some(TaskFrameState::FiniteSleep {
             reference: frame,
@@ -1352,12 +1355,19 @@ impl HandleTable {
                 active,
             });
         }
-        if !self.thread_execution_live_by_id(frame.key.owner_birth.thread_id) {
+        if !self.thread_execution_live_by_id(frame.key.owner_birth.thread_id)
+            || self.threads[&frame.key.owner_birth.thread_id]
+                .object
+                .signaled
+        {
             return Err(TaskFrameError::ExitedOwnerBirth {
                 owner: frame.key.owner_birth,
             });
         }
-        let record = self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        let record = self
+            .threads
+            .get_mut(&frame.key.owner_birth.thread_id)
+            .unwrap();
         match record.active_frame.as_mut().unwrap() {
             TaskFrameState::FiniteSleep { phase, .. } => match phase {
                 FiniteSleepFramePhase::Blocked => {
@@ -1384,7 +1394,10 @@ impl HandleTable {
                 active,
             });
         }
-        let record = self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        let record = self
+            .threads
+            .get_mut(&frame.key.owner_birth.thread_id)
+            .unwrap();
         if !matches!(
             record.active_frame,
             Some(TaskFrameState::FiniteSleep {
@@ -2489,5 +2502,108 @@ mod alias_tests {
         assert_ne!(old, new);
         assert!(!table.contains_thread_birth(old));
         assert!(table.contains_thread_birth(new));
+    }
+
+    #[test]
+    fn finite_sleep_frame_claims_completion_once_and_never_reuses_generation() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let birth = table.thread_birth_key_for_handle(handle).unwrap();
+        let key = table.preflight_finite_sleep_frame(birth).unwrap();
+        assert_eq!(key.generation(), 1);
+        let frame = TaskFrameRef::new(key, 41).unwrap();
+        table.activate_finite_sleep_frame(frame).unwrap();
+
+        assert_eq!(table.active_finite_sleep_frame(birth), Some(frame));
+        assert!(table.finite_sleep_frame_is_blocked(frame));
+        assert!(matches!(
+            table.preflight_finite_sleep_frame(birth),
+            Err(TaskFrameError::ActiveFrameOccupied { active, .. }) if active == frame
+        ));
+        table.begin_finite_sleep_completion(frame).unwrap();
+        assert!(!table.finite_sleep_frame_is_blocked(frame));
+        assert_eq!(
+            table.begin_finite_sleep_completion(frame),
+            Err(TaskFrameError::AlreadyCompleting { frame })
+        );
+        table.retire_finite_sleep_frame(frame).unwrap();
+        assert_eq!(table.active_finite_sleep_frame(birth), None);
+        assert!(matches!(
+            table.cancel_finite_sleep_frame(frame),
+            Err(TaskFrameError::StaleFrame { .. })
+        ));
+
+        let obsolete_generation = TaskFrameRef::new(key, 99).unwrap();
+        assert!(matches!(
+            table.activate_finite_sleep_frame(obsolete_generation),
+            Err(TaskFrameError::UnexpectedGeneration { .. })
+        ));
+        assert_eq!(table.active_finite_sleep_frame(birth), None);
+
+        let next_key = table.preflight_finite_sleep_frame(birth).unwrap();
+        assert_eq!(next_key.generation(), 2);
+        assert_ne!(next_key, key);
+        let next = TaskFrameRef::new(next_key, 42).unwrap();
+        table.activate_finite_sleep_frame(next).unwrap();
+        assert!(!table.finite_sleep_frame_is_blocked(frame));
+        assert!(table.finite_sleep_frame_is_blocked(next));
+    }
+
+    #[test]
+    fn finite_sleep_frame_retains_aliasless_exited_birth_until_exact_cancel() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let alias = table.open_thread(7).unwrap();
+        let birth = table.thread_birth_key_for_handle(handle).unwrap();
+        let frame =
+            TaskFrameRef::new(table.preflight_finite_sleep_frame(birth).unwrap(), 51).unwrap();
+        table.activate_finite_sleep_frame(frame).unwrap();
+        table.close(handle).unwrap();
+        table.close(alias).unwrap();
+        assert!(table.contains_thread_birth(birth));
+
+        assert!(table.mark_thread_exited_by_birth(birth, 0));
+        assert!(table.contains_thread_birth(birth));
+        assert_eq!(table.active_finite_sleep_frame(birth), Some(frame));
+        assert!(!table.finite_sleep_frame_is_blocked(frame));
+        assert_eq!(
+            table.begin_finite_sleep_completion(frame),
+            Err(TaskFrameError::ExitedOwnerBirth { owner: birth })
+        );
+        table.cancel_finite_sleep_frame(frame).unwrap();
+        assert!(!table.contains_thread_birth(birth));
+
+        let replacement = table.create_thread(7, 0x2000, 0, false);
+        let new_birth = table.thread_birth_key_for_handle(replacement).unwrap();
+        assert_ne!(new_birth, birth);
+        assert_eq!(table.active_finite_sleep_frame(birth), None);
+        assert!(matches!(
+            table.cancel_finite_sleep_frame(frame),
+            Err(TaskFrameError::StaleFrame { .. })
+        ));
+        assert!(matches!(
+            table.preflight_finite_sleep_frame(birth),
+            Err(TaskFrameError::StaleOwnerBirth { .. })
+        ));
+        assert_eq!(
+            table
+                .preflight_finite_sleep_frame(new_birth)
+                .unwrap()
+                .generation(),
+            1
+        );
+    }
+
+    #[test]
+    fn finite_sleep_generation_exhaustion_does_not_publish_a_frame() {
+        let mut table = HandleTable::default();
+        let handle = table.create_thread(7, 0x1000, 0, false);
+        let birth = table.thread_birth_key_for_handle(handle).unwrap();
+        table.threads.get_mut(&7).unwrap().last_frame_generation = u64::MAX;
+        assert_eq!(
+            table.preflight_finite_sleep_frame(birth),
+            Err(TaskFrameError::GenerationExhausted { owner: birth })
+        );
+        assert_eq!(table.active_finite_sleep_frame(birth), None);
     }
 }
