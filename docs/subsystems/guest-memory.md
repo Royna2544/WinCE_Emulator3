@@ -333,6 +333,97 @@ retires only the verified process birth's writable-image runs after D-011
 preflight and rejects writes through retained retired pins. Its native
 control runs after fresh-owner closure, not while an engine remains mapped.
 
+### H-W1 host-origin native write authority (design record; not implemented)
+
+This is the next A2/A4 **plan-first** gate before production writable-main-image
+adoption. For migrated writable-image runs, VM is the only mutable byte
+authority and a native owner maps and pins its exact backing; unmigrated
+`Owned` blobs retain the checked copy boundaries in A4. A host write is not a
+guest CPU store: Unicorn's `uc_mem_write` bypasses guest protection
+(`vendor/unicorn-engine-sys/uc.c:965-993`), while `mem_map_ptr` requires
+host-writable backing (`vendor/unicorn-engine-sys/include/unicorn/unicorn.h:1162-1164`).
+RX protection alone is not an authorization check. An API shim must carry its
+captured task/frame or explicit loader/bootstrap operation owner. Mutable
+selected PID, numeric VA, native WRITE permission or a sealed-image-only guard
+cannot authenticate a writable-image write.
+
+Current writer inventory and target boundary (source anchors are current at
+this design record; re-inventory before implementation):
+
+| Host-origin path | Current boundary | Required connected gate |
+|---|---|---|
+| COREDLL `CoredllGuestMemory` output/fill, including `UnicornGuestMemory` writers (`coredll.rs:758-812`; `unicorn.rs:67929-68130,68476-68657`) | `prepare_host_write` is optional for callers and a no-op in the trait default; native writes check private slabs and sealed ranges, not adopted image identity. Native `fill_bytes` chunks without a full private-access preflight; trait defaults can write byte-by-byte with wrapping arithmetic. | Every production native write/fill method checks the complete range, owner, permission and image run/pin before its first byte, independent of whether a caller invoked `prepare_host_write`. Raw fixture adapters remain explicit test-only implementations. The already-prevalidated `VirtualProtect` old-protect output has a distinct single-use post-protect proof (`coredll.rs:853-864`; `unicorn.rs:68509`), not a general WRITE-permission bypass. |
+| Resumed MSG, pointer payload, callback/stack and other `checked_host_write` callers (`unicorn.rs:2165,29434-29457,30950-31028,46920-47187,63013-63042,64141-64190`) | The shared guard rejects sealed R/RX overlap only; blocked raw adapters construct memory without owner mapping, multi-output hooks may write after earlier effects, and `complete_blocked_send_message` takes the result before dropping a write error. | Bind each caller to its saved frame/operation scope; preflight **all** known outputs before consuming the queue or publishing pointers. A post-consumption FFI error is terminal, not a rollback promise. Poison the native attempt if any hook drops a write error. |
+| Direct private-slab and writable-image pin writes (`unicorn.rs:2945,47110`; `memory.rs:908-929`) | These write canonical VM backing without `checked_host_write`; the writable-image pin checks retirement/native-active/range but not current VM containment, birth or operation scope. | Apply the captured-owner, current-VM permission and full-span transaction gate to direct writable-image pin writes too; use an equivalent checked private-VM transaction for private slabs. Never treat pin possession as image authority. |
+| Parked `MappedBlob` copy-in/readback and file-view/legacy allocation seed or repair (`unicorn.rs:15803-15838,18736,18976,19109-19418`) | Image adoption excludes its own blob in the opt-in path; file-view and VM-overlap fences are bounded controls. | Keep owner-qualified copied blobs disjoint from that owner's active or retired-pinned image backing; a foreign birth may legitimately use the same VA. Preserve the global overlap fence for VA-only legacy seeds/views that cannot identify an owner. Keep adopted runs out of copy-in/readback. |
+| Runtime DLL image and trap-page writes (`unicorn.rs:16687-16764,16977-16985`) | Both use direct native `mem_write`; DLL map metadata is staged before write and cleanup currently ignores unmap failures. | Until DLL migration, use a checked loader operation and owner-qualified full-range disjointness; do not publish a new module/trap binding after a partial native failure. If cleanup is uncertain, terminally stop the attempt until checked teardown/quarantine; later DLL adoption needs its own exact module-generation pin and unload/reload gate. |
+| KData current-ID and other fixed bootstrap/system writes (`unicorn.rs:15842-15857`) | Direct native writes serve reserved system pages, not an image-keyed operation. | Prove the entire destination belongs to the reserved system mapping and cannot alias an image run; make that proof explicit rather than a VA-only whitelist. |
+
+The proposed attempt-local `NativeHostWriteAuthority` is one preflight/commit
+boundary, not another byte store. An import or callback frame mints an
+operation-bound `HostWriteScope` for its captured task; loader/bootstrap mints an
+explicit machine-operation scope. Each production native adapter, direct
+hook writer and canonical image-pin writer receives that scope; no
+context-free production write overload remains. One scope may plan all known
+destinations of that operation, but each commit permit is consumed once. The authority receives the
+canonical `MemorySystem` image-run identity, current `KernelMemoryMappings`
+record, `NativeMappingPins` and native owner lifetime. For every byte of a
+nonempty destination, it validates checked range arithmetic, live birth,
+module base/load generation/run identity where applicable, non-retired pin,
+matching native mapping and the permission appropriate to the operation:
+ordinary API output requires current guest-writable backing; the one
+prevalidated post-`VirtualProtect` result requires its consumed, exact
+transaction proof; loader-patch and reserved-system writes have distinct
+explicit operation scopes. A span with several runs
+needs a complete validated segment plan; any missing, stale, foreign or
+incompatible segment refuses the **whole** operation before its first byte.
+The plan and all exact pins stay held under one attempt/operation lease through
+the FFI write. Freshness is checked against current VM containment/lineage,
+image-run identity and native mapping/pins at use, not a copied attempt-start
+key. The present `KernelMemoryMappings` record does not yet version
+writable-image mapping changes, so implementation must either add invalidation
+or hold a non-reusable per-call VM/native lease that excludes retirement,
+remap and owner close through commit. The permit is
+not reusable after owner close, module retirement, mapping change or checkpoint
+lineage change. A loader patch uses an explicit loader
+operation scope, not a fabricated guest frame. Native guest CPU stores rely on
+their already checked pointer mapping and permissions and are not routed
+through this host-write API.
+
+One preflighted span's refusal leaves its destination bytes unchanged. For a
+known message or other multi-output operation, preflight **all** destinations
+before queue take/publication to preserve queue ownership and published
+pointers. This is a target ordering rule, not a current guarantee:
+`complete_blocked_send_message` consumes its result before the checked write
+and ignores that error (`unicorn.rs:30986-31028`). A native FFI write failure
+after preflight may have changed
+some bytes; it is terminal for that attempt, cannot return a successful guest
+continuation, and retains pins until checked owner close or quarantine. Hook
+paths that ignore a returned error must still record terminal poison. Zero-
+length writes publish nothing and make no ownership claim. No policy here
+silently converts an unknown image to free ROM or charged RAM; O-M3 remains a
+separate decision.
+
+Stage real-MIPS/native controls before source integration, recording which
+are expected-red negatives and which already-pass positive controls: valid
+exact-owner host write into an adopted run with fresh-owner readback and no
+blob copy; late-overlap cross-page refusal with byte-for-byte unchanged
+prefix; late-span permission/owner/generation refusal for both `write_bytes`
+and chunked `fill_bytes`; stale birth, generation, retired pin and foreign
+same-VA refusal; exact one-use post-`VirtualProtect` result publication;
+valid multi-run segment and ordinary non-image writes; ignored-error attempt
+poison; direct system/trap/loader disjointness; and parked restore/rebind that
+cannot overwrite canonical VM bytes. Include the injectable native-owner
+finish failure and native-write failure/uncertain-cleanup controls before
+production activation; fresh-owner `uc_close` failure is not currently
+injectable. Review
+the inventory and failure ordering against the CPU, loader and API pages,
+then implement one connected path; a wrapper used by only one caller would
+not close this gate. The ordinary SD-app loader does not invoke opt-in
+adoption, and
+these synthetic tests cannot establish iNavi boot time, frame readiness,
+host RSS or a guest physical-page budget.
+
 Guest physical accounting is a separate **unresolved policy gate**. The
 device reports 195,350,528 B total and 164,368,384 B available at boot in
 the synced `SYSTEM.TXT`; current `PrivatePageBudget` subtracts boot-reserved

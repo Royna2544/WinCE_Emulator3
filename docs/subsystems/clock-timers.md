@@ -18,7 +18,12 @@ KernelTimer stores numeric TID/HWND/id, u32 due_ms, period and pending_message. 
 
 The native loop and [main](../../src/main.rs) mix host limits, instruction count servicing, timer polling, idle throttle and deferred work. Current ctl_get_timeout usage is a configured-duration observation, not the actual Query(TIMEOUT) flag. Honest RunOutcome migration is a prerequisite; a one-line query replacement can otherwise remove existing cleanup/rotation without defining its replacement.
 
-### Bounded HWND-less thread-timer birth gate (design before implementation)
+### Bounded HWND-less thread-timer birth gate (source-tested; clock migration open)
+
+The [bounded source gate](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md)
+passed its exact-birth controls. The contract below records that narrow ownership
+slice; it does not claim one GuestInstant clock, timer/wait parity or live iNavi
+behavior.
 
 This Stage 3 ownership slice consumes the existing exact `ThreadBirthKey` contract (anchor A2) without changing guest-clock policy (A5). `TimerSystem` remains the sole timer store. Guest `SetTimer(NULL,...)` and `KillTimer(NULL,...)` must carry the captured caller birth through raw dispatch into the Kernel mutation and revalidate that exact live birth before timer, trace, queue, status or wake mutation; a fresh numeric-TID lookup is not authorization for a captured stale A to rearm, overwrite or cancel B. Native import preflight checks that captured register birth for only the `HWND == 0` forms before raw dispatch. The existing HWND timer path and explicit host/numeric test compatibility stay separate, never an implicit fallback for guest thread timers.
 

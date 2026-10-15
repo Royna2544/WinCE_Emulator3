@@ -50,6 +50,42 @@ already-destroyed HWND backing, short destination layout and a compatible
 retry. This source gate does not prove whole-exit atomicity after preflight,
 general drawing parity or live iNavi rendering.
 
+### D-011 modal backing extension (design record; not implemented)
+
+The frozen GWE window-backing target set is not the only saved display image.
+`MessageBoxModalState` in `coredll.rs:18655-18692` owns a separate captured
+rectangle. Its current `restore_framebuffer_rect` silently returns on an
+incompatible row stride (`coredll.rs:54084-54122`). Requested active and
+parked child termination calls Kernel's checked GWE exit first, then takes and
+best-effort restores this modal state (`unicorn.rs:5890-5960,6139-6200`). A
+synthetically parked modal can therefore expose post-exit display failure;
+current production modal entry does not appear to create that parked state,
+so this is a latent source-boundary gate, not an observed iNavi defect.
+
+The modal's captured task/birth owns the store, not the currently selected
+PID or another window at the same HWND. Before any requested exit effect,
+collect the exact terminating CPU's modal store and the Kernel's frozen-birth
+GWE stores, and validate **all** of them against one held destination format,
+dimensions, stride and pixel extent. A missing/incompatible destination
+returns `HostExitRecoveryRequired` with process, window and modal/wait state,
+CPU owner, framebuffer bytes and dirty rectangles unchanged; the monitor
+retains its recovery hold. Do not consume the modal, destroy GWE windows,
+retire Task/VM or publish a successful exit first. A prepared compatible
+modal rectangle may apply only after the whole preflight succeeds and under
+the same destination lease. No rollback is promised for a later unexpected
+commit failure; that is terminal and cannot be reported as completed exit.
+Independent checkpoint clones retain their own modal and pixel copies;
+restoring a prior checkpoint is the existing recovery path.
+
+Stage expected-red active and parked requested-termination controls with a
+synthetically blocked, rendered RGB565 modal and incompatible BGRA destination;
+assert typed refusal and unchanged process/window/wait/CPU/pixels/dirty state.
+Add compatible retry and a two-backing late-failure control to prove neither
+store was consumed or copied early. Existing GWE-only D-011 controls must
+remain green in release and no-default configurations. This gate does not
+claim normal modal parking, CE6 visual parity, whole-exit atomicity after
+preflight or app/map readiness.
+
 ## Telemetry and visual evidence
 
 Record genuine drawing API/operation, DC/object/window identity, resolved address-space owner, validated extent, result, dirty region and published frame sequence. Separate guest draw/paint completion from host encode/present time. Report pixels/allocated capacities/backing-store/native-engine memory independently; a small logical surface does not explain whole-host RSS.

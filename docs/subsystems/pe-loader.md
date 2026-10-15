@@ -176,7 +176,9 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    refuses seed/readback collisions with active or retired pinned image runs.
    Keep static classification tied to proven immutable backing; fence other
    host-write and exact exit/module-retirement paths before production
-   activation.
+   activation. The [H-W1 host-origin write authority design](guest-memory.md#h-w1-host-origin-native-write-authority-design-record-not-implemented)
+   inventories current native writers and preflight/failure rules; it is not
+   an implemented guard.
 3. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
    Dynamic mapping, import refresh, attach/detach, unload/reload and parked
    process restoration must reconcile exact generation/pins before returning

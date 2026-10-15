@@ -2020,7 +2020,14 @@ passing isolated named test and complete retry do not explain that access
 violation or prove its cause. The native fixture covers after-owner-close
 retirement, not exit during an active mapped engine.
 
-The transient WINDOWPOS stack issue remains independently open:
+The intermittent native `0xc0000005` incidents remain under one unresolved
+bug entry. A [matched serial/default release-library cohort](../../evidence/parallel-native-av-cohort-20261016/validation.receipt.md)
+at unchanged Rust source ran three attempts in each harness arm; all six
+passed **1,133/0/6 ignored**, observing **0/3** crashes per arm. These
+library-only results do not reproduce or explain either prior full-suite AV.
+Native nonzero-timeout execution starts a timer worker; a single Rust
+emulation thread does not prove native single-thread safety. The
+WINDOWPOS-specific stack probe remains a narrower observation:
 an [isolated direct-EXE probe](../../evidence/stage2-windowpos-stack-20261016/validation.receipt.md)
 passed at requested 128 KiB but overflowed at 64 KiB, while
 [three later default release library reruns](../../evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)

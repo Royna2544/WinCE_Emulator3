@@ -24,7 +24,7 @@ page owns only how to read it:
   a bounded splash-only run, while E-32's E-31-source run host-crashed before
   its tap. The separately approved E-38 fresh-owner run survived its 330 s
   cap at a sampled 430.676 MiB RSS peak, but also stayed on the splash; none
-  validates map readiness or the current D008 source in a live app.
+  validates map readiness or the current D: source in a live app.
 - Isolated native controls (E-4 to E-6) establish bounded Stage 8 fixture behavior only.
   Their elapsed time includes native timeout service and observation overhead, so
   it is not application throughput or cache speed, and they did not run the
