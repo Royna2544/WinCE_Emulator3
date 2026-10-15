@@ -1686,7 +1686,7 @@ impl MemorySystem {
                     |((hole_owner, hole_base), hole_size)| {
                         *hole_owner == owner && ranges_overlap(base, size, *hole_base, *hole_size)
                     },
-                )
+                ) || self.writable_image_guest_range_overlaps(Some(owner), base, size)
             } else {
                 self.private_vm_overlaps(owner, base, size)
             };
@@ -3225,12 +3225,26 @@ impl MemorySystem {
     /// view from any PID must not seed or read back over an active image run,
     /// or over a retired run still kept alive by a VM/native-owner pin.
     pub fn overlaps_writable_image_guest_range(&self, base: u32, size: u32) -> bool {
+        self.writable_image_guest_range_overlaps(None, base, size)
+    }
+
+    /// Stable private/view slabs can reuse a foreign birth's VA, while a
+    /// LegacySeed allocation cannot: its native page ledger is VA-only.
+    fn writable_image_guest_range_overlaps(
+        &self,
+        owner: Option<ProcessBirthKey>,
+        base: u32,
+        size: u32,
+    ) -> bool {
         if size == 0 {
             return false;
         }
         let start = u64::from(base);
         let end = start + u64::from(size);
         let overlaps = |identity: &WritableImageRunIdentity, run: &StableWritableImageRun| {
+            if owner.is_some_and(|owner| identity.owner != owner) {
+                return false;
+            }
             let run_start = u64::from(identity.run_base);
             let run_end = run_start + run.len as u64;
             start < run_end && run_start < end
@@ -3346,7 +3360,24 @@ impl MemorySystem {
         {
             return None;
         }
-        let run_end = identity.run_base.checked_add(u32::try_from(len).ok()?)?;
+        let run_len = u32::try_from(len).ok()?;
+        let run_end = identity.run_base.checked_add(run_len)?;
+        // Legacy seeds use a VA-only native mapper; stable slabs and detached
+        // private reservations are owner-qualified. Exclude both directions
+        // before publishing a second writable byte authority at this VA.
+        if self.virtual_allocations.values().any(|allocation| {
+            (allocation.owner == identity.owner
+                || allocation.backing == VirtualAllocationBacking::LegacySeed)
+                && ranges_overlap(identity.run_base, run_len, allocation.base, allocation.size)
+        }) || self
+            .pending_private_holes
+            .iter()
+            .any(|((owner, base), size)| {
+                *owner == identity.owner && ranges_overlap(identity.run_base, run_len, *base, *size)
+            })
+        {
+            return None;
+        }
         if let Some(state) = self
             .writable_image_modules
             .get(&(identity.owner, identity.module_base))
@@ -3729,6 +3760,7 @@ impl MemorySystem {
                 .any(|((_, other_base), other_size)| {
                     ranges_overlap(base, size, *other_base, *other_size)
                 })
+            || self.overlaps_writable_image_guest_range(base, size)
     }
 
     fn private_vm_overlaps(&self, owner: ProcessBirthKey, base: u32, size: u32) -> bool {
@@ -3752,6 +3784,7 @@ impl MemorySystem {
             || self.allocations_for(owner).any(|allocation| {
                 ranges_overlap(base, size, allocation.ptr, allocation.actual_size)
             })
+            || self.writable_image_guest_range_overlaps(Some(owner), base, size)
     }
 
     fn owner_scoped_slab_overlaps(&self, owner: ProcessBirthKey, base: u32, size: u32) -> bool {
@@ -4054,6 +4087,375 @@ mod tests {
         assert!(memory.overlaps_writable_image_guest_range(base - 2, 4));
         drop(native_access);
         assert!(!memory.overlaps_writable_image_guest_range(base - 2, 4));
+    }
+
+    #[test]
+    fn writable_image_and_global_legacy_seed_exclude_each_other_before_publication() {
+        let (image_owner, legacy_owner) = two_owners();
+        let mut memory = MemorySystem::default();
+        let base = VIRTUAL_PTR_BASE;
+        let identity = writable_image_identity(image_owner, base, 1, base + 0x1000);
+        let bytes = vec![0x5a; STABLE_PRIVATE_PAGE_SIZE];
+
+        // A detached image token must recheck a subsequently published
+        // foreign-birth LegacySeed, even though only virtual_generation moved.
+        let image_token = memory
+            .prepare_writable_image_run(identity, &bytes)
+            .expect("prepare image before legacy allocation");
+        assert_eq!(
+            memory.virtual_alloc(
+                legacy_owner,
+                VirtualAllocationSource::FileViewLegacy,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                0x04,
+            ),
+            Some(base)
+        );
+        assert!(memory.set_virtual_initial_bytes(legacy_owner, base, vec![0x66; 0x1000]));
+        let before_rejected_image = (
+            memory.next_virtual_incarnation,
+            memory.virtual_generation,
+            memory.writable_image_generation,
+            memory.virtual_allocations.len(),
+            memory.next_virtual_ptr,
+            memory.next_virtual_ptr_by_owner.clone(),
+        );
+        assert!(
+            memory
+                .commit_prepared_writable_image_run(image_token)
+                .is_none()
+        );
+        assert!(
+            memory
+                .prepare_writable_image_run(identity, &bytes)
+                .is_none()
+        );
+        assert_eq!(
+            (
+                memory.next_virtual_incarnation,
+                memory.virtual_generation,
+                memory.writable_image_generation,
+                memory.virtual_allocations.len(),
+                memory.next_virtual_ptr,
+                memory.next_virtual_ptr_by_owner.clone(),
+            ),
+            before_rejected_image
+        );
+        assert!(!memory.has_stable_writable_image_runs());
+        assert_eq!(
+            memory
+                .virtual_allocation(legacy_owner, base)
+                .unwrap()
+                .initial_bytes,
+            vec![0x66; 0x1000]
+        );
+
+        assert!(memory.virtual_free(legacy_owner, base, 0, MEM_RELEASE));
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("prepare image after legacy release"),
+            )
+            .expect("publish image");
+        let before_rejected_legacy = (
+            memory.next_virtual_incarnation,
+            memory.virtual_generation,
+            memory.virtual_allocations.len(),
+            memory.next_virtual_ptr,
+            memory.next_virtual_ptr_by_owner.clone(),
+        );
+        for owner in [image_owner, legacy_owner] {
+            assert!(
+                memory
+                    .virtual_alloc(
+                        owner,
+                        VirtualAllocationSource::FileViewLegacy,
+                        base + 0x1000,
+                        0x1000,
+                        MEM_RESERVE | MEM_COMMIT,
+                        0x04,
+                    )
+                    .is_none(),
+                "LegacySeed may not overlap another birth's image"
+            );
+        }
+        assert_eq!(
+            (
+                memory.next_virtual_incarnation,
+                memory.virtual_generation,
+                memory.virtual_allocations.len(),
+                memory.next_virtual_ptr,
+                memory.next_virtual_ptr_by_owner.clone(),
+            ),
+            before_rejected_legacy
+        );
+        let mut actual = [0; 4];
+        pin.read_bytes(0, &mut actual)
+            .expect("read unchanged image");
+        assert_eq!(actual, [0x5a; 4]);
+        // A null-base LegacySeed scan skips the 64-KiB reservation containing
+        // the 4-KiB image, and an adjacent allocation remains valid.
+        assert_eq!(
+            memory.virtual_alloc(
+                legacy_owner,
+                VirtualAllocationSource::FileViewLegacy,
+                0,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                0x04,
+            ),
+            Some(base + VIRTUAL_ALIGN)
+        );
+
+        let native_access = pin.begin_native_access().expect("retain image backing");
+        assert_eq!(
+            memory.retire_writable_image_module(image_owner, base, 1),
+            Some(1)
+        );
+        drop(pin);
+        let before_pinned_refusal = (
+            memory.next_virtual_incarnation,
+            memory.virtual_generation,
+            memory.virtual_allocations.len(),
+        );
+        assert!(
+            memory
+                .virtual_alloc(
+                    legacy_owner,
+                    VirtualAllocationSource::FileViewLegacy,
+                    base,
+                    0x1000,
+                    MEM_RESERVE | MEM_COMMIT,
+                    0x04,
+                )
+                .is_none(),
+            "a retired native pin still owns this guest range"
+        );
+        assert_eq!(
+            (
+                memory.next_virtual_incarnation,
+                memory.virtual_generation,
+                memory.virtual_allocations.len(),
+            ),
+            before_pinned_refusal
+        );
+        drop(native_access);
+        assert_eq!(
+            memory.virtual_alloc(
+                legacy_owner,
+                VirtualAllocationSource::FileViewLegacy,
+                base,
+                0x1000,
+                MEM_RESERVE | MEM_COMMIT,
+                0x04,
+            ),
+            Some(base)
+        );
+    }
+
+    #[test]
+    fn writable_image_excludes_same_birth_private_holes_and_slabs_but_not_foreign_slabs() {
+        let (image_owner, foreign_owner) = two_owners();
+        let base = VIRTUAL_PTR_BASE;
+        let identity = writable_image_identity(image_owner, base, 1, base + 0x1000);
+        let bytes = vec![0x71; STABLE_PRIVATE_PAGE_SIZE];
+        let mut memory = MemorySystem::default();
+
+        // The prepared private reservation is not in virtual_allocations yet.
+        let pending = memory
+            .prepare_private_vm(
+                image_owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                0x04,
+            )
+            .expect("prepare private hole");
+        let before_rejected_image = memory.writable_image_generation;
+        assert!(
+            memory
+                .prepare_writable_image_run(identity, &bytes)
+                .is_none()
+        );
+        assert_eq!(memory.writable_image_generation, before_rejected_image);
+        assert!(!memory.has_stable_writable_image_runs());
+        assert!(memory.abort_prepared_private_vm(pending));
+
+        // An image token prepared first must recheck a later private hole.
+        let image_token = memory
+            .prepare_writable_image_run(identity, &bytes)
+            .expect("prepare image before private hole");
+        let pending = memory
+            .prepare_private_vm(
+                image_owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                0x04,
+            )
+            .expect("prepare later private hole");
+        assert!(
+            memory
+                .commit_prepared_writable_image_run(image_token)
+                .is_none()
+        );
+        assert!(!memory.has_stable_writable_image_runs());
+        assert!(memory.abort_prepared_private_vm(pending));
+
+        let published = memory
+            .prepare_private_vm(
+                image_owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                0x04,
+            )
+            .expect("prepare published private reservation");
+        assert_eq!(memory.commit_prepared_private_vm(published), Some(base));
+        let before_rejected_image = memory.writable_image_generation;
+        assert!(
+            memory
+                .prepare_writable_image_run(identity, &bytes)
+                .is_none()
+        );
+        assert_eq!(memory.writable_image_generation, before_rejected_image);
+        assert!(memory.virtual_allocation(image_owner, base).is_some());
+
+        // Another birth may use the same VA with its own stable slab.
+        let mut separate = MemorySystem::default();
+        let foreign = separate
+            .prepare_private_vm(
+                foreign_owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                0x04,
+            )
+            .expect("prepare foreign private reservation");
+        assert_eq!(separate.commit_prepared_private_vm(foreign), Some(base));
+        let pin = separate
+            .commit_prepared_writable_image_run(
+                separate
+                    .prepare_writable_image_run(identity, &bytes)
+                    .expect("foreign slab does not block image"),
+            )
+            .expect("publish image beside foreign slab");
+        let before_private_refusal = (
+            separate.next_virtual_incarnation,
+            separate.virtual_generation,
+            separate.pending_private_holes.len(),
+            separate.next_virtual_ptr_by_owner.clone(),
+        );
+        assert!(
+            separate
+                .prepare_private_vm(
+                    image_owner,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE,
+                    0x04,
+                )
+                .is_none()
+        );
+        assert_eq!(
+            (
+                separate.next_virtual_incarnation,
+                separate.virtual_generation,
+                separate.pending_private_holes.len(),
+                separate.next_virtual_ptr_by_owner.clone(),
+            ),
+            before_private_refusal
+        );
+        assert_eq!(
+            separate.retire_writable_image_module(image_owner, base, 1),
+            Some(1)
+        );
+        assert!(
+            separate
+                .prepare_private_vm(
+                    image_owner,
+                    VirtualAllocationSource::Private,
+                    base,
+                    0x1000,
+                    MEM_RESERVE,
+                    0x04,
+                )
+                .is_none(),
+            "retired-but-pinned image still excludes same-birth private VA"
+        );
+        drop(pin);
+        let reuse = separate
+            .prepare_private_vm(
+                image_owner,
+                VirtualAllocationSource::Private,
+                base,
+                0x1000,
+                MEM_RESERVE,
+                0x04,
+            )
+            .expect("VA becomes available after final image pin drops");
+        assert!(separate.abort_prepared_private_vm(reuse));
+    }
+
+    #[test]
+    fn writable_image_excludes_same_birth_fixed_heap_and_skips_shared_view_cursor() {
+        let owner = boot_owner();
+        let mut memory = MemorySystem::default();
+        let heap_identity =
+            writable_image_identity(owner, HEAP_PTR_BASE, 1, HEAP_PTR_BASE + 0x1000);
+        let pin = memory
+            .commit_prepared_writable_image_run(
+                memory
+                    .prepare_writable_image_run(
+                        heap_identity,
+                        &vec![0x39; STABLE_PRIVATE_PAGE_SIZE],
+                    )
+                    .expect("prepare fixed-heap overlap image"),
+            )
+            .expect("publish fixed-heap overlap image");
+        let before_fixed_refusal = (memory.next_virtual_incarnation, memory.virtual_generation);
+        assert!(
+            memory
+                .reserve_fixed_private_range(
+                    owner,
+                    VirtualAllocationSource::ProcessHeapArena,
+                    HEAP_PTR_BASE,
+                    VIRTUAL_ALIGN,
+                    0x04,
+                )
+                .is_none()
+        );
+        assert_eq!(
+            (memory.next_virtual_incarnation, memory.virtual_generation),
+            before_fixed_refusal
+        );
+        drop(pin);
+
+        let mut shared = MemorySystem::default();
+        let image_base = VIRTUAL_PTR_BASE;
+        let image_identity = writable_image_identity(owner, image_base, 1, image_base + 0x1000);
+        let _image_pin = shared
+            .commit_prepared_writable_image_run(
+                shared
+                    .prepare_writable_image_run(
+                        image_identity,
+                        &vec![0x39; STABLE_PRIVATE_PAGE_SIZE],
+                    )
+                    .expect("prepare shared-view cursor image"),
+            )
+            .expect("publish shared-view cursor image");
+        assert_eq!(
+            shared.allocate_shared_view(owner, 7, 0, 0x1000, 0x04, &[0x52; 0x1000], None, None),
+            Some(image_base + VIRTUAL_ALIGN)
+        );
     }
 
     #[test]
