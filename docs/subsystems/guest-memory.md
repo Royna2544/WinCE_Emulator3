@@ -369,7 +369,13 @@ bounded opt-in synthetic greens. The [legacy file-view overlap gate](../../evide
 also rejects same- and foreign-PID partial overlap with active or
 retired-but-pinned image runs before either seed or readback can mutate
 bytes, while adjacent nonoverlapping sync still works. Before changing the
-production path, retain real-MIPS fresh-owner and zero image
+production path, retain the [VM-allocation overlap gate](../../evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md):
+global VA-only LegacySeed preflight in both publication orders; same-birth
+stable private/shared reservations, pending holes, fixed heap and heap cursor;
+and native seed/reclaim/fault/map checks before changing bytes or page ledger.
+Foreign-birth stable private backing may still use the same numeric VA. This
+is a synthetic source gate, not production image adoption. Retain real-MIPS
+fresh-owner and zero image
 copy-in/readback assertions, the native `mem_map_ptr` failure/abort and
 file-view overlap controls, and add other direct host-write/restore/rebind
 and exact exit/module-retirement fences, A/B same-VA isolation, IAT patch,

@@ -1992,13 +1992,31 @@ last pin/guard remains, and accepts adjacent nonoverlapping sync. Its
 used stable Rust source hashes and passed 18-block release **2,119/0/9
 ignored** and no-default **1,516/0/3 ignored**. The release HEAD advanced
 only across a `KNOWN_BUGS.md` documentation backup; this is not a source
-drift claim. The transient WINDOWPOS stack issue remains independently open:
+drift claim.
+
+The subsequent [writable-image/VM-allocation overlap gate](../../evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
+passed focused release **13/0/0** and no-default **8/0/0** controls. It
+preflights global VA-only LegacySeed in both publication orders, same-birth
+stable private/shared reservations, pending holes, fixed heap arenas and
+monotonic heap cursor, while permitting a foreign-birth private page to reuse
+the numeric VA. Native seed, stale reclaim, fault repair and low-level map
+paths reject image collisions before ledger or byte mutation. This includes
+a forged stale ledger as a defensive control, not a reachable ordinary VM
+publication claim. Default-harness complete suites passed release
+**2,127/0/9 ignored** and no-default **1,520/0/3 ignored** across 18 blocks
+each; six Rust source hashes matched through the four attempts despite a
+backup-only HEAD advance during the first focused run. Unicorn-only and
+Unicorn-plus-desktop feature checks also passed on the same source seal.
+
+The transient WINDOWPOS stack issue remains independently open:
 an [isolated direct-EXE probe](../../evidence/stage2-windowpos-stack-20261016/validation.receipt.md)
 passed at requested 128 KiB but overflowed at 64 KiB, while
 [three later default release library reruns](../../evidence/stage2-windowpos-stack-20261016/lib-rate.validation.receipt.md)
 had **0/3** crashes, versus **1/3** in an earlier, separate full-suite
-default-harness sequence. Neither denominator establishes cause or production
-stack safety.
+default-harness sequence. The VM-allocation release pass is a fourth,
+later full-suite observation on changed source, not part of that earlier
+three-run cohort. Neither denominator establishes cause or production stack
+safety.
 
 Other direct host-write/restore/rebind and exact exit/module-retirement
 fences, machine checkpoint relineage, DLL migration and production activation

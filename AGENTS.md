@@ -223,6 +223,7 @@ pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-valid
 but normal SD-app loading remains copy-backed. The later bounded
 [native-map failure](evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
 and [legacy file-view overlap](evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
+and [VM-allocation overlap](evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
 synthetic gates pass; the intermittent WINDOWPOS test-thread stack overflow
 is not resolved. Other host-write/exit fences, preloaded/runtime DLL
 ownership and O-M3 `PrivatePageBudget` treatment are the immediate Stage 2

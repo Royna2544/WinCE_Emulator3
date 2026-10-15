@@ -179,7 +179,10 @@ and [mutable-code fallback](../evidence/stage2-mutable-code-fallback-20261016/br
 source/test gates pass. The later
 [second-run native-map failure](../evidence/stage2-writable-image-native-failure-20261016/validation.receipt.md)
 and [legacy file-view overlap](../evidence/stage2-writable-image-file-view-20261016/broad-validation.receipt.md)
-synthetic gates pass too, but normal SD-app loading remains copy-backed. The
+synthetic gates pass. The later [VM-allocation overlap gate](../evidence/stage2-writable-image-vm-allocation-20261016/validation.receipt.md)
+also fences LegacySeed, same-birth stable/private/shared and heap allocation,
+and native seed/reclaim/fault/map collisions, but normal SD-app loading
+remains copy-backed. The
 next connected sequence is production writable main-image integration,
 preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
 persistence through the old copy path as the ownership proof. Each cut needs
