@@ -182,8 +182,8 @@ impl UnicornMips {
     pub fn complete_escaped_saved_get_message_sent_callout(
         &mut self,
         _kernel: &mut CeKernel,
-    ) -> bool {
-        false
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     pub fn complete_escaped_direct_send_message_callout(&mut self, _kernel: &mut CeKernel) -> bool {

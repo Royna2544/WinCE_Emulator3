@@ -461,7 +461,7 @@ fn run_cpu_loop(
                 continue;
             }
         }
-        if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
+        if cpu.complete_escaped_saved_get_message_sent_callout(kernel)? {
             tracing::debug!(target: "ce.gwe", "completed escaped saved GetMessage sent callout at main-loop head");
             reported_blocked_message_wait = false;
             continue;
