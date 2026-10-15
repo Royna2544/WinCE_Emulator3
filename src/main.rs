@@ -466,7 +466,7 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if cpu.complete_escaped_direct_send_message_callout(kernel) {
+        if cpu.complete_escaped_direct_send_message_callout(kernel)? {
             tracing::debug!(target: "ce.gwe", "completed escaped direct send callout at main-loop head");
             reported_blocked_message_wait = false;
             continue;

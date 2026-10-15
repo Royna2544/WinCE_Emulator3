@@ -2506,7 +2506,10 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    pub fn complete_escaped_direct_send_message_callout(&mut self, kernel: &mut CeKernel) -> bool {
+    pub fn complete_escaped_direct_send_message_callout(
+        &mut self,
+        kernel: &mut CeKernel,
+    ) -> Result<bool> {
         let candidates = [
             self.saved_context
                 .as_ref()
@@ -2522,15 +2525,35 @@ impl UnicornMips {
                     && callout.send_thread_id.is_some()
                     && callout.send_restore.is_none()
                     && callout.continuation.is_none()
-                    && callout.resume_import.is_none()
             })
         }) else {
-            return false;
+            return Ok(false);
         };
         let Some(callout) = self.pending_wndproc_returns.pop() else {
-            return false;
+            return Ok(false);
         };
-        if let Some(thread_id) = callout.send_thread_id {
+        if let Some(resume) = callout.resume_import.as_ref() {
+            if resume.sent_message_id.is_none()
+                || self.current_thread_id != resume.thread_id
+                || self.saved_context_thread_birth != Some(resume.thread_birth)
+                || !resume_import_has_live_birth(kernel, resume)
+                || callout.send_timeout_result_ptr.is_some()
+            {
+                self.pending_wndproc_returns.push(callout);
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                return Err(Error::Backend(
+                    "persisted SendMessage callout has stale exact identity or unwritable timeout result"
+                        .to_owned(),
+                ));
+            }
+            if let Err(error) = complete_recorded_sent_callout(kernel, &callout, result) {
+                self.pending_wndproc_returns.push(callout);
+                self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+                return Err(Error::Backend(format!(
+                    "persisted SendMessage completion rejected: {error}"
+                )));
+            }
+        } else if let Some(thread_id) = callout.send_thread_id {
             kernel.gwe.end_direct_send_message(thread_id);
         }
         // The saved wrapper context has no live Unicorn memory handle here. Timeout result
@@ -2567,7 +2590,7 @@ impl UnicornMips {
             result = format_args!("0x{result:08x}"),
             "completed persisted escaped direct SendMessage WNDPROC callout"
         );
-        true
+        Ok(true)
     }
 
     #[cfg(feature = "unicorn")]
@@ -13914,7 +13937,10 @@ impl UnicornMips {
                 report.failure_operation = Some("complete persisted sent callout");
                 return Err(error);
             }
-            let _ = self.complete_escaped_direct_send_message_callout(kernel);
+            if let Err(error) = self.complete_escaped_direct_send_message_callout(kernel) {
+                report.failure_operation = Some("complete persisted SendMessage callout");
+                return Err(error);
+            }
             if self.clear_escaped_visible_message_callouts(kernel) {
                 tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at slice end");
             }
@@ -13983,7 +14009,10 @@ impl UnicornMips {
             report.failure_operation = Some("complete persisted sent callout");
             return Err(error);
         }
-        let _ = self.complete_escaped_direct_send_message_callout(kernel);
+        if let Err(error) = self.complete_escaped_direct_send_message_callout(kernel) {
+            report.failure_operation = Some("complete persisted SendMessage callout");
+            return Err(error);
+        }
         if self.clear_escaped_visible_message_callouts(kernel) {
             tracing::debug!(target: "ce.gwe", "escaped visible-message callout cleared at slice end");
         }
@@ -53008,11 +53037,6 @@ mod guest_thread_stack_tests {
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(4);
-        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
-            process_id: 68,
-            exit_code: crate::ce::kernel::STILL_ACTIVE,
-            signaled: false,
-        });
         kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned());
         kernel.set_process_module_host_path(std::path::PathBuf::from(
             r"D:\INAVI_Emulator\INAVI\iSearch.exe",
@@ -53023,7 +53047,27 @@ mod guest_thread_stack_tests {
         let sender_thread = 9;
         let wndproc = 0x0001_3570;
         let import_pc = 0x7fff_2990;
-        let hwnd = kernel.create_window_ex_w(parent_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let parent_birth = kernel
+            .live_thread_birth_key_by_id(parent_thread)
+            .expect("parked receiver birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                parent_birth,
+                "SEND_TARGET",
+                "",
+                None,
+                None,
+                0,
+                0,
+                0,
+                crate::ce::gwe::Rect::default(),
+            )
+            .expect("birth-owned parked receiver HWND");
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
         assert!(
             kernel
                 .gwe
@@ -53090,7 +53134,13 @@ mod guest_thread_stack_tests {
             current_directory: None,
         });
 
-        assert!(kernel.gwe.sent_message(send_id).is_some());
+        assert_eq!(
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .and_then(|send| send.receiver_birth),
+            Some(parent_birth)
+        );
         assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
         assert!(scheduler.rotate_to_ready_parked_wait(&mut kernel));
         assert_eq!(kernel.current_process_id(), 1);
@@ -77956,7 +78006,7 @@ mod unicorn_tests {
                 clear_focus_after_return: None,
             });
 
-        assert!(scheduler.complete_escaped_direct_send_message_callout(&mut kernel));
+        assert!(scheduler.complete_escaped_direct_send_message_callout(&mut kernel)?);
         assert!(scheduler.pending_wndproc_returns.is_empty());
         assert!(!kernel.gwe.in_send_message(thread_id));
         let saved = scheduler
@@ -79521,7 +79571,7 @@ mod unicorn_tests {
                 regs
             },
         });
-        assert!(scheduler.complete_escaped_direct_send_message_callout(&mut kernel));
+        assert!(scheduler.complete_escaped_direct_send_message_callout(&mut kernel)?);
         assert!(kernel.sent_message_result_ready(send_id));
         assert_eq!(
             kernel.take_completed_send_message_result(send_id),

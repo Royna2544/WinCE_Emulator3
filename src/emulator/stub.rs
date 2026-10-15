@@ -186,8 +186,11 @@ impl UnicornMips {
         Ok(false)
     }
 
-    pub fn complete_escaped_direct_send_message_callout(&mut self, _kernel: &mut CeKernel) -> bool {
-        false
+    pub fn complete_escaped_direct_send_message_callout(
+        &mut self,
+        _kernel: &mut CeKernel,
+    ) -> Result<bool> {
+        Ok(false)
     }
 
     pub fn clear_escaped_visible_message_callouts(&mut self, _kernel: &mut CeKernel) -> bool {
