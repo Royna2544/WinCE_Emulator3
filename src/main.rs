@@ -2201,10 +2201,9 @@ fn run_monitor(
         let Some(command) = words.next() else {
             continue;
         };
-        if recovery_required && matches!(command, "continue" | "c" | "until" | "run-until" | "tap")
-        {
+        if recovery_required && monitor_command_blocked_by_recovery(command) {
             println!(
-                "  stopped-process exit recovery required; restore a checkpoint or quit before running or queuing input"
+                "  stopped-process exit recovery required; restore an earlier checkpoint or quit before running, queuing input, or saving a new checkpoint"
             );
             continue;
         }
@@ -2469,6 +2468,13 @@ fn run_monitor(
         }
     }
     Ok(())
+}
+
+fn monitor_command_blocked_by_recovery(command: &str) -> bool {
+    matches!(
+        command,
+        "continue" | "c" | "until" | "run-until" | "tap" | "checkpoint" | "save"
+    )
 }
 
 fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
@@ -4391,6 +4397,27 @@ mod tests {
     use super::*;
     use std::io::Read as _;
     use wince_emulation_v3::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+
+    #[test]
+    fn monitor_recovery_rejects_post_refusal_checkpoint_save() {
+        for command in [
+            "continue",
+            "c",
+            "until",
+            "run-until",
+            "tap",
+            "checkpoint",
+            "save",
+        ] {
+            assert!(
+                monitor_command_blocked_by_recovery(command),
+                "recovery hold must block `{command}`"
+            );
+        }
+        for command in ["restore", "rewind", "quit", "regs", "trace"] {
+            assert!(!monitor_command_blocked_by_recovery(command));
+        }
+    }
 
     fn kernel_with_committed_private_slab() -> CeKernel {
         let config = RuntimeConfig::load_default().expect("checkpoint test config loads");
