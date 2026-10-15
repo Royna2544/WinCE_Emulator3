@@ -928,6 +928,20 @@ fn resume_import_has_live_birth(kernel: &CeKernel, resume: &ResumeImportAfterWnd
 }
 
 #[cfg(feature = "unicorn")]
+fn message_read_sent_source_for_ordinal(ordinal: Option<u32>) -> Option<&'static str> {
+    match ordinal {
+        Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W) => Some("GetMessageW/SentMessage"),
+        Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W) => Some("PeekMessageW/SentMessage"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn is_message_read_sent_source(source: &str) -> bool {
+    matches!(source, "GetMessageW/SentMessage" | "PeekMessageW/SentMessage")
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DllLifecycleCall {
     module: u32,
@@ -2292,7 +2306,7 @@ impl UnicornMips {
         .flatten()
         .find(|pc| {
             self.pending_wndproc_returns.last().is_some_and(|pending| {
-                let get_message_sent = pending.source == "GetMessageW/SentMessage"
+                let get_message_sent = is_message_read_sent_source(pending.source)
                     && pending.return_pc == *pc
                     && pending.send_thread_id.is_some()
                     && pending.send_timeout_result_ptr.is_none();
@@ -2365,7 +2379,7 @@ impl UnicornMips {
         ];
         let Some((saved_pc, result)) = candidates.into_iter().flatten().find(|(pc, _)| {
             self.pending_wndproc_returns.last().is_some_and(|callout| {
-                callout.source == "GetMessageW/SentMessage"
+                is_message_read_sent_source(callout.source)
                     && callout.return_pc == *pc
                     && callout.send_thread_id.is_some()
                     && callout.send_timeout_result_ptr.is_none()
@@ -2379,14 +2393,19 @@ impl UnicornMips {
         }) else {
             return false;
         };
+        let pending_source = self.pending_wndproc_returns.last().map(|callout| callout.source);
+        let matches_pending_source = |ordinal| {
+            message_read_sent_source_for_ordinal(ordinal)
+                .is_some_and(|source| Some(source) == pending_source)
+        };
         let is_get_message_trap = self.import_traps.trap_at(saved_pc).is_some_and(|trap| {
             trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
-                && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+                && matches_pending_source(trap.ordinal)
         }) || self.last_debug.as_ref().is_some_and(|snapshot| {
             snapshot.pc == saved_pc
                 && snapshot.trap_module_kind
                     == Some(crate::emulator::imports::ImportModuleKind::Coredll)
-                && snapshot.trap_ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+                && matches_pending_source(snapshot.trap_ordinal)
         });
         if !is_get_message_trap {
             return false;
@@ -10143,7 +10162,7 @@ impl UnicornMips {
                         let kernel = unsafe { &*kernel_ptr };
                         let current_birth = current_thread_id_hook.get();
                         if !resume_import_has_live_birth(kernel, resume)
-                            || (callout.source == "GetMessageW/SentMessage"
+                            || (is_message_read_sent_source(callout.source)
                                 && current_birth
                                     != (resume.thread_id, Some(resume.thread_birth)))
                         {
@@ -10980,10 +10999,10 @@ impl UnicornMips {
                         &pending_wndproc_returns_hook,
                     )
                 }) {
-                    // The sent-message WNDPROC reached its original GetMessageW
+                    // The sent-message WNDPROC reached its original message-read
                     // import continuation without taking the synthetic return
-                    // stub. Complete that synchronous send, then let this
-                    // GetMessageW trap be processed normally below.
+                    // stub. Complete that synchronous send, then process the
+                    // GetMessageW or PeekMessageW trap normally below.
                     args = read_mips_import_args(uc, IMPORT_TRAP_ARG_COUNT);
                 }
                 if trap.as_ref().is_some_and(|trap| {
@@ -19752,27 +19771,54 @@ fn try_enter_get_message_sent_callout<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
-    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
-    {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return false;
     }
+    let Some(source) = message_read_sent_source_for_ordinal(ordinal) else {
+        return false;
+    };
 
     let hwnd = args.get(1).copied().filter(|hwnd| *hwnd != 0);
     let min_msg = args.get(2).copied().unwrap_or(0);
     let max_msg = args.get(3).copied().unwrap_or(0);
-    let Some(message) =
-        kernel.take_ready_sent_message_w_filtered(thread_id, hwnd, min_msg, max_msg)
+    let Some((send_id, _message)) =
+        kernel.peek_ready_sent_message_w_filtered(thread_id, hwnd, min_msg, max_msg)
     else {
         return false;
     };
-
-    let original_regs = capture_mips_gprs(uc);
+    // A PeekMessage call processes sent messages regardless of PM_REMOVE; the
+    // sent MSG is never returned as a posted-message result. Authenticate the
+    // live receiver and capture its import continuation before queue removal.
+    if verified_native_register_birth(kernel, current_thread_id, thread_id).is_none() {
+        current_thread_id.fail_backend(
+            thread_id,
+            "message-read sent callout has no verified receiver birth",
+        );
+        let _ = uc.emu_stop();
+        return true;
+    }
+    let original_regs = match capture_mips_context_checked(uc) {
+        Ok(regs) => regs,
+        Err(error) => {
+            current_thread_id.fail_backend(
+                thread_id,
+                format!("capture message-read import context: {error:?}"),
+            );
+            let _ = uc.emu_stop();
+            return true;
+        }
+    };
     let original_running_thread = *running_thread.borrow();
-    enter_get_message_sent_callout(
+    let Some(message) = kernel.take_ready_sent_message_w_filtered_if_id(
+        thread_id, hwnd, min_msg, max_msg, send_id,
+    ) else {
+        return false;
+    };
+    if !enter_get_message_sent_callout(
         kernel,
         uc,
         message,
+        source,
         import_pc,
         thread_id,
         current_thread_id,
@@ -19780,7 +19826,13 @@ fn try_enter_get_message_sent_callout<D>(
         pending_returns,
         original_regs,
         original_running_thread,
-    )
+    ) {
+        // The send has been dequeued. Never fall through to a fabricated
+        // PeekMessage/GetMessage return when guest WNDPROC setup fails.
+        current_thread_id.fail_backend(thread_id, "message-read sent callout setup failed");
+        let _ = uc.emu_stop();
+    }
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -19795,11 +19847,12 @@ fn complete_escaped_get_message_sent_callout<D>(
     current_birth: Option<crate::ce::object::ThreadBirthKey>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
-    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
-    {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return false;
     }
+    let Some(source) = message_read_sent_source_for_ordinal(ordinal) else {
+        return false;
+    };
 
     let current_sp = read_mips_reg(uc, unicorn_engine::RegisterMIPS::SP);
     let current_ra = read_mips_reg(uc, unicorn_engine::RegisterMIPS::RA);
@@ -19810,7 +19863,7 @@ fn complete_escaped_get_message_sent_callout<D>(
         read_mips_reg(uc, unicorn_engine::RegisterMIPS::A3),
     ];
     let should_complete = pending_returns.borrow().last().is_some_and(|callout| {
-        callout.source == "GetMessageW/SentMessage"
+        callout.source == source
             && callout.return_pc == import_pc
             && callout.return_sp == current_sp
             && current_ra == WNDPROC_RETURN_STUB_ADDR
@@ -19878,6 +19931,7 @@ fn enter_get_message_sent_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     message: crate::ce::gwe::Message,
+    source: &'static str,
     import_pc: u32,
     thread_id: u32,
     current_thread_id: &std::rc::Rc<NativeCurrentThread>,
@@ -19890,7 +19944,7 @@ fn enter_get_message_sent_callout<D>(
     else {
         current_thread_id.fail_backend(
             thread_id,
-            "GetMessage sent-message callout has no verified register birth",
+            "message-read sent callout has no verified register birth",
         );
         let _ = uc.emu_stop();
         return true;
@@ -19907,25 +19961,31 @@ fn enter_get_message_sent_callout<D>(
         .gwe
         .window(message.hwnd)
         .filter(|window| !window.destroyed)
+        .filter(|window| is_guest_wndproc(window.wndproc))
     else {
         let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
-        restore_mips_gprs(uc, &original_regs);
+        let restore_result = (|| -> std::result::Result<(), String> {
+            restore_mips_context_checked(uc, &original_regs)
+                .map_err(|error| format!("restore MIPS context: {error:?}"))?;
+            update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id())
+                .map_err(|error| format!("restore KData current IDs: {error}"))?;
+            uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc))
+                .map_err(|error| format!("restore import PC: {error:?}"))?;
+            Ok(())
+        })();
+        if let Err(error) = restore_result {
+            current_thread_id.fail_backend(
+                thread_id,
+                format!("message-read sent host-dispatch return failed: {error}"),
+            );
+            let _ = uc.emu_stop();
+            return true;
+        }
         current_thread_id.set_verified(original_birth);
-        let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = original_running_thread;
-        let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
         return true;
     };
     let wndproc = window.wndproc;
-    if !is_guest_wndproc(wndproc) {
-        let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
-        restore_mips_gprs(uc, &original_regs);
-        current_thread_id.set_verified(original_birth);
-        let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
-        *running_thread.borrow_mut() = original_running_thread;
-        let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
-        return true;
-    }
 
     tracing::debug!(
         target: "ce.gwe",
@@ -19935,12 +19995,12 @@ fn enter_get_message_sent_callout<D>(
         lparam = format_args!("0x{:08x}", message.lparam),
         class = window.class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
-        "GetMessageW dispatching sent message internally"
+        "message-read import dispatching sent message internally"
     );
 
     let return_sp = wndproc_return_sp(uc);
     pending_returns.borrow_mut().push(PendingWndProcReturn {
-        source: "GetMessageW/SentMessage",
+        source,
         hwnd: message.hwnd,
         msg: message.msg,
         wparam: message.wparam,
@@ -19965,7 +20025,7 @@ fn enter_get_message_sent_callout<D>(
     });
     tracing::debug!(
         target: "ce.gwe",
-        source = "GetMessageW/SentMessage",
+        source,
         hwnd = format_args!("0x{:08x}", message.hwnd),
         msg = format_args!("0x{:08x}", message.msg),
         wndproc = format_args!("0x{wndproc:08x}"),
@@ -36956,6 +37016,78 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn peek_sent_host_dispatch_restore_failure_is_terminal() {
+        let mut kernel = crate::ce::kernel::CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let receiver_thread = super::MAIN_GUEST_THREAD_ID;
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("receiver birth");
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread,
+            "PeekHostDispatchTarget",
+            "",
+            None,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(
+            kernel.gwe.window(hwnd).map(|window| window.wndproc),
+            Some(crate::ce::gwe::DEFAULT_WNDPROC),
+        );
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                17,
+                hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
+            .expect("queued sent message");
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let import_pc = 0x7fff_2990;
+        uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::SP, 0x3000_1000)
+            .unwrap();
+        let current_thread_id =
+            std::rc::Rc::new(super::NativeCurrentThread::new(receiver_thread, Some(receiver_birth)));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            receiver_thread,
+            crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        ))));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+        // The sent message may be host-dispatched, but failed KData restoration
+        // must stop the native attempt rather than return a false Peek result.
+        // Deliberately do not map KData in this minimal Unicorn instance.
+        assert!(super::try_enter_get_message_sent_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W),
+            &[0x3000_2000, 0, 0, 0, crate::ce::gwe::PeekFlags::REMOVE.bits()],
+            import_pc,
+            receiver_thread,
+            &current_thread_id,
+            &running_thread,
+            &pending_returns,
+        ));
+        assert!(matches!(
+            current_thread_id.terminal_error.borrow().as_ref(),
+            Some(crate::Error::Backend(message)) if message.contains("KData")
+        ));
+        assert_eq!(current_thread_id.get(), (receiver_thread, None));
+        assert!(pending_returns.borrow().is_empty());
+        assert!(kernel.gwe.sent_message_result_ready(send_id));
+    }
+
+    #[test]
     fn escaped_get_message_does_not_complete_reused_thread_birth() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -43246,6 +43378,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
             kernel,
             uc,
             message,
+            "GetMessageW/SentMessage",
             blocked.import_pc,
             blocked.thread_id,
             current_thread_id,
@@ -77450,21 +77583,42 @@ mod unicorn_tests {
 
     #[test]
     fn native_same_process_send_defers_wndproc_during_receiver_sleep() -> crate::Result<()> {
-        native_same_process_sleep_send_fixture(false)
+        native_same_process_sleep_send_fixture(false, false)
     }
 
     #[test]
     fn native_same_process_send_delivers_after_receiver_sleep_timeout() -> crate::Result<()> {
-        native_same_process_sleep_send_fixture(true)
+        native_same_process_sleep_send_fixture(true, false)
     }
 
-    fn native_same_process_sleep_send_fixture(continue_after_send: bool) -> crate::Result<()> {
-        use crate::ce::coredll_ordinals::{ORD_GET_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP};
+    #[test]
+    fn native_same_process_peek_remove_delivers_after_receiver_sleep_timeout() -> crate::Result<()> {
+        native_same_process_sleep_send_fixture(true, true)
+    }
+
+    fn native_same_process_sleep_send_fixture(
+        continue_after_send: bool,
+        peek_remove: bool,
+    ) -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::{
+            ORD_GET_MESSAGE_W, ORD_PEEK_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP,
+        };
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 
         let sleep_trap = super::IMPORT_TRAP_BASE + 0x400;
         let send_trap = sleep_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
-        let get_message_trap = send_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let retrieval_trap = send_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let retrieval_ordinal = if peek_remove {
+            ORD_PEEK_MESSAGE_W
+        } else {
+            ORD_GET_MESSAGE_W
+        };
+        let retrieval_name = if peek_remove { "PeekMessageW" } else { "GetMessageW" };
+        let retrieval_source = if peek_remove {
+            "PeekMessageW/SentMessage"
+        } else {
+            "GetMessageW/SentMessage"
+        };
         let mut image_bytes = tiny_mips_spinner_pe();
         for (offset, words) in [
             (
@@ -77478,9 +77632,11 @@ mod unicorn_tests {
                     0x0000_2821, // move a1, zero: all windows
                     0x0000_3021, // move a2, zero: no minimum filter
                     0x0000_3821, // move a3, zero: no maximum filter
-                    0x3c19_0000 | (get_message_trap >> 16),
-                    0x3739_0000 | (get_message_trap & 0xffff),
-                    0x0320_f809, // T retrieves queued send after Sleep returns
+                    0x2408_0001, // addiu t0, zero, 1: PM_REMOVE for PeekMessageW
+                    0xafa8_0010, // sw t0, 16(sp): fifth MIPS import argument
+                    0x3c19_0000 | (retrieval_trap >> 16),
+                    0x3739_0000 | (retrieval_trap & 0xffff),
+                    0x0320_f809, // T enters real message retrieval after Sleep
                     0,
                     0x1000_ffff,
                     0,
@@ -77518,7 +77674,7 @@ mod unicorn_tests {
         for (address, ordinal, name) in [
             (sleep_trap, ORD_SLEEP, "Sleep"),
             (send_trap, ORD_SEND_MESSAGE_W, "SendMessageW"),
-            (get_message_trap, ORD_GET_MESSAGE_W, "GetMessageW"),
+            (retrieval_trap, retrieval_ordinal, retrieval_name),
         ] {
             cpu.import_traps.insert(ImportTrap {
                 address,
@@ -77646,6 +77802,7 @@ mod unicorn_tests {
 
         let sleep_wait_id = sleep.wait_id;
         let sleep_return_pc = sleep.return_pc;
+        assert_eq!(sleep_return_pc, entry + 0x10, "T Sleep must return into the native retrieval program");
         let sender_wait_ids: Vec<_> = cpu
             .blocked_wait_threads
             .iter()
@@ -77728,7 +77885,7 @@ mod unicorn_tests {
         assert!(cpu.pending_wndproc_returns.is_empty());
         assert!(
             !cpu.prepare_active_sent_message_callout(&mut kernel),
-            "deferred send was activated before T executed GetMessageW"
+            "deferred send was activated before T executed {retrieval_name}"
         );
         assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), send_ids);
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
@@ -77748,7 +77905,18 @@ mod unicorn_tests {
         assert_eq!(cpu.current_thread_id, receiver_thread);
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(send_ids[0]));
         assert_eq!(cpu.pending_wndproc_returns.len(), 1);
-        assert_eq!(cpu.pending_wndproc_returns[0].source, "GetMessageW/SentMessage");
+        assert_eq!(cpu.pending_wndproc_returns[0].source, retrieval_source);
+        assert_eq!(
+            cpu.pending_wndproc_returns[0]
+                .resume_import
+                .as_ref()
+                .map(|resume| resume.regs.regs[31]),
+            Some(entry + 0x38),
+            "{retrieval_name} captured wrong native caller RA: Sleep PC=0x{sleep_return_pc:08x}, report={:?}, imports={:?}, trace={:?}",
+            delivery_attempt.report,
+            cpu.last_debug_snapshot().map(|snapshot| &snapshot.last_imports),
+            cpu.last_debug_snapshot().map(|snapshot| snapshot.last_code.iter().rev().take(24).map(|code| (code.pc, code.ra, code.instruction)).collect::<Vec<_>>()),
+        );
         assert_eq!(
             cpu.blocked_wait_threads
                 .iter()
@@ -77763,7 +77931,7 @@ mod unicorn_tests {
             super::UnicornRunLimits {
                 instruction_limit: 128,
                 wall_clock_limit_ms: 500,
-                stop_pc: Some(get_message_trap),
+                stop_pc: Some(retrieval_trap),
                 live_pump: true,
             },
         );
@@ -77786,7 +77954,19 @@ mod unicorn_tests {
             },
         );
         sender_resume_attempt.result?;
-        assert_eq!(cpu.saved_context_pc(), Some(sender_return_pc));
+        assert_eq!(
+            cpu.saved_context_pc(),
+            Some(sender_return_pc),
+            "{retrieval_name} sender did not resume: entry=0x{entry:08x}, wndproc=0x{wndproc:08x}, retrieval_trap=0x{retrieval_trap:08x}, report={:?}, current={}, running={:?}, saved_birth={:?}, blocked={:?}, send={:?}, pending_returns={:?}, snapshot={:?}",
+            sender_resume_attempt.report,
+            cpu.current_thread_id,
+            cpu.running_guest_thread,
+            cpu.saved_context_thread_birth,
+            cpu.blocked_wait_threads,
+            kernel.gwe.sent_message(send_ids[0]),
+            cpu.pending_wndproc_returns,
+            cpu.last_debug_snapshot().map(|snapshot| (&snapshot.pc, &snapshot.last_imports)),
+        );
         assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
         assert_eq!(cpu.current_thread_id, sender_thread);
         assert_eq!(
