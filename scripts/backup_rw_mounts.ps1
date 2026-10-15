@@ -1,9 +1,11 @@
 #requires -Version 7.0
 <#
-Create point-in-time ZIP backups beside the three exact writable iNavi mounts.
+Create verified ZIP backups beside the three exact writable iNavi mounts.
 The original trees and earlier archives are never modified. Every file in a
 new archive is hashed against the source after archive creation; a ZIP is
-published only after all entries have passed verification.
+published only after all entries have passed verification. The sequential
+archives are not an atomic snapshot: all three sources must stay quiescent
+until the final content-hash comparison completes.
 #>
 [CmdletBinding()]
 param()
@@ -17,9 +19,9 @@ if ($repository -ne 'D:\GitHub\Wince_emulation_v3') {
 }
 
 $mounts = @(
-    @{ Name = 'INAVI'; Source = 'D:\INAVI_Emulator\INAVI'; Parent = 'D:\INAVI_Emulator' },
-    @{ Name = 'ResidentFlash'; Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Parent = 'D:\INAVI_Emulator\DUMPPLZ' },
-    @{ Name = 'EmulatorRoot'; Source = 'D:\INAVI_Emulator\EmulatorRoot'; Parent = 'D:\INAVI_Emulator' }
+    @{ Name = 'SD'; ArchiveStem = 'INAVI'; Source = 'D:\INAVI_Emulator\INAVI'; Parent = 'D:\INAVI_Emulator' },
+    @{ Name = 'ResidentFlash'; ArchiveStem = 'ResidentFlash'; Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Parent = 'D:\INAVI_Emulator\DUMPPLZ' },
+    @{ Name = 'EmulatorRoot'; ArchiveStem = 'EmulatorRoot'; Source = 'D:\INAVI_Emulator\EmulatorRoot'; Parent = 'D:\INAVI_Emulator' }
 )
 $tag = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
 $evidence = Join-Path $repository "evidence\pre-live-mount-backup-$tag"
@@ -27,10 +29,43 @@ if (Test-Path -LiteralPath $evidence) { throw "Evidence directory already exists
 [void][System.IO.Directory]::CreateDirectory($evidence)
 $activePartial = $null
 $completed = [System.Collections.Generic.List[object]]::new()
+$initialInventories = [System.Collections.Generic.List[object]]::new()
+$manifestPath = Join-Path $evidence 'manifest.json'
+. (Join-Path $PSScriptRoot 'backup_rw_mounts_inventory_core.ps1')
 
 function Write-Json([string]$Path, [object]$Value) {
     $json = $Value | ConvertTo-Json -Depth 12
     [System.IO.File]::WriteAllText($Path, $json + "`n", $utf8)
+}
+
+function Write-JsonAtomic([string]$Path, [object]$Value) {
+    $temporary = Join-Path (Split-Path -Parent $Path) (
+        '.manifest-' + [guid]::NewGuid().ToString('N') + '.tmp'
+    )
+    try {
+        Write-Json $temporary $Value
+        [System.IO.File]::Move($temporary, $Path, $true)
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+}
+
+$manifestState = @{
+    schemaVersion = 2
+    tag = $tag
+    updatedUtc = [DateTime]::UtcNow.ToString('O')
+    repository = $repository
+    scriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToUpperInvariant()
+    complete = $false
+    completed = @()
+}
+
+function Publish-Manifest {
+    $manifestState.updatedUtc = [DateTime]::UtcNow.ToString('O')
+    $manifestState.completed = $completed.ToArray()
+    Write-JsonAtomic $manifestPath $manifestState
 }
 
 function Get-Sha256([string]$Path) {
@@ -80,6 +115,22 @@ function Get-SourceInventory([string]$Root) {
             }
         }
     }
+    foreach ($file in $files) {
+        Assert-UnchangedSource $file
+        $sourceStream = [System.IO.FileStream]::new(
+            [string]$file.fullPath, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read
+        )
+        try {
+            if ($sourceStream.Length -ne [long]$file.length) {
+                throw "Source length changed during inventory: $($file.fullPath)"
+            }
+            $file.sha256 = Get-StreamSha256 $sourceStream
+        } finally {
+            $sourceStream.Dispose()
+        }
+        Assert-UnchangedSource $file
+    }
     return [pscustomobject]@{
         files = @($files | Sort-Object relative)
         directories = @($directories | Sort-Object relative)
@@ -111,7 +162,10 @@ function Add-FileToZip([System.IO.Compression.ZipArchive]$Zip, [object]$File) {
         if ($copied -ne [long]$File.length) {
             throw "Source length changed while archiving: $($File.fullPath)"
         }
-        $File.sha256 = [System.Convert]::ToHexString($hash.GetHashAndReset())
+        $archiveSourceHash = [System.Convert]::ToHexString($hash.GetHashAndReset())
+        if ($archiveSourceHash -ne [string]$File.sha256) {
+            throw "Source content changed after initial inventory: $($File.fullPath)"
+        }
     } finally {
         if ($null -ne $entryStream) { $entryStream.Dispose() }
         $hash.Dispose()
@@ -183,14 +237,37 @@ function Assert-ZipMatchesSource([string]$Archive, [object]$Inventory) {
 }
 
 try {
+    # Publish an incomplete manifest before reading any mount. A crash after
+    # this point cannot leave a complete-looking partial three-ZIP set.
+    Publish-Manifest
     foreach ($mount in $mounts) {
         $source = [string]$mount.Source
-        $parent = [string]$mount.Parent
         if (-not (Test-Path -LiteralPath $source -PathType Container)) {
             throw "Mounted source directory is missing: $source"
         }
         $inventory = Get-SourceInventory $source
-        $archive = Join-Path $parent ("{0}-pre-live-{1}.zip" -f $mount.Name, $tag)
+        $sourceManifest = Join-Path $evidence ("{0}-source-manifest.json" -f $mount.Name)
+        Write-Json $sourceManifest @{
+            source = $source
+            sourceRoot = $source
+            capturedUtc = [DateTime]::UtcNow.ToString('O')
+            files = $inventory.files
+            directories = $inventory.directories
+        }
+        $initialInventories.Add([pscustomobject]@{
+            mount = $mount
+            inventory = $inventory
+            sourceManifest = $sourceManifest
+            sourceManifestSha256 = Get-Sha256 $sourceManifest
+        })
+    }
+
+    foreach ($item in $initialInventories) {
+        $mount = $item.mount
+        $source = [string]$mount.Source
+        $parent = [string]$mount.Parent
+        $inventory = $item.inventory
+        $archive = Join-Path $parent ("{0}-pre-live-{1}.zip" -f $mount.ArchiveStem, $tag)
         $partial = "$archive.partial"
         if ((Test-Path -LiteralPath $archive) -or (Test-Path -LiteralPath $partial)) {
             throw "Refusing to overwrite an existing archive or partial: $archive"
@@ -219,15 +296,15 @@ try {
         $archiveBytes = (Get-Item -LiteralPath $partial).Length
         [System.IO.File]::Move($partial, $archive)
         $activePartial = $null
-        $sourceManifest = Join-Path $evidence ("{0}-source-manifest.json" -f $mount.Name)
-        Write-Json $sourceManifest @{
-            source = $source
-            files = $inventory.files
-            directories = $inventory.directories
+        if ((Get-Sha256 $archive) -ne $zipHash) {
+            throw "Archive changed after verified rename: $archive"
         }
         $sourceBytes = [long]0
         foreach ($file in $inventory.files) { $sourceBytes += [long]$file.length }
         $completed.Add([pscustomobject]@{
+            name = [string]$mount.Name
+            sourceRoot = $source
+            archivePath = $archive
             source = $source
             archive = $archive
             archiveBytes = $archiveBytes
@@ -235,20 +312,59 @@ try {
             sourceFiles = $inventory.files.Count
             sourceDirectories = $inventory.directories.Count
             sourceBytes = $sourceBytes
-            sourceManifest = $sourceManifest
-            sourceManifestSha256 = Get-Sha256 $sourceManifest
+            sourceManifest = [string]$item.sourceManifest
+            sourceManifestSha256 = [string]$item.sourceManifestSha256
+            postBackupSourceManifest = $null
+            postBackupSourceManifestSha256 = $null
+            postBackupInventoryVerified = $false
             zipFilesMatchedSourceBySha256 = $true
         })
-        Write-Json (Join-Path $evidence 'manifest.json') @{
-            tag = $tag; updatedUtc = [DateTime]::UtcNow.ToString('O')
-            repository = $repository; scriptSha256 = Get-Sha256 $PSCommandPath
-            completed = $completed.ToArray()
-        }
+        Publish-Manifest
         Write-Output ("Verified {0}: {1}" -f $mount.Name, $archive)
     }
-    Write-Output "All three adjacent ZIP backups verified. Manifest: $(Join-Path $evidence 'manifest.json')"
+
+    # The archives are sequential, so re-read every source after *all three*
+    # ZIPs have passed. Compare content SHA as well as the final size/mtime
+    # inventory that the later pre-spawn check will use.
+    for ($index = 0; $index -lt $initialInventories.Count; $index++) {
+        $item = $initialInventories[$index]
+        $source = [string]$item.mount.Source
+        $finalInventory = Get-SourceInventory $source
+        Assert-BackupInventoryMatch -Initial $item.inventory -Final $finalInventory -SourceRoot $source
+        $finalManifest = Join-Path $evidence ("{0}-post-backup-source-manifest.json" -f $item.mount.Name)
+        Write-Json $finalManifest @{
+            sourceRoot = $source
+            capturedUtc = [DateTime]::UtcNow.ToString('O')
+            files = $finalInventory.files
+            directories = $finalInventory.directories
+        }
+        $completed[$index].postBackupSourceManifest = $finalManifest
+        $completed[$index].postBackupSourceManifestSha256 = Get-Sha256 $finalManifest
+        $completed[$index].postBackupInventoryVerified = $true
+        Publish-Manifest
+    }
+
+    foreach ($row in $completed) {
+        if ((Get-Sha256 ([string]$row.archivePath)) -ne [string]$row.archiveSha256 -or
+            (Get-Sha256 ([string]$row.sourceManifest)) -ne [string]$row.sourceManifestSha256 -or
+            (Get-Sha256 ([string]$row.postBackupSourceManifest)) -ne [string]$row.postBackupSourceManifestSha256) {
+            throw "Backup evidence changed before final completion: $($row.name)"
+        }
+    }
+    if ($completed.Count -ne 3 -or
+        $completed[0].name -ne 'SD' -or
+        $completed[1].name -ne 'ResidentFlash' -or
+        $completed[2].name -ne 'EmulatorRoot' -or
+        @($completed | Where-Object { -not $_.postBackupInventoryVerified }).Count -ne 0) {
+        throw 'The three required backup rows are not finally verified'
+    }
+    $manifestState.complete = $true
+    Publish-Manifest
+    Write-Output "All three adjacent ZIP backups and final source inventories verified. Manifest: $manifestPath"
 } catch {
     $message = $_.Exception.Message
+    $manifestState.complete = $false
+    Publish-Manifest
     if ($null -ne $activePartial -and (Test-Path -LiteralPath $activePartial -PathType Leaf)) {
         Remove-Item -LiteralPath $activePartial -Force -ErrorAction Stop
     }

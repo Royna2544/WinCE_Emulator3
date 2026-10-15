@@ -1,9 +1,10 @@
 #requires -Version 7.0
 <#
-E-37 bounded mounted iNavi run. Invoke from PowerShell 7; do not run in parallel
-with another emulator. This E-37 comparison launches the exact preserved
-release executable, checks the user-approved original-mount backups, and
-retains all output under evidence/.
+Bounded mounted iNavi evidence run. A fresh, separately approved run manifest,
+source/build seal and three completed adjacent ZIP backups are required. The
+detached monitor repeats provenance and mount checks and durably reserves the
+approval and ZIPs immediately before it may launch the emulator. Never call
+the worker switches directly.
 
 The NMEA stream is a NEW diagnostic input, not a replay of the older GPS run:
 16 one-Hz RMC/GGA/VTG bursts at 37.5 N, 127.25 E, altitude 42 m, speed 0.
@@ -14,6 +15,10 @@ param(
     [switch]$ObserverWorker,
     [switch]$MonitorWorker,
     [string]$RunDirectory,
+    [string]$ManifestPath,
+    [string]$ManifestSha256,
+    [string]$ApprovalReference,
+    [string]$LaunchNonce,
     [ValidateRange(512, 65536)][int]$MaxWorkingSetMiB = 2048
 )
 
@@ -21,6 +26,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 $frequency = [System.Diagnostics.Stopwatch]::Frequency
+. (Join-Path $PSScriptRoot 'inavi_summary_observer_core.ps1')
+. (Join-Path $PSScriptRoot 'inavi_run_preflight_core.ps1')
 
 function Write-JsonFile([string]$Path, [object]$Value) {
     $json = $Value | ConvertTo-Json -Depth 12
@@ -63,7 +70,7 @@ function Assert-NoReparseMounts([object[]]$Backups) {
     foreach ($item in $Backups) {
         $root = [string]$item.Source
         $ancestor = [System.IO.DirectoryInfo]::new($root)
-        while ($null -ne $ancestor -and $ancestor.FullName -ne 'D:\') {
+        while ($null -ne $ancestor -and $ancestor.Parent -ne $null) {
             if (-not $ancestor.Exists) { throw "Mounted path disappeared: $($ancestor.FullName)" }
             if ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
                 throw "Mounted path contains a reparse-point ancestor: $($ancestor.FullName)"
@@ -86,36 +93,163 @@ function Assert-NoReparseMounts([object[]]$Backups) {
     }
 }
 
-function Test-OriginalMountPreflight([string]$Repository) {
-    # Current-state archives verified by evidence/pre-live-mount-backup-20261014T050927Z/manifest.json.
-    $backups = @(
-        @{ Source = 'D:\INAVI_Emulator\INAVI'; Archive = 'D:\INAVI_Emulator\INAVI-pre-live-20261014T050927Z.zip'; Hash = '4766C2E3241028902DEF32B85173165F4CB34528396399E9149E669497C02AF4' },
-        @{ Source = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash'; Archive = 'D:\INAVI_Emulator\DUMPPLZ\ResidentFlash-pre-live-20261014T050927Z.zip'; Hash = '932D43E82BDC045EEEB677EB82835072A31283943E2F375EDAD0383194FEA357' },
-        @{ Source = 'D:\INAVI_Emulator\EmulatorRoot'; Archive = 'D:\INAVI_Emulator\EmulatorRoot-pre-live-20261014T050927Z.zip'; Hash = '37FE8D921BDFA022F3F3CF3149C388608C191A65B6E547FCABD34E06C4238F0B' }
-    )
-    foreach ($item in $backups) {
-        if (-not (Test-Path -LiteralPath $item.Source -PathType Container)) {
-            throw "Original mounted directory is missing: $($item.Source)"
-        }
-        Test-ExpectedHash $item.Archive $item.Hash
-    }
-    Assert-NoReparseMounts $backups
-    Test-ExpectedHash (Join-Path $Repository 'mounts.toml') '6E9CD6F405E2945C8CB949B1B53A0AAC8821EA2A2EF5434053F578B1A495B0B0'
-    Test-ExpectedHash (Join-Path $Repository 'serial_devices.json') '9384CE7409CA547C51B5805755B09BC745B544AA2297589CA2CBE5B4110A6F28'
-    Test-ExpectedHash (Join-Path $Repository 'registry.reg') '3DD0A53EC23BFB2F36A65E53CFEC262D8D0A0527F78AA5F9A9256EA3E38A6DCE'
-    Test-ExpectedHash 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe' '223041AA84555EF7B0099062A166131558C5AC2C908449B887BC06BF85F2D911'
-    $markers = @(
-        'D:\INAVI_Emulator\INAVI\INavi\traffictest.txt',
-        'D:\INAVI_Emulator\INAVI\INavi\routetest.txt',
-        'D:\INAVI_Emulator\INAVI\mapdata\soap.bin',
-        'D:\INAVI_Emulator\INAVI\mapdata\searchdb\oildata.dat'
-    )
-    foreach ($marker in $markers) {
+function Read-InaviJson([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing JSON file: $Path" }
+    return Get-Content -LiteralPath $Path -Raw -ErrorAction Stop |
+        ConvertFrom-Json -AsHashtable -DateKind String -ErrorAction Stop
+}
+
+function Assert-SlowBootMarkers([string]$SdRoot) {
+    foreach ($relative in @(
+            'INavi\traffictest.txt', 'INavi\routetest.txt',
+            'mapdata\soap.bin', 'mapdata\searchdb\oildata.dat')) {
+        $marker = Join-Path $SdRoot $relative
         if (Test-Path -LiteralPath $marker) {
             throw "Slow-boot marker appeared; investigate without deleting it: $marker"
         }
     }
-    return $backups
+}
+
+function Get-InaviWritableMountRoots([string]$Path) {
+    $sections = [System.Collections.Generic.List[object]]::new()
+    $section = $null
+    foreach ($line in [System.IO.File]::ReadLines($Path)) {
+        if ($line -match '^\s*\[root\]\s*(?:#.*)?$') {
+            if ($null -ne $section) { $sections.Add($section) }
+            $section = @{ kind = 'root' }
+        } elseif ($line -match '^\s*\[\[mounts\]\]\s*(?:#.*)?$') {
+            if ($null -ne $section) { $sections.Add($section) }
+            $section = @{ kind = 'mount' }
+        } elseif ($null -ne $section -and $line -match '^\s*\[') {
+            $sections.Add($section); $section = $null
+        } elseif ($null -ne $section -and $line -match '^\s*(host_root|name|writable)\s*=\s*(.+?)\s*(?:#.*)?$') {
+            $key = $Matches[1]; $value = $Matches[2]
+            if ($section.ContainsKey($key)) { throw "Duplicate mount field $key in $Path" }
+            if ($key -eq 'writable') {
+                if ($value -notin @('true', 'false')) { throw "Invalid writable value in $Path" }
+                $section[$key] = ($value -eq 'true')
+            } else {
+                if ($value -cnotmatch '^"(?:[^"\\]|\\.)*"$') { throw "Unsupported TOML string in $Path" }
+                $section[$key] = [string]($value | ConvertFrom-Json -ErrorAction Stop)
+            }
+        }
+    }
+    if ($null -ne $section) { $sections.Add($section) }
+    $root = @($sections | Where-Object { $_.kind -eq 'root' })
+    $writable = @($sections | Where-Object { $_.kind -eq 'mount' -and $_.writable -eq $true })
+    if ($root.Count -ne 1 -or $writable.Count -ne 2 -or
+        [string]$writable[0].name -cne 'sdmmc' -or
+        [string]$writable[1].name -cne 'resident_flash' -or
+        [string]::IsNullOrWhiteSpace($root[0].host_root) -or
+        [string]::IsNullOrWhiteSpace($writable[0].host_root) -or
+        [string]::IsNullOrWhiteSpace($writable[1].host_root)) {
+        throw 'Mount configuration is not the expected three writable roots.'
+    }
+    return @([string]$writable[0].host_root,
+        [string]$writable[1].host_root, [string]$root[0].host_root)
+}
+
+function Get-InaviExecutableRsds([string]$Path) {
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+    $reader = $null
+    try {
+        $reader = [System.Reflection.PortableExecutable.PEReader]::new($stream)
+        $matches = @($reader.ReadDebugDirectory() | Where-Object {
+            $_.Type -eq [System.Reflection.PortableExecutable.DebugDirectoryEntryType]::CodeView
+        })
+        if ($matches.Count -ne 1) { throw "Expected exactly one executable CodeView record: $Path" }
+        $record = $reader.ReadCodeViewDebugDirectoryData($matches[0])
+        if ($record.Age -lt 1) { throw "Invalid executable CodeView age: $Path" }
+        return '{0}:{1}' -f $record.Guid.ToString('D').ToUpperInvariant(), $record.Age
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        $stream.Dispose()
+    }
+}
+
+function Get-InaviPdbRsds([string]$Path) {
+    # MSF 7.0 PDB stream 1 contains version, signature, age and the RSDS GUID.
+    # Parse block bounds rather than trusting the filename or an adjacent PDB.
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 56 -or
+        -not [System.Text.Encoding]::ASCII.GetString($bytes, 0, 24).StartsWith(
+            'Microsoft C/C++ MSF 7.00', [StringComparison]::Ordinal)) {
+        throw "Unsupported PDB signature: $Path"
+    }
+    [int64]$blockSize = [BitConverter]::ToUInt32($bytes, 32)
+    [int64]$directoryBytes = [BitConverter]::ToUInt32($bytes, 44)
+    [int64]$blockMap = [BitConverter]::ToUInt32($bytes, 52)
+    if ($blockSize -lt 512 -or $blockSize -gt 65536 -or
+        ($blockSize -band ($blockSize - 1)) -ne 0 -or
+        $directoryBytes -lt 12 -or $directoryBytes -gt 16MB) {
+        throw "Invalid PDB superblock: $Path"
+    }
+    [int64]$directoryBlockCount = [Math]::Ceiling($directoryBytes / $blockSize)
+    if ($directoryBlockCount * 4 -gt $blockSize -or
+        (($blockMap + 1) * $blockSize) -gt $bytes.LongLength) {
+        throw "Unsupported PDB directory block map: $Path"
+    }
+    $directory = [byte[]]::new([int]$directoryBytes)
+    for ($i = 0; $i -lt $directoryBlockCount; $i++) {
+        [int64]$block = [BitConverter]::ToUInt32($bytes, [int]($blockMap * $blockSize + 4 * $i))
+        [int64]$source = $block * $blockSize
+        [int]$count = [int][Math]::Min($blockSize, $directoryBytes - $i * $blockSize)
+        if ($source + $count -gt $bytes.LongLength) { throw "PDB directory block is out of range: $Path" }
+        [Array]::Copy($bytes, $source, $directory, $i * $blockSize, $count)
+    }
+    [int64]$streamCount = [BitConverter]::ToUInt32($directory, 0)
+    if ($streamCount -lt 2 -or $streamCount -gt 65536 -or
+        4 + 4 * $streamCount -gt $directoryBytes) {
+        throw "PDB stream table is invalid: $Path"
+    }
+    [int64]$offset = 4 + 4 * $streamCount
+    for ($streamIndex = 0; $streamIndex -le 1; $streamIndex++) {
+        [int64]$size = [BitConverter]::ToUInt32($directory, [int](4 + 4 * $streamIndex))
+        if ($size -eq 0xFFFFFFFF) { throw "PDB identity stream is absent: $Path" }
+        [int64]$pageCount = [Math]::Ceiling($size / $blockSize)
+        if ($offset + 4 * $pageCount -gt $directoryBytes) {
+            throw "PDB stream page table is out of range: $Path"
+        }
+        if ($streamIndex -eq 1) {
+            if ($size -lt 28) { throw "PDB identity stream is too short: $Path" }
+            $identity = [byte[]]::new(28)
+            for ($page = 0; $page -lt $pageCount -and $page * $blockSize -lt 28; $page++) {
+                [int64]$block = [BitConverter]::ToUInt32($directory, [int]($offset + 4 * $page))
+                [int64]$source = $block * $blockSize
+                [int]$count = [int][Math]::Min($blockSize, 28 - $page * $blockSize)
+                if ($source + $count -gt $bytes.LongLength) { throw "PDB identity page is out of range: $Path" }
+                [Array]::Copy($bytes, $source, $identity, $page * $blockSize, $count)
+            }
+            [uint32]$age = [BitConverter]::ToUInt32($identity, 8)
+            if ($age -lt 1) { throw "Invalid PDB age: $Path" }
+            $guidBytes = [byte[]]::new(16)
+            [Array]::Copy($identity, 12, $guidBytes, 0, 16)
+            return '{0}:{1}' -f ([Guid]::new($guidBytes)).ToString('D').ToUpperInvariant(), $age
+        }
+        $offset += 4 * $pageCount
+    }
+    throw "PDB identity stream was not found: $Path"
+}
+
+function Assert-InaviBackupComplete([hashtable]$Manifest, [hashtable]$BackupManifest) {
+    if ($BackupManifest.complete -isnot [bool] -or -not $BackupManifest.complete -or
+        $BackupManifest.completed -isnot [array] -or $BackupManifest.completed.Count -ne 3) {
+        throw 'The three-mount backup manifest is not complete.'
+    }
+    $expectedNames = @('SD', 'ResidentFlash', 'EmulatorRoot')
+    for ($i = 0; $i -lt 3; $i++) {
+        $row = $BackupManifest.completed[$i]
+        if ($row -isnot [hashtable] -or
+            [string]$row.name -cne $expectedNames[$i] -or
+            $row.postBackupInventoryVerified -isnot [bool] -or
+            -not $row.postBackupInventoryVerified -or
+            [string]::IsNullOrWhiteSpace([string]$row.postBackupSourceManifest) -or
+            [string]::IsNullOrWhiteSpace([string]$row.postBackupSourceManifestSha256)) {
+            throw "Incomplete post-backup inventory for $($expectedNames[$i])."
+        }
+        Test-ExpectedHash ([string]$row.postBackupSourceManifest) ([string]$row.postBackupSourceManifestSha256)
+    }
 }
 
 function Write-MountedInventory([object[]]$Backups, [string]$OutputPath) {
@@ -252,6 +386,117 @@ function Invoke-GetCapture(
     return @{ Status = $statusCode; Body = $body; ReceivedTicks = $receivedTicks; ReceivedUtc = $receivedUtc; Hash = $hash }
 }
 
+function Invoke-SummaryCapture(
+    [System.Net.Http.HttpClient]$Client,
+    [string]$Url,
+    [string]$LogPath,
+    [string]$CaptureDirectory,
+    [int]$Sequence,
+    [int]$SavedBodies,
+    [AllowNull()][object]$LastPublicationSequence
+) {
+    $startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $startedUtc = [DateTime]::UtcNow.ToString('O')
+    $statusCode = $null
+    $declaredBytes = $null
+    $bytesRead = 0
+    $body = [byte[]]@()
+    $bodyComplete = $false
+    $sampleOutcome = 'transport-error'
+    $errorText = $null
+    $publication = $null
+    $request = $null; $response = $null; $stream = $null
+    $deadline = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(3))
+    try {
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $Url)
+        $response = $Client.SendAsync(
+            $request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $deadline.Token
+        ).GetAwaiter().GetResult()
+        $statusCode = [int]$response.StatusCode
+        if ($null -ne $response.Content) {
+            $declaredBytes = $response.Content.Headers.ContentLength
+            if ($null -ne $declaredBytes -and $declaredBytes -gt 65536) {
+                $sampleOutcome = 'oversize'
+                $errorText = "Declared summary body exceeds 65536 bytes: $declaredBytes"
+            } else {
+                $stream = $response.Content.ReadAsStreamAsync($deadline.Token).GetAwaiter().GetResult()
+                $bounded = Read-InaviBoundedSummaryStream -Stream $stream -MaxBytes 65536 -CancellationToken $deadline.Token
+                $bytesRead = $bounded.bytesRead
+                if ($bounded.oversize) {
+                    $sampleOutcome = 'oversize'
+                    $errorText = 'Summary body exceeds 65536 bytes.'
+                } else {
+                    $body = $bounded.bytes
+                    $bodyComplete = $true
+                }
+            }
+        } else {
+            $bodyComplete = $true
+        }
+        if ($bodyComplete) {
+            if ($statusCode -ne 200) {
+                $sampleOutcome = 'http-error'
+                $errorText = "Summary GET returned HTTP $statusCode."
+            } else {
+                try {
+                    $publication = ConvertFrom-InaviSummaryBody -Bytes $body
+                    $sampleOutcome = 'ok'
+                } catch {
+                    $sampleOutcome = 'parse-error'
+                    $errorText = $_.Exception.Message
+                }
+            }
+        }
+    } catch {
+        $errorText = $_.Exception.Message
+        $sampleOutcome = 'transport-error'
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $response) { $response.Dispose() }
+        if ($null -ne $request) { $request.Dispose() }
+        $deadline.Dispose()
+    }
+    $receivedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $receivedUtc = [DateTime]::UtcNow.ToString('O')
+    $hash = if ($bodyComplete) { Get-ByteSha256 $body } else { $null }
+    $saved = $null
+    if ($bodyComplete -and $body.Length -gt 0 -and $SavedBodies -lt 256) {
+        $extension = if ($sampleOutcome -eq 'ok') { 'txt' } else { 'bin' }
+        $saved = Join-Path $CaptureDirectory ('summary-{0:D4}.{1}' -f $Sequence, $extension)
+        [System.IO.File]::WriteAllBytes($saved, $body)
+    }
+    $freshness = 'unknown'
+    if ($null -ne $publication) {
+        $freshness = if ($null -eq $LastPublicationSequence) {
+            'initial'
+        } elseif ($publication.publicationSequence -eq [UInt64]$LastPublicationSequence) {
+            'repeated'
+        } elseif ($publication.publicationSequence -gt [UInt64]$LastPublicationSequence) {
+            'advanced'
+        } else {
+            'regressed'
+        }
+    }
+    Add-JsonLine $LogPath @{
+        name = 'summary'; url = $Url; sequence = $Sequence
+        startedUtc = $startedUtc; startedTicks = $startedTicks
+        receivedUtc = $receivedUtc; receivedTicks = $receivedTicks
+        status = $statusCode; declaredBytes = $declaredBytes
+        bytesRead = $bytesRead; bytes = if ($bodyComplete) { $body.Length } else { $null }
+        bodyComplete = $bodyComplete; sha256 = $hash; savedPath = $saved
+        outcome = $sampleOutcome; error = $errorText; freshness = $freshness
+        publicationSequence = if ($null -ne $publication) { $publication.publicationSequence } else { $null }
+        publicationHostMonotonicNs = if ($null -ne $publication) { $publication.publicationHostMonotonicNs } else { $null }
+        publicationUtcUnixMs = if ($null -ne $publication) { $publication.publicationUtcUnixMs } else { $null }
+        liveGuestStablePageBudgetUsedBytes = if ($null -ne $publication) { $publication.liveGuestStablePageBudgetUsedBytes } else { $null }
+    }
+    return [pscustomobject]@{
+        outcome = $sampleOutcome
+        savedBody = ($null -ne $saved)
+        publicationSequence = if ($null -ne $publication) { $publication.publicationSequence } else { $null }
+    }
+}
+
 function Invoke-Observer([string]$Directory) {
     Assert-WorkerDirectory $Directory
     $capture = Join-Path $Directory 'observer-captures'
@@ -267,6 +512,9 @@ function Invoke-Observer([string]$Directory) {
     $nextSlot = 0
     $frameHash = $null
     $savedFrames = 0
+    $summarySamples = 0
+    $summaryBodiesSaved = 0
+    $lastSummarySequence = $null
     $stoppedEarly = $false
     try {
         while (([System.Diagnostics.Stopwatch]::GetTimestamp() - $startedTicks) -lt (420L * $frequency)) {
@@ -279,6 +527,12 @@ function Invoke-Observer([string]$Directory) {
             }
             $nextSlot = $slot + 1
             $status = Invoke-GetCapture $client "$base/api/v1/status" 'status' $log $capture $slot $false
+            if ($summarySamples -lt 256) {
+                $summary = Invoke-SummaryCapture $client "$base/api/v1/debug/summary.txt" $log $capture $slot $summaryBodiesSaved $lastSummarySequence
+                $summarySamples++
+                if ($summary.savedBody) { $summaryBodiesSaved++ }
+                if ($summary.outcome -eq 'ok') { $lastSummarySequence = $summary.publicationSequence }
+            }
             if ($status.Status -eq 200 -and (Test-Path -LiteralPath (Join-Path $Directory 'process.json')) -and -not (Test-Path -LiteralPath $inputReadyPath)) {
                 try {
                     $parsed = [System.Text.Encoding]::UTF8.GetString($status.Body) | ConvertFrom-Json
@@ -307,7 +561,7 @@ function Invoke-Observer([string]$Directory) {
             [void](Invoke-GetCapture $client "$base/api/v1/debug/files-full.txt" 'files-full' $log $capture $slot $true)
             [void](Invoke-GetCapture $client "$base/api/v1/debug/remote-input.txt" 'remote-input' $log $capture $slot $true)
             if ($slot % 5 -eq 0) {
-                foreach ($name in @('summary', 'windows', 'messages', 'active')) {
+                foreach ($name in @('windows', 'messages', 'active')) {
                     [void](Invoke-GetCapture $client "$base/api/v1/debug/$name.txt" $name $log $capture $slot $true)
                 }
             }
@@ -319,6 +573,7 @@ function Invoke-Observer([string]$Directory) {
             completedHorizon = (([System.Diagnostics.Stopwatch]::GetTimestamp() - $startedTicks) -ge (420L * $frequency))
             stoppedOnEarlyAppEnd = $stoppedEarly
             changedFramesSaved = $savedFrames
+            summarySamples = $summarySamples; summaryBodiesSaved = $summaryBodiesSaved
         }
     }
 }

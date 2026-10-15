@@ -2,8 +2,9 @@
 <#
 Offline acceptance controls for a future bounded-run preflight. This file never
 dot-sources the old runner or backup script, creates fixture files, enumerates
-mounts, launches a process, or writes a use ledger. All paths are synthetic
-strings under this repository's evidence directory.
+mounts, launches a process, or writes a use ledger. All evidence artifact paths
+are synthetic strings under this repository's evidence directory. The source
+root string names the requested D: checkout; no source or mount path is opened.
 
 Proposed pure contract in scripts/inavi_run_preflight_core.ps1:
   Test-InaviRunManifestCore -Manifest <hashtable-or-null> -Observed <hashtable>
@@ -34,15 +35,24 @@ function New-SyntheticHash([string]$Label) {
 
 function New-Baseline {
     $root = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only'
+    $sourceRoot = 'D:\GitHub\Wince_emulation_v3'
+    $sourceFiles = @{}
+    foreach ($relative in @(
+        'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
+        'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
+        'tests/basic_subsystems.rs', 'src/ce/memory.rs',
+        'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
+        'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
+        'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
+        'scripts/inavi_summary_observer_core.ps1',
+        'scripts/test_inavi_summary_observer.ps1'
+    )) { $sourceFiles[$relative] = New-SyntheticHash "source $relative" }
     $hash = @{
         sd = (New-SyntheticHash 'SD archive')
         resident = (New-SyntheticHash 'ResidentFlash archive')
         emulator = (New-SyntheticHash 'EmulatorRoot archive')
         patch = (New-SyntheticHash 'fresh source patch')
-        kernel = (New-SyntheticHash 'kernel source')
-        remote = (New-SyntheticHash 'remote source')
-        gwe = (New-SyntheticHash 'GWE source')
-        basic = (New-SyntheticHash 'basic subsystems source')
+        seal = (New-SyntheticHash 'external source seal file')
         build = (New-SyntheticHash 'build receipt')
         exe = (New-SyntheticHash 'fresh executable')
         pdb = (New-SyntheticHash 'fresh PDB')
@@ -54,7 +64,8 @@ function New-Baseline {
     }
     $paths = @{
         exe = "$root\fresh.exe"; pdb = "$root\fresh.pdb"
-        build = "$root\build-receipt.json"; backups = "$root\backup-manifest.json"
+        build = "$root\build-receipt.json"; seal = "$root\source-seal.json"
+        backups = "$root\backup-manifest.json"
         registry = "$root\registry.reg"; devices = "$root\serial_devices.json"
         mounts = "$root\mounts.toml"; app = "$root\app.exe"
     }
@@ -67,21 +78,31 @@ function New-Baseline {
     $seal = @{
         head = '9C302DB35583669FAB435449A5F4515B712583D6'
         parentHead = '0e06e2c5c662ad224c9b472e7798f4604240a6b6'
-        patchSha256 = $hash.patch; kernelSha256 = $hash.kernel
-        remoteSha256 = $hash.remote; gweSha256 = $hash.gwe
-        basicSubsystemsSha256 = $hash.basic
+        sourceRoot = $sourceRoot; sourceFiles = $sourceFiles
+        patchSha256 = $hash.patch
+        kernelSha256 = $sourceFiles['src/ce/kernel.rs']
+        remoteSha256 = $sourceFiles['src/ce/remote.rs']
+        gweSha256 = $sourceFiles['src/ce/gwe.rs']
+        basicSubsystemsSha256 = $sourceFiles['tests/basic_subsystems.rs']
     }
     $receipt = @{
         path = $paths.build; sha256 = $hash.build; sourceHead = $seal.head
         sourcePatchSha256 = $seal.patchSha256; wB1cParentHead = $seal.parentHead
+        sourceSealSha256 = $hash.seal
         focusedPassed = $true; releasePassed = $true
         noFeaturePassed = $true; alternateFeaturesPassed = $true
         executableSha256 = $hash.exe; pdbSha256 = $hash.pdb
     }
+    # The receipt file cannot contain its own digest. `sha256` is only the
+    # external manifest/observation digest; parsed content omits it.
+    $parsedReceipt = Copy-Fixture $receipt
+    $parsedReceipt.Remove('sha256')
     $manifest = @{
         schemaVersion = 1; runTag = 'offline-fixture-fresh'
         approvalReference = 'call_offline_fresh_approval'
-        sourceSeal = $seal; buildReceipt = $receipt
+        sourceSeal = $seal
+        sourceSealFile = @{ path = $paths.seal; sha256 = $hash.seal }
+        buildReceipt = $receipt
         executable = @{ path = $paths.exe; sha256 = $hash.exe; rsds = 'E072B53A-6F13-4C91-B379-2C5E166A419B:1' }
         pdb = @{ path = $paths.pdb; sha256 = $hash.pdb; rsds = 'E072B53A-6F13-4C91-B379-2C5E166A419B:1' }
         config = @{
@@ -97,30 +118,52 @@ function New-Baseline {
     $files = @{}
     foreach ($item in @(
         @($paths.exe, $hash.exe), @($paths.pdb, $hash.pdb),
+        @($paths.seal, $hash.seal),
         @($paths.build, $hash.build), @($paths.backups, $hash.backupManifest),
         @($paths.registry, $hash.registry), @($paths.devices, $hash.devices),
         @($paths.mounts, $hash.mounts), @($paths.app, $hash.app)
     )) { $files[$item[0]] = $item[1] }
     foreach ($item in $backups) { $files[$item.archivePath] = $item.archiveSha256 }
+    $completed = Copy-Fixture $backups
+    foreach ($row in $completed) {
+        $row.postBackupInventoryVerified = $true
+        $row.postBackupSourceManifest = "$root\$($row.name)-post-backup-source-manifest.json"
+        $row.postBackupSourceManifestSha256 = New-SyntheticHash "post-backup $($row.name) manifest"
+    }
     $observed = @{
         currentSourceSeal = Copy-Fixture $seal
-        parsedBuildReceipt = Copy-Fixture $receipt
+        parsedSourceSeal = Copy-Fixture $seal
+        currentSourceRoot = $sourceRoot
+        sourceFileSha256 = Copy-Fixture $sourceFiles
+        currentManifestSha256 = New-SyntheticHash 'current external run manifest'
+        parsedBuildReceipt = $parsedReceipt
         fileSha256 = $files
         executableRsds = $manifest.executable.rsds
         pdbRsds = $manifest.pdb.rsds
         writableMountRoots = $roots
-        verifiedBackupManifest = @{ sha256 = $hash.backupManifest; completed = Copy-Fixture $backups }
+        verifiedBackupManifest = @{ sha256 = $hash.backupManifest; complete = $true; completed = $completed }
         existingEvidenceTags = @()
     }
     return @{ manifest = $manifest; observed = $observed; localLedger = @(); trackedLedger = @() }
 }
 
 function New-UseEntry([string]$Approval, [string]$State, [string[]]$ZipHashes) {
-    return @{
+    $allZipHashes = @($ZipHashes)
+    while ($allZipHashes.Count -lt 3) {
+        $allZipHashes += New-SyntheticHash "prior ZIP $Approval $State $($allZipHashes.Count)"
+    }
+    $entry = @{
         eventId = "offline-$State-$Approval"
-        approvalReference = $Approval; zipSha256 = @($ZipHashes)
+        attemptId = "offline-attempt-$Approval"
+        manifestSha256 = New-SyntheticHash "prior manifest $Approval"
+        approvalReference = $Approval; zipSha256 = $allZipHashes
         state = $State; utc = '2026-10-15T00:00:00.0000000Z'
     }
+    if ($State -eq 'spent') {
+        $entry.pid = [long]4242
+        $entry.processStartUtc = '2026-10-15T00:00:01.0000000Z'
+    }
+    return $entry
 }
 
 $base = New-Baseline
@@ -236,6 +279,10 @@ $sample.observed.fileSha256[$sample.manifest.pdb.path] = New-SyntheticHash 'diff
 $cases.Add(@{ name = 'pdb_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
 
 $sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.buildReceipt.path] = New-SyntheticHash 'different build receipt bytes'
+$cases.Add(@{ name = 'external_build_receipt_digest_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
 $sample.manifest.buildReceipt.releasePassed = $false
 $sample.observed.parsedBuildReceipt.releasePassed = $false
 $cases.Add(@{ name = 'failed_release_build_gate'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
@@ -247,6 +294,14 @@ $cases.Add(@{ name = 'loosened_app_cap'; data = $sample; accepted = $false; code
 $sample = Copy-Fixture $base
 $sample.observed.verifiedBackupManifest.completed[2].archivePath = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only\other.zip'
 $cases.Add(@{ name = 'backup_manifest_row_mismatch'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.verifiedBackupManifest.complete = $false
+$cases.Add(@{ name = 'backup_manifest_not_complete'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.verifiedBackupManifest.completed[1].postBackupInventoryVerified = $false
+$cases.Add(@{ name = 'backup_post_inventory_not_verified'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
 
 $sample = Copy-Fixture $base
 $entry = New-UseEntry 'call_unrelated_offline_approval' 'unknown' @((New-SyntheticHash 'unrelated archive'))
@@ -265,7 +320,81 @@ $sample.observed.verifiedBackupManifest.completed[2].archivePath = $sample.manif
 $sample.observed.verifiedBackupManifest.completed[2].archiveSha256 = $sample.manifest.backups[2].archiveSha256
 $cases.Add(@{ name = 'duplicate_backup_archive'; data = $sample; accepted = $false; code = 'BACKUP_MANIFEST_MISMATCH' })
 
-if ($cases.Count -ne 27) { throw "Unexpected fixture count: $($cases.Count)" }
+$sample = Copy-Fixture $base
+$sample.manifest.sourceSeal.sourceFiles.Remove('src/main.rs')
+$cases.Add(@{ name = 'missing_main_source_hash'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.sourceFileSha256['src/main.rs'] = New-SyntheticHash 'changed telemetry main source'
+$cases.Add(@{ name = 'changed_main_source_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.sourceFileSha256['scripts/inavi_bounded_e22.ps1'] = New-SyntheticHash 'changed effectful runner'
+$cases.Add(@{ name = 'changed_effectful_runner_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.sourceSealFile.path] = New-SyntheticHash 'different sealed source file'
+$cases.Add(@{ name = 'external_source_seal_digest_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedSourceSeal.head = 'A764019D25F3C2D64BFD926103FEAC8B50890142'
+$cases.Add(@{ name = 'parsed_source_seal_content_mismatch'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated archive'))
+$entry.Remove('attemptId')
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'ledger_missing_attempt_id'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated archive'))
+$entry.Remove('manifestSha256')
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'ledger_missing_manifest_digest'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated archive'))
+$entry.zipSha256 = @($entry.zipSha256[0], $entry.zipSha256[1])
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'ledger_not_three_zip_hashes'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'spent' @((New-SyntheticHash 'unrelated archive'))
+$entry.Remove('pid')
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'spent_without_pid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'spent' @((New-SyntheticHash 'unrelated archive'))
+$entry.Remove('processStartUtc')
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'spent_without_start_identity'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_other_offline_approval' 'reserved' @($sample.manifest.backups[0].archiveSha256)
+$sample.localLedger = @($entry)
+$sample.trackedLedger = @(Copy-Fixture $entry)
+$cases.Add(@{ name = 'zip_reused_after_reservation'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
+
+$sample = Copy-Fixture $base
+$entry = New-UseEntry 'call_unrelated_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated archive'))
+$sample.localLedger = @($entry, (Copy-Fixture $entry))
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'duplicate_ledger_event_id'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$oldPath = $sample.manifest.backupManifest.path
+$sample.manifest.backupManifest.path = 'D:\GitHub\Wince_emulation_v3\evidence\pre-live-mount-backup-20261014T050927Z\manifest.json'
+$sample.observed.fileSha256.Remove($oldPath)
+$sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
+$cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
+
+if ($cases.Count -ne 43) { throw "Unexpected fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress
