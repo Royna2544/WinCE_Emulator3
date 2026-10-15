@@ -80537,6 +80537,159 @@ mod unicorn_tests {
         Ok(())
     }
 
+    fn decoded_child_pseudo_exit_cpu(
+        name: &str,
+    ) -> crate::Result<(
+        crate::ce::kernel::CeKernel,
+        super::UnicornMips,
+        crate::ce::kernel::PendingProcessLaunch,
+        u32,
+        u32,
+    )> {
+        let mut kernel = phase1_kernel(name)?;
+        let launch = kernel.queue_process_launch(Some(format!("\\Test\\{name}")), None);
+        let birth = launch.process_birth.expect("child process birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
+        let (worker_handle, worker_tid) = kernel.create_guest_thread(0x0040_2000, 0, false);
+        assert_eq!(
+            kernel.handles.thread_creation_owner_by_id(worker_tid),
+            Some(birth)
+        );
+        let heap_ptr = kernel
+            .memory
+            .heap_alloc(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, 16)
+            .expect("child-owned heap allocation");
+
+        let mut bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x2405_0003_u32, // addiu a1,zero,3: guest exit code
+            0x2408_f3fa,     // addiu t0,zero,-3078: encoded CE syscall target
+            0x0100_f809,     // jalr t0
+            0x2404_0042,     // addiu a0,zero,66: current-process pseudo handle
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        let image = crate::pe::PeImage::parse_bytes(name, &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.owned_process_launch = Some(launch.clone());
+        cpu.set_initial_thread_id(launch.thread_id);
+        let entry = cpu.entry.expect("fixture entry");
+        let mut regs = super::MipsGuestContext::zero();
+        regs.regs[29] = cpu.stack_top.expect("fixture stack") - 0x100;
+        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+        stamp_synthetic_saved_context(&mut cpu, &kernel);
+        cpu.running_guest_thread = Some((launch.thread_id, launch.thread_handle));
+        Ok((kernel, cpu, launch, worker_handle, heap_ptr))
+    }
+
+    #[test]
+    fn decoded_pseudo_exit_retires_exact_child_worker_heap() -> crate::Result<()> {
+        let (mut kernel, mut cpu, launch, worker_handle, heap_ptr) =
+            decoded_child_pseudo_exit_cpu("decoded-child-exit.exe")?;
+        let birth = launch.process_birth.expect("child birth");
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        attempt.result?;
+        assert_eq!(
+            attempt.report.final_outcome(),
+            super::NativeSliceOutcome::GuestProcessExit
+        );
+        assert!(cpu.active_process_execution_completed());
+        assert!(!kernel.handles.process_execution_live_by_birth(birth));
+        assert!(!kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert!(!kernel.handles.thread_execution_live_by_id(
+            kernel.handles.thread_id(worker_handle).expect("worker TID")
+        ));
+        assert_eq!(kernel.guest_thread_exit_code(worker_handle), Some(0));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(3));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, heap_ptr),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decoded_pseudo_exit_refuses_unrestorable_backing_before_exit_effects() -> crate::Result<()> {
+        let (mut kernel, mut cpu, launch, worker_handle, heap_ptr) =
+            decoded_child_pseudo_exit_cpu("decoded-child-backing.exe")?;
+        let birth = launch.process_birth.expect("child birth");
+        let caller = launch.primary_thread_birth.expect("primary birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                caller,
+                "DECODED_PSEUDO_BACKING",
+                "saved image",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("birth-owned window");
+        let source = VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Rgb565)?;
+        assert!(kernel.capture_window_backing_store(hwnd, &source));
+        let mut incompatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Bgra8888)?;
+        incompatible.pixels_mut().fill(0x5a);
+        let pixels_before = incompatible.pixels().to_vec();
+
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut incompatible,
+            super::UnicornRunLimits {
+                instruction_limit: 100,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        assert!(matches!(
+            attempt.result,
+            Err(crate::Error::HostExitRecoveryRequired {
+                process_id,
+                hwnd: Some(rejected),
+                ..
+            }) if process_id == launch.process_id && rejected == hwnd
+        ));
+        assert!(!cpu.active_process_execution_completed());
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert!(kernel.handles.thread_execution_live_by_id(launch.thread_id));
+        assert!(kernel.handles.thread_execution_live_by_id(
+            kernel.handles.thread_id(worker_handle).expect("worker TID")
+        ));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert_eq!(
+            kernel
+                .memory
+                .heap_size(birth, crate::ce::memory::PROCESS_HEAP_HANDLE, 0, heap_ptr),
+            Some(16)
+        );
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(incompatible.pixels(), pixels_before.as_slice());
+        Ok(())
+    }
+
     #[test]
     fn branch_likely_trampoline_annuls_delay_slot_when_condition_is_false() {
         let pc = 0x6002_4220;
