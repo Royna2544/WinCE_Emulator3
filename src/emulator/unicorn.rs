@@ -78866,6 +78866,43 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn decoded_pseudo_terminate_without_live_caller_does_not_exit_selected_process() {
+        let config = crate::config::RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let process_handle = kernel.handles.create_process(67);
+        let selected_birth = kernel
+            .handles
+            .process_birth_key_for_handle(process_handle)
+            .expect("selected process birth");
+        assert!(kernel.handles.live_thread_births_for_owner(selected_birth).is_empty());
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 67,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let state_before = kernel.current_process_state();
+        let exit = super::EncodedKernelExit {
+            target: 0xffff_f3fa,
+            api_set: 2,
+            method: 2,
+            process: crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            exit_code: 0x77,
+            caller: 0x0048_fa90,
+        };
+
+        assert!(!super::UnicornMips::terminate_decoded_kernel_process(
+            &mut kernel,
+            &exit
+        ));
+        assert_eq!(kernel.current_process_state(), state_before);
+        assert_eq!(
+            kernel.process_exit_code(process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(process_handle, 1), Some(false));
+    }
+
+    #[test]
     fn decoded_native_process_exit_finish_failure_does_not_terminate_process() -> crate::Result<()>
     {
         let mut bytes = tiny_mips_spinner_pe();

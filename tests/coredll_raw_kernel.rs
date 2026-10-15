@@ -8725,6 +8725,61 @@ fn raw_pseudo_terminate_stale_caller_preserves_selected_process() -> Result<()> 
 }
 
 #[test]
+fn raw_pseudo_terminate_missing_caller_birth_preserves_selected_process() -> Result<()> {
+    const SENTINEL_ERROR: u32 = 0x6bad;
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let launch_b = kernel.queue_process_launch(None, None);
+    kernel.set_current_process_id(launch_b.process_id);
+    let hwnd_b = kernel.create_window_ex_w(
+        launch_b.thread_id,
+        "NO_CALLER_B",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+    );
+    let state_before = kernel.current_process_state();
+    let process_trace_before = kernel.recent_process_ops().to_vec();
+    let message_trace_before = kernel.recent_message_ops().to_vec();
+    kernel
+        .threads
+        .set_last_error(launch_b.thread_id, SENTINEL_ERROR);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            CoredllRawContext {
+                thread_id: launch_b.thread_id,
+                caller_birth: None,
+                ..Default::default()
+            },
+            ORD_TERMINATE_PROCESS,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x77],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(launch_b.thread_id), SENTINEL_ERROR);
+    assert!(kernel.gwe.is_window(hwnd_b));
+    assert_eq!(kernel.current_process_state(), state_before);
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch_b.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(kernel.is_wait_ready(launch_b.process_handle, 1), Some(false));
+    assert_eq!(kernel.recent_process_ops(), process_trace_before.as_slice());
+    assert_eq!(kernel.recent_message_ops(), message_trace_before.as_slice());
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_wait_for_multiple_objects_preserves_ce_errors_and_wait_any_order() -> Result<()> {
     fn raw_wait(
         table: &CoredllExportTable,
