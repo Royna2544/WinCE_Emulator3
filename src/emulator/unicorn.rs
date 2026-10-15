@@ -19034,7 +19034,7 @@ fn ensure_private_slab_file_views_disjoint(kernel: &CeKernel, owner_pid: u32) ->
 }
 
 #[cfg(feature = "unicorn")]
-fn ensure_sealed_image_file_views_disjoint(
+fn ensure_image_file_views_disjoint(
     kernel: &CeKernel,
     owner_pid: u32,
     guard: &SealedHostWriteGuard,
@@ -19046,6 +19046,15 @@ fn ensure_sealed_image_file_views_disjoint(
         for view in &mapping.views {
             if view.process_birth.is_some() {
                 continue;
+            }
+            if kernel
+                .memory
+                .overlaps_writable_image_guest_range(view.base, view.size)
+            {
+                return Err(Error::Backend(format!(
+                    "process {owner_pid} file view PID {} at 0x{:08x}+0x{:x} overlaps writable image run",
+                    view.process_id, view.base, view.size
+                )));
             }
             guard
                 .check_write(u64::from(view.base), view.size as usize)
@@ -19081,7 +19090,7 @@ fn sync_file_mapping_views_from_unicorn_guarded<D>(
     owner_pid: u32,
     guard: &SealedHostWriteGuard,
 ) -> Result<()> {
-    ensure_sealed_image_file_views_disjoint(kernel, owner_pid, guard)?;
+    ensure_image_file_views_disjoint(kernel, owner_pid, guard)?;
     ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     // Only the owning process's view pages carry authoritative bytes: other
     // processes hold stale snapshot copies of the same guest addresses, and
@@ -19230,7 +19239,7 @@ fn sync_file_mapping_views_to_unicorn_guarded<D>(
     owner_pid: u32,
     guard: &SealedHostWriteGuard,
 ) -> Result<()> {
-    ensure_sealed_image_file_views_disjoint(kernel, owner_pid, guard)?;
+    ensure_image_file_views_disjoint(kernel, owner_pid, guard)?;
     ensure_private_slab_file_views_disjoint(kernel, owner_pid)?;
     ensure_unambiguous_file_view_lazy_seeds(kernel)?;
     ensure_unique_file_views_for_owner(kernel, owner_pid)?;
@@ -77559,6 +77568,102 @@ mod unicorn_tests {
         drop(uc); // Native owner must die before its raw-pointer pin.
         drop(mapped);
         drop(pins);
+        Ok(())
+    }
+
+    #[test]
+    fn native_file_view_rejects_writable_image_overlap_before_both_sync_directions()
+    -> crate::Result<()> {
+        const BASE: u32 = 0x6300_0000;
+        let mut kernel = phase1_kernel("writable-image-view-overlap.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let identity = crate::ce::memory::WritableImageRunIdentity::new(owner, BASE, 1, BASE)
+            .expect("aligned image run");
+        let pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(
+                kernel
+                    .memory
+                    .prepare_writable_image_run(identity, &vec![0x5a; 0x1000])
+                    .expect("prepare image run"),
+            )
+            .expect("publish image run");
+        let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+        let mapping = kernel.handles.file_mapping_mut(handle)?;
+        mapping.legacy_data_mut().unwrap()[..4].copy_from_slice(&[5, 6, 7, 8]);
+        mapping.views.push(crate::ce::object::FileMappingView {
+            base: BASE - 2,
+            size: 4,
+            offset: 0,
+            process_id: owner.process_id(),
+            process_birth: None,
+        });
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(u64::from(BASE - 0x1000), 0x3000, Prot::ALL)
+            .unwrap();
+        uc.mem_write(u64::from(BASE - 2), &[9, 10, 11, 12]).unwrap();
+
+        // Both a same-PID view and a foreign-PID view are global VA hazards:
+        // outgoing sync refreshes every legacy lazy seed, not just this CPU.
+        for view_pid in [owner.process_id(), owner.process_id().wrapping_add(1)] {
+            kernel.handles.file_mapping_mut(handle)?.views[0].process_id = view_pid;
+            let to_err =
+                super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, owner.process_id())
+                    .expect_err("incoming overlap must fail before native mutation");
+            assert!(format!("{to_err}").contains("overlaps writable image run"));
+            let from_err = super::sync_file_mapping_views_from_unicorn(
+                &mut uc,
+                &mut kernel,
+                owner.process_id(),
+            )
+            .expect_err("outgoing overlap must fail before file mutation");
+            assert!(format!("{from_err}").contains("overlaps writable image run"));
+            assert_eq!(
+                uc.mem_read_as_vec(u64::from(BASE - 2), 4).unwrap(),
+                vec![9, 10, 11, 12]
+            );
+            assert_eq!(
+                &kernel.handles.file_mapping(handle)?.legacy_data().unwrap()[..4],
+                &[5, 6, 7, 8]
+            );
+            let mut canonical = [0; 4];
+            pin.read_bytes(0, &mut canonical)
+                .expect("canonical image bytes");
+            assert_eq!(canonical, [0x5a; 4]);
+        }
+
+        // Removing the VM directory entry does not release a pinned native
+        // backing; it remains a conflicting range until checked close.
+        assert_eq!(
+            kernel.memory.retire_writable_image_module(owner, BASE, 1),
+            Some(1)
+        );
+        let retired_err =
+            super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, owner.process_id())
+                .expect_err("retired pinned overlap must remain fenced");
+        assert!(format!("{retired_err}").contains("overlaps writable image run"));
+
+        // Exact end adjacency is not overlap. The ordinary legacy file-view
+        // copy/readback path must still work outside the image range.
+        let view = &mut kernel.handles.file_mapping_mut(handle)?.views[0];
+        view.base = BASE + 0x1000;
+        view.process_id = owner.process_id();
+        super::sync_file_mapping_views_to_unicorn(&mut uc, &kernel, owner.process_id())?;
+        assert_eq!(
+            uc.mem_read_as_vec(u64::from(BASE + 0x1000), 4).unwrap(),
+            vec![5, 6, 7, 8]
+        );
+        uc.mem_write(u64::from(BASE + 0x1000), &[1, 2, 3, 4])
+            .unwrap();
+        super::sync_file_mapping_views_from_unicorn(&mut uc, &mut kernel, owner.process_id())?;
+        assert_eq!(
+            &kernel.handles.file_mapping(handle)?.legacy_data().unwrap()[..4],
+            &[1, 2, 3, 4]
+        );
+        let mut canonical = [0; 4];
+        pin.read_bytes(0, &mut canonical)
+            .expect("retired pinned image bytes");
+        assert_eq!(canonical, [0x5a; 4]);
         Ok(())
     }
 
