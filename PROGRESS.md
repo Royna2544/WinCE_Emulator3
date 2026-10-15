@@ -1,6 +1,6 @@
 # Progress
 
-Refreshed on 2026-10-15 (client KST date). This file records confirmed facts only.
+Refreshed on 2026-10-16 (client KST date). This file records confirmed facts only.
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
@@ -40,7 +40,7 @@ detailed per-section text before this condense is at
   - The two-Sleeps-on-one-thread red was withdrawn: in CE6 a positive Sleep
     blocks its caller and dispatches no WNDPROC.
 
-## 2026-10-15 Stage 3 source gates
+## 2026-10-16 and 2026-10-15 Stage 3 source gates
 
 Each gate is bounded; none is full Stage 3 or live-app acceptance. Newest
 first. Totals are passed/failed/ignored for release
@@ -48,6 +48,22 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded native COREDLL pseudo self-exit source/test gate
+  ([receipt](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)):
+  the verified current-process pseudo-handle import stops MIPS before the next
+  guest instruction without mutating Kernel state in the hook. After native
+  owner closure, exact caller and child-launch or boot witnesses gate D-011
+  framebuffer preflight, canonical Task/VM retirement, wake publication and
+  CPU sealing. The root control retires its primary, worker and heap metadata;
+  a prior requested exit code takes precedence. Incompatible saved pixels or
+  unpreflighted modal backing refuse completion with typed recovery, and the
+  stopped owner cannot bypass that hold through another native attempt. Final
+  18-block suites passed release **2,096/0/9 ignored** and no-default
+  **1,510/0/3 ignored**; Unicorn-only and desktop-without-trace release
+  checks, format and diff checks passed. Raw/decoded pseudo exits remain
+  synchronous compatibility paths; modal restoration, post-preflight
+  whole-exit atomicity and live iNavi/CE6 acceptance are open. No live run or
+  writable-mount action was made.
 - Bounded D-011 stopped host-exit framebuffer preflight/recovery source/test
   gate ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
   an exact-birth exit now validates every saved window backing against the
@@ -65,9 +81,10 @@ result. The per-slice text before this condense is at
   checkpoint. Final 18-block suites passed release **2,094/0/9 ignored** and
   no-default **1,510/0/3 ignored**; alternate feature, format and diff checks
   passed.
-  This does not prove
-  canonical Task/VM retirement after a root pseudo signal or atomicity of
-  every later exit effect. No live iNavi run was made.
+  At this earlier D-011 seal, canonical Task/VM retirement after a root pseudo
+  signal and atomicity of later exit effects were not proven; the later native
+  gate above bounds one import path, not every pseudo route or later failure.
+  No live iNavi run was made.
 - Bounded guest pseudo-exit caller-birth source/test gate
   ([receipt](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)):
   native COREDLL and decoded self-exit now require the captured live caller

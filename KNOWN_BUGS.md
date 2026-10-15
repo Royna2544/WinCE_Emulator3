@@ -1,6 +1,6 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
+Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
 
 ## Open Issues
 
@@ -106,12 +106,14 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     typed authority recovery. The monitor blocks new checkpoints after
     refusal; only an earlier checkpoint restore clears its hold. Release
     **2,094/0/9 ignored** and no-default **1,510/0/3 ignored** passed.
-    Full host teardown remains open: the current bounded native-import pseudo
-    self-exit candidate stops and retires its exact child or boot Task/VM only
-    after native owner closure and framebuffer preflight; its final broad
-    source gate is pending. Raw/decoded pseudo exits remain synchronous
-    compatibility paths, and modal backing is refused rather than restored
-    under the new native path. Failures after preflight are not proven
+    Full host teardown remains open: the bounded
+    [native-import pseudo self-exit gate](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
+    source-tested exact child or boot CPU stop before the next guest
+    instruction and Task/VM retirement after native owner closure and
+    framebuffer preflight. Raw/decoded pseudo
+    exits remain synchronous compatibility paths, and unpreflighted modal
+    backing is refused rather than restored under the new native path.
+    Failures after preflight are not proven
     whole-exit atomic. CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin
     device broadcasts are not established. No live-app or CE6 parity follows.
