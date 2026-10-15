@@ -931,6 +931,9 @@ fn resume_import_has_live_birth(kernel: &CeKernel, resume: &ResumeImportAfterWnd
 fn message_read_sent_source_for_ordinal(ordinal: Option<u32>) -> Option<&'static str> {
     match ordinal {
         Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W) => Some("GetMessageW/SentMessage"),
+        Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_WNO_WAIT) => {
+            Some("GetMessageWNoWait/SentMessage")
+        }
         Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W) => Some("PeekMessageW/SentMessage"),
         _ => None,
     }
@@ -938,7 +941,12 @@ fn message_read_sent_source_for_ordinal(ordinal: Option<u32>) -> Option<&'static
 
 #[cfg(feature = "unicorn")]
 fn is_message_read_sent_source(source: &str) -> bool {
-    matches!(source, "GetMessageW/SentMessage" | "PeekMessageW/SentMessage")
+    matches!(
+        source,
+        "GetMessageW/SentMessage"
+            | "GetMessageWNoWait/SentMessage"
+            | "PeekMessageW/SentMessage"
+    )
 }
 
 #[cfg(feature = "unicorn")]
@@ -2393,7 +2401,10 @@ impl UnicornMips {
         }) else {
             return false;
         };
-        let pending_source = self.pending_wndproc_returns.last().map(|callout| callout.source);
+        let pending_source = self
+            .pending_wndproc_returns
+            .last()
+            .map(|callout| callout.source);
         let matches_pending_source = |ordinal| {
             message_read_sent_source_for_ordinal(ordinal)
                 .is_some_and(|source| Some(source) == pending_source)
@@ -3175,7 +3186,9 @@ impl UnicornMips {
         if self.running_guest_thread.is_some()
             || self.saved_context.is_none()
             || self.saved_context_thread_birth
-                != kernel.handles.thread_birth_key_by_id(self.current_thread_id)
+                != kernel
+                    .handles
+                    .thread_birth_key_by_id(self.current_thread_id)
             || self.suspended_guest_thread.is_some()
             || !self.suspended_guest_thread_queue.is_empty()
             || !self.self_suspended_guest_threads.is_empty()
@@ -3279,13 +3292,16 @@ impl UnicornMips {
         if thread_id != self.current_thread_id
             || !kernel.is_live_thread_birth(saved_birth)
             || self.thread_has_non_send_blocked_scheduler_context(thread_id)
-            || kernel.handles.active_finite_sleep_frame(saved_birth).is_some()
+            || kernel
+                .handles
+                .active_finite_sleep_frame(saved_birth)
+                .is_some()
             || !kernel.thread_has_pending_sent_message(thread_id)
         {
             return false;
         }
-        let Some((send_id, _message, deferred_from_sleep_frame)) = kernel
-            .peek_ready_sent_message_w_filtered_with_sleep_frame(thread_id, None, 0, 0)
+        let Some((send_id, _message, deferred_from_sleep_frame)) =
+            kernel.peek_ready_sent_message_w_filtered_with_sleep_frame(thread_id, None, 0, 0)
         else {
             return false;
         };
@@ -3295,9 +3311,9 @@ impl UnicornMips {
         if deferred_from_sleep_frame.is_some() {
             return false;
         }
-        let Some(message) = kernel.take_ready_sent_message_w_filtered_if_id(
-            thread_id, None, 0, 0, send_id,
-        ) else {
+        let Some(message) =
+            kernel.take_ready_sent_message_w_filtered_if_id(thread_id, None, 0, 0, send_id)
+        else {
             return false;
         };
         let Some(window) = kernel
@@ -19786,9 +19802,10 @@ fn try_enter_get_message_sent_callout<D>(
     else {
         return false;
     };
-    // A PeekMessage call processes sent messages regardless of PM_REMOVE; the
-    // sent MSG is never returned as a posted-message result. Authenticate the
-    // live receiver and capture its import continuation before queue removal.
+    // Message reads process sent messages independently of posted-message
+    // removal (including PeekMessage without PM_REMOVE). The sent MSG is never
+    // returned as a posted-message result. Authenticate the live receiver and
+    // capture its import continuation before queue removal.
     if verified_native_register_birth(kernel, current_thread_id, thread_id).is_none() {
         current_thread_id.fail_backend(
             thread_id,
@@ -19809,9 +19826,9 @@ fn try_enter_get_message_sent_callout<D>(
         }
     };
     let original_running_thread = *running_thread.borrow();
-    let Some(message) = kernel.take_ready_sent_message_w_filtered_if_id(
-        thread_id, hwnd, min_msg, max_msg, send_id,
-    ) else {
+    let Some(message) =
+        kernel.take_ready_sent_message_w_filtered_if_id(thread_id, hwnd, min_msg, max_msg, send_id)
+    else {
         return false;
     };
     if !enter_get_message_sent_callout(
@@ -19920,7 +19937,7 @@ fn complete_escaped_get_message_sent_callout<D>(
         a3 = format_args!("0x{:08x}", current_args[3]),
         thread_id,
         result = format_args!("0x{result:08x}"),
-        "completed escaped GetMessageW sent-message WNDPROC callout"
+        "completed escaped message-read sent-message WNDPROC callout"
     );
     true
 }
@@ -24526,7 +24543,22 @@ fn try_block_sleep<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue))
         {
-            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            if let Err(error) = activate_suspended_thread_after_finite_sleep(
+                uc,
+                kernel,
+                current_thread_id,
+                running_thread,
+                &suspended,
+            ) {
+                return abort_native_finite_sleep_resume(
+                    kernel,
+                    uc,
+                    current_thread_id,
+                    blocked_waits,
+                    frame,
+                    format!("Sleep running-worker suspended activation failed: {error}"),
+                );
+            }
             return true;
         }
         if try_resume_blocked_wait(
@@ -24644,7 +24676,22 @@ fn try_block_sleep<D>(
             return_pc,
         });
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            if let Err(error) = activate_suspended_thread_after_finite_sleep(
+                uc,
+                kernel,
+                current_thread_id,
+                running_thread,
+                &suspended,
+            ) {
+                return abort_native_finite_sleep_resume(
+                    kernel,
+                    uc,
+                    current_thread_id,
+                    blocked_waits,
+                    frame,
+                    format!("Sleep boot-main suspended activation failed: {error}"),
+                );
+            }
             return true;
         }
         if try_resume_blocked_wait(
@@ -27319,13 +27366,11 @@ fn verified_native_blocked_wait_birth(
     let birth = wait.owner_birth?;
     (wait.id == candidate.wait_id
         && wait.frame_ref == candidate.frame_ref
-        && candidate
-            .frame_ref
-            .is_none_or(|frame| {
-                frame.wait_id() == candidate.wait_id
-                    && wait.owner_birth == Some(frame.key().owner_birth())
-                    && kernel.is_blocked_finite_sleep_frame(frame)
-            })
+        && candidate.frame_ref.is_none_or(|frame| {
+            frame.wait_id() == candidate.wait_id
+                && wait.owner_birth == Some(frame.key().owner_birth())
+                && kernel.is_blocked_finite_sleep_frame(frame)
+        })
         && wait.thread_id == candidate.thread_id
         && wait.thread_handle == candidate.thread_handle
         && wait.wait_handles == candidate.wait_handles
@@ -27488,7 +27533,10 @@ fn try_resume_blocked_wait_with_active_pc<D>(
                 current_thread_id,
                 blocked_waits,
                 frame,
-                format!("finite Sleep frame {:?} is stale before readiness probe", frame),
+                format!(
+                    "finite Sleep frame {:?} is stale before readiness probe",
+                    frame
+                ),
             );
         }
         blocked_waits.borrow_mut().remove(index);
@@ -27649,7 +27697,10 @@ fn try_resume_blocked_wait_with_active_pc<D>(
                 current_thread_id,
                 blocked_waits,
                 frame,
-                format!("finite Sleep {:?} lost its exact owner before resume", frame),
+                format!(
+                    "finite Sleep {:?} lost its exact owner before resume",
+                    frame
+                ),
             );
         }
         if !blocked_wait_timed_out(&candidate, kernel.timers.tick_count()) {
@@ -27778,7 +27829,10 @@ fn try_resume_blocked_wait_with_active_pc<D>(
             Some(true),
             format!(
                 "id={}/thread={}/kind=Sleep/frame={:?}/return_pc=0x{:08x}/wait_result=0x00000000",
-                frame.wait_id(), candidate.thread_id, frame.key(), candidate.return_pc
+                frame.wait_id(),
+                candidate.thread_id,
+                frame.key(),
+                candidate.return_pc
             ),
         );
         kernel.record_resumed_thread_sleep();
@@ -28206,7 +28260,9 @@ fn has_ready_blocked_waiter(
             crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
         ) {
             let native = blocked_waits.borrow();
-            let candidate = native.iter().find(|candidate| candidate.wait_id == blocked.id);
+            let candidate = native
+                .iter()
+                .find(|candidate| candidate.wait_id == blocked.id);
             if blocked.frame_ref.is_some() || candidate.is_some_and(|c| c.frame_ref.is_some()) {
                 candidate.is_some_and(|candidate| {
                     matches!(candidate.kind, BlockedWaitKind::Sleep)
@@ -37022,28 +37078,14 @@ mod wait_scheduler_tests {
         let receiver_birth = kernel
             .live_thread_birth_key_by_id(receiver_thread)
             .expect("receiver birth");
-        let hwnd = kernel.create_window_ex_w(
-            receiver_thread,
-            "PeekHostDispatchTarget",
-            "",
-            None,
-            0,
-            0,
-            0,
-        );
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread, "PeekHostDispatchTarget", "", None, 0, 0, 0);
         assert_eq!(
             kernel.gwe.window(hwnd).map(|window| window.wndproc),
             Some(crate::ce::gwe::DEFAULT_WNDPROC),
         );
         let send_id = kernel
-            .begin_cross_thread_send_message_w(
-                17,
-                hwnd,
-                crate::ce::gwe::WM_USER + 1,
-                0,
-                0,
-                None,
-            )
+            .begin_cross_thread_send_message_w(17, hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, None)
             .expect("queued sent message");
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -37055,8 +37097,10 @@ mod wait_scheduler_tests {
             .unwrap();
         uc.reg_write(unicorn_engine::RegisterMIPS::SP, 0x3000_1000)
             .unwrap();
-        let current_thread_id =
-            std::rc::Rc::new(super::NativeCurrentThread::new(receiver_thread, Some(receiver_birth)));
+        let current_thread_id = std::rc::Rc::new(super::NativeCurrentThread::new(
+            receiver_thread,
+            Some(receiver_birth),
+        ));
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             receiver_thread,
             crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
@@ -37071,7 +37115,13 @@ mod wait_scheduler_tests {
             &mut uc,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W),
-            &[0x3000_2000, 0, 0, 0, crate::ce::gwe::PeekFlags::REMOVE.bits()],
+            &[
+                0x3000_2000,
+                0,
+                0,
+                0,
+                crate::ce::gwe::PeekFlags::REMOVE.bits()
+            ],
             import_pc,
             receiver_thread,
             &current_thread_id,
@@ -37111,7 +37161,8 @@ mod wait_scheduler_tests {
             .expect("replacement receiver birth");
         assert_ne!(old_birth, new_birth);
 
-        let hwnd = kernel.create_window_ex_w(receiver_thread, "ReusedSendTarget", "", None, 0, 0, 0);
+        let hwnd =
+            kernel.create_window_ex_w(receiver_thread, "ReusedSendTarget", "", None, 0, 0, 0);
         let send_id = kernel
             .begin_cross_thread_send_message_w(
                 super::MAIN_GUEST_THREAD_ID,
@@ -37122,11 +37173,15 @@ mod wait_scheduler_tests {
                 None,
             )
             .expect("queued send to replacement");
-        assert!(kernel.gwe.activate_sent_message_for_receiver(receiver_thread, send_id));
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread, send_id)
+        );
         let import_pc = 0x7fff_2990;
         let return_sp = 0x7ffd_f160;
-        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
-            super::PendingWndProcReturn {
+        let pending_returns =
+            std::rc::Rc::new(std::cell::RefCell::new(vec![super::PendingWndProcReturn {
                 source: "GetMessageW/SentMessage",
                 hwnd,
                 msg: crate::ce::gwe::WM_USER + 1,
@@ -37155,8 +37210,7 @@ mod wait_scheduler_tests {
                     import_pc,
                 }),
                 clear_focus_after_return: None,
-            },
-        ]));
+            }]));
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
@@ -37184,7 +37238,10 @@ mod wait_scheduler_tests {
             &pending_returns,
         ));
         assert_eq!(pending_returns.borrow().len(), 1);
-        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_thread),
+            Some(send_id)
+        );
         assert!(kernel.gwe.in_send_message(receiver_thread));
         assert_eq!(kernel.take_completed_send_message_result(send_id), None);
     }
@@ -43544,6 +43601,49 @@ fn activate_suspended_thread<D>(
     true
 }
 
+/// A finite Sleep has already published a canonical frame by the time it
+/// switches to a suspended peer. Unlike legacy callouts, this handoff must
+/// report every failed write so the caller can cancel exactly that frame.
+#[cfg(feature = "unicorn")]
+fn activate_suspended_thread_after_finite_sleep<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    current_thread_id: &std::rc::Rc<NativeCurrentThread>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    suspended: &SuspendedGuestThread,
+) -> Result<()> {
+    use unicorn_engine::RegisterMIPS;
+
+    if !suspended_guest_thread_has_live_birth(kernel, suspended) {
+        return Err(Error::Backend(format!(
+            "stale suspended thread {} birth {:?}",
+            suspended.thread_id, suspended.thread_birth
+        )));
+    }
+    let birth = suspended.thread_birth.ok_or_else(|| {
+        Error::Backend(format!(
+            "suspended thread {} has no exact birth",
+            suspended.thread_id
+        ))
+    })?;
+    // KData can fail independently of register writes. Do it first so an
+    // unmapped KData page cannot fabricate a peer return PC or register set.
+    update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id())?;
+    restore_mips_context_checked(uc, &suspended.regs)
+        .map_err(|error| Error::Backend(format!("Sleep suspended MIPS restore: {error:?}")))?;
+    if suspended.thread_handle.is_some() && suspended.regs.regs[31] == 0 {
+        uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR))
+            .map_err(|error| Error::Backend(format!("Sleep suspended RA restore: {error:?}")))?;
+    }
+    uc.reg_write(RegisterMIPS::PC, u64::from(suspended.pc))
+        .map_err(|error| Error::Backend(format!("Sleep suspended PC restore: {error:?}")))?;
+    current_thread_id.set_verified(birth);
+    *running_thread.borrow_mut() = suspended
+        .thread_handle
+        .map(|handle| (suspended.thread_id, handle));
+    Ok(())
+}
+
 #[cfg(feature = "unicorn")]
 fn describe_guest_thread_state(
     current_thread_id: u32,
@@ -44385,7 +44485,10 @@ mod guest_thread_stack_tests {
         .expect("wrong test frame");
         parked.cpu.blocked_wait_threads[0].frame_ref = Some(wrong_frame);
         blocked_waits.borrow_mut()[0].frame_ref = Some(wrong_frame);
-        assert_eq!(UnicornMips::parked_process_ready_wait_id(&parked, &kernel), None);
+        assert_eq!(
+            UnicornMips::parked_process_ready_wait_id(&parked, &kernel),
+            None
+        );
         assert!(!super::has_ready_blocked_waiter(
             &kernel,
             &blocked_waits,
@@ -44396,7 +44499,10 @@ mod guest_thread_stack_tests {
         // the scheduler still owns a canonical frame.
         parked.cpu.blocked_wait_threads[0].frame_ref = None;
         blocked_waits.borrow_mut()[0].frame_ref = None;
-        assert_eq!(UnicornMips::parked_process_ready_wait_id(&parked, &kernel), None);
+        assert_eq!(
+            UnicornMips::parked_process_ready_wait_id(&parked, &kernel),
+            None
+        );
         assert!(!super::has_ready_blocked_waiter(
             &kernel,
             &blocked_waits,
@@ -44406,7 +44512,10 @@ mod guest_thread_stack_tests {
         parked.cpu.blocked_wait_threads[0].frame_ref = Some(frame);
         blocked_waits.borrow_mut()[0].frame_ref = Some(frame);
         assert!(kernel.begin_finite_sleep_completion(frame));
-        assert_eq!(UnicornMips::parked_process_ready_wait_id(&parked, &kernel), None);
+        assert_eq!(
+            UnicornMips::parked_process_ready_wait_id(&parked, &kernel),
+            None
+        );
         assert!(!super::has_ready_blocked_waiter(
             &kernel,
             &blocked_waits,
@@ -44536,8 +44645,7 @@ mod guest_thread_stack_tests {
             .handles
             .thread_birth_key_by_id(creator_thread_id)
             .expect("creator birth");
-        let (worker_handle, worker_thread_id) =
-            kernel.create_guest_thread(0x0040_3000, 0, false);
+        let (worker_handle, worker_thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
         let worker_birth = kernel
             .handles
             .thread_birth_key_by_id(worker_thread_id)
@@ -44559,8 +44667,8 @@ mod guest_thread_stack_tests {
         let mut creator_regs = MipsGuestContext::zero();
         creator_regs.regs[2] = 0xbaba_5678;
         creator_regs.regs[31] = creator_return_pc;
-        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
-            PendingGuestThreadReturn {
+        let pending_returns =
+            std::rc::Rc::new(std::cell::RefCell::new(vec![PendingGuestThreadReturn {
                 creator_thread_id,
                 creator_birth,
                 worker_thread_id,
@@ -44568,8 +44676,7 @@ mod guest_thread_stack_tests {
                 thread_handle: worker_handle,
                 return_pc: creator_return_pc,
                 creator_regs,
-            },
-        ]));
+            }]));
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -44593,10 +44700,13 @@ mod guest_thread_stack_tests {
             unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
         )
         .expect("native MIPS engine");
-        uc.reg_write(RegisterMIPS::PC, u64::from(worker_pc)).unwrap();
+        uc.reg_write(RegisterMIPS::PC, u64::from(worker_pc))
+            .unwrap();
         uc.reg_write(RegisterMIPS::SP, 0x3000_1000).unwrap();
-        uc.reg_write(RegisterMIPS::RA, u64::from(worker_ra)).unwrap();
-        uc.reg_write(RegisterMIPS::V0, u64::from(worker_v0)).unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(worker_ra))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::V0, u64::from(worker_v0))
+            .unwrap();
         // Deliberately leave KData unmapped. Capture and frame publication
         // succeed; only the creator handoff's checked KData write fails.
         assert!(try_block_sleep(
@@ -44626,16 +44736,28 @@ mod guest_thread_stack_tests {
         ));
 
         let failure = terminal_error.borrow();
-        assert!(matches!(failure.as_ref(), Some(Error::Backend(message)) if message.contains("KData")));
+        assert!(
+            matches!(failure.as_ref(), Some(Error::Backend(message)) if message.contains("KData"))
+        );
         assert_eq!(current_thread_id.get(), (worker_thread_id, None));
         assert!(pending_returns.borrow().is_empty());
         assert!(blocked_waits.borrow().is_empty());
         assert_eq!(kernel.handles.active_finite_sleep_frame(worker_birth), None);
-        assert!(kernel.blocked_waiters().all(|wait| wait.thread_id != worker_thread_id));
+        assert!(
+            kernel
+                .blocked_waiters()
+                .all(|wait| wait.thread_id != worker_thread_id)
+        );
         assert!(kernel.blocked_waiter(sibling_wait_id).is_some());
         let stats_after = kernel.scheduler_stats();
-        assert_eq!(stats_after.waiter_register_count, stats_before.waiter_register_count + 1);
-        assert_eq!(stats_after.waiter_remove_count, stats_before.waiter_remove_count + 1);
+        assert_eq!(
+            stats_after.waiter_register_count,
+            stats_before.waiter_register_count + 1
+        );
+        assert_eq!(
+            stats_after.waiter_remove_count,
+            stats_before.waiter_remove_count + 1
+        );
         let failed_pc = uc.reg_read(RegisterMIPS::PC).unwrap() as u32;
         let failed_v0 = uc.reg_read(RegisterMIPS::V0).unwrap() as u32;
         assert_ne!(
@@ -44646,6 +44768,156 @@ mod guest_thread_stack_tests {
         assert_ne!(failed_pc, creator_return_pc);
         assert!(running_thread.borrow().is_none());
         Ok(())
+    }
+
+    fn finite_sleep_suspended_kdata_failure_cancels_only_new_frame(
+        running_worker: bool,
+    ) -> Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let (sleeping_handle, sleeping_thread_id) = if running_worker {
+            let (handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+            (handle, thread_id)
+        } else {
+            (
+                crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+                MAIN_GUEST_THREAD_ID,
+            )
+        };
+        let sleeping_birth = kernel
+            .handles
+            .thread_birth_key_by_id(sleeping_thread_id)
+            .expect("sleeping birth");
+        let (next_handle, next_thread_id) = kernel.create_guest_thread(0x0040_4000, 0, false);
+        let next_birth = kernel
+            .handles
+            .thread_birth_key_by_id(next_thread_id)
+            .expect("next birth");
+        let sibling_wait_id = kernel.register_opaque_compatibility_waiter(
+            next_thread_id,
+            next_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let stats_before = kernel.scheduler_stats();
+
+        let sleeping_pc = 0x0040_3010_u32;
+        let sleeping_ra = 0x0040_3014_u32;
+        let sleeping_v0 = 0xaaaa_1234_u32;
+        let next_pc = 0x0040_4000_u32;
+        let mut next_regs = MipsGuestContext::zero();
+        next_regs.regs[2] = 0xbbbb_5678;
+        next_regs.regs[31] = 0x0040_4004;
+        let suspended_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some(SuspendedGuestThread {
+                thread_id: next_thread_id,
+                thread_birth: Some(next_birth),
+                thread_handle: Some(next_handle),
+                regs: next_regs,
+                pc: next_pc,
+            })));
+        let suspended_queue =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let last_imports = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let import_milestones = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let terminal_error = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let current_thread_id = std::rc::Rc::new(NativeCurrentThread::with_terminal_error(
+            sleeping_thread_id,
+            Some(sleeping_birth),
+            std::rc::Rc::clone(&terminal_error),
+        ));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let displaced_blocked_get_messages = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let self_suspended_threads =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::new()));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(if running_worker {
+            Some((sleeping_thread_id, sleeping_handle))
+        } else {
+            None
+        }));
+        let pending_wndproc_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .expect("native MIPS engine");
+        uc.reg_write(RegisterMIPS::PC, u64::from(sleeping_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(sleeping_ra))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::V0, u64::from(sleeping_v0))
+            .unwrap();
+        // KData remains unmapped. Capture and frame publication succeed, but
+        // activating the suspended peer must fail before its context is used.
+        assert!(try_block_sleep(
+            &mut kernel,
+            &mut uc,
+            &SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SLEEP),
+            &[500],
+            sleeping_thread_id,
+            &last_imports,
+            &import_milestones,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &displaced_blocked_get_messages,
+            &suspended_thread,
+            &suspended_queue,
+            &self_suspended_threads,
+            &running_thread,
+            &pending_wndproc_returns,
+            std::time::Instant::now(),
+            Some(std::time::Duration::ZERO),
+            false,
+            terminal_error.as_ref(),
+        ));
+
+        let failure = terminal_error.borrow();
+        assert!(
+            matches!(failure.as_ref(), Some(Error::Backend(message)) if message.contains("KData")),
+            "failed suspended activation must report typed KData error: {failure:?}"
+        );
+        assert_eq!(current_thread_id.get(), (sleeping_thread_id, None));
+        assert!(suspended_thread.borrow().is_none());
+        assert!(blocked_waits.borrow().is_empty());
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(sleeping_birth),
+            None
+        );
+        assert!(kernel.blocked_waiter(sibling_wait_id).is_some());
+        let stats_after = kernel.scheduler_stats();
+        assert_eq!(
+            stats_after.waiter_register_count,
+            stats_before.waiter_register_count + 1
+        );
+        assert_eq!(
+            stats_after.waiter_remove_count,
+            stats_before.waiter_remove_count + 1
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, sleeping_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, sleeping_ra);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, sleeping_v0);
+        assert!(running_thread.borrow().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn running_worker_finite_sleep_suspended_kdata_failure_cancels_only_new_frame() -> Result<()> {
+        finite_sleep_suspended_kdata_failure_cancels_only_new_frame(true)
+    }
+
+    #[test]
+    fn boot_main_finite_sleep_suspended_kdata_failure_cancels_only_new_frame() -> Result<()> {
+        finite_sleep_suspended_kdata_failure_cancels_only_new_frame(false)
     }
 
     #[test]
@@ -56574,15 +56846,13 @@ fn try_enter_send_message_callout<D>(
             );
             return true;
         }
-        let sender_birth = verified_native_register_birth(
-            kernel,
-            current_thread_id,
-            active_thread_id,
-        )
-        .filter(|_| {
-            kernel.handles.thread_creation_owner_by_id(active_thread_id)
-                == kernel.current_process_birth_key()
-        });
+        let sender_birth =
+            verified_native_register_birth(kernel, current_thread_id, active_thread_id).filter(
+                |_| {
+                    kernel.handles.thread_creation_owner_by_id(active_thread_id)
+                        == kernel.current_process_birth_key()
+                },
+            );
         let Some(sender_birth) = sender_birth else {
             stop_native_opaque_wait_error(
                 uc,
@@ -56606,8 +56876,7 @@ fn try_enter_send_message_callout<D>(
                 return true;
             }
         };
-        let sender_return_pc =
-            import_callout_return_pc(sender_regs.regs[31], trampoline_jumps);
+        let sender_return_pc = import_callout_return_pc(sender_regs.regs[31], trampoline_jumps);
         let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
         let Some(send_id) = kernel.begin_cross_thread_send_message_w(
             active_thread_id,
@@ -56679,7 +56948,9 @@ fn try_enter_send_message_callout<D>(
                 current_thread_id,
                 terminal_error,
                 active_thread_id,
-                format!("sleeping-receiver SendMessage {send_id} lost exact sender or receiver frame"),
+                format!(
+                    "sleeping-receiver SendMessage {send_id} lost exact sender or receiver frame"
+                ),
             );
             return true;
         }
@@ -71513,7 +71784,8 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn blocked_sender_idle_releases_slice_end_token_for_runnable_parked_process() -> crate::Result<()> {
+    fn blocked_sender_idle_releases_slice_end_token_for_runnable_parked_process()
+    -> crate::Result<()> {
         let mut kernel = phase1_kernel("blocked-sender-fairness.exe")?;
         let mut active = phase1_counter_cpu(0x1000, "blocked-sender-fairness.exe")?;
         let entry = active.entry.expect("loaded parent entry");
@@ -71556,7 +71828,11 @@ mod unicorn_tests {
             )
             .expect("send queued behind exact Sleep frame");
         assert_eq!(
-            kernel.gwe.sent_message(send_id).unwrap().deferred_from_sleep_frame,
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .unwrap()
+                .deferred_from_sleep_frame,
             Some(sleep_frame)
         );
         let send_kind = super::BlockedWaitKind::SendMessage {
@@ -71617,7 +71893,8 @@ mod unicorn_tests {
             "fixture must prove no runnable active continuation"
         );
 
-        let launch = kernel.queue_process_launch(Some("\\Test\\fairness-child.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\fairness-child.exe".to_owned()), None);
         assert!(
             kernel
                 .take_pending_process_launches()
@@ -71633,24 +71910,26 @@ mod unicorn_tests {
             regs: child_regs,
         });
         stamp_synthetic_saved_context(&mut child, &kernel);
-        active.parked_child_processes.push_back(super::ParkedProcess {
-            application: launch.application.clone(),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_state: crate::ce::kernel::CurrentProcessState {
-                process_id: launch.process_id,
-                exit_code: crate::ce::kernel::STILL_ACTIVE,
-                signaled: false,
-            },
-            thread_id: launch.thread_id,
-            cpu: Box::new(child),
-            blocked_send_id: None,
-            module_base: 0x0040_0000,
-            module_path: "\\Test\\fairness-child.exe".to_owned(),
-            module_host_path: std::path::PathBuf::from("fairness-child.exe"),
-            command_line: String::new(),
-            current_directory: None,
-        });
+        active
+            .parked_child_processes
+            .push_back(super::ParkedProcess {
+                application: launch.application.clone(),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_state: crate::ce::kernel::CurrentProcessState {
+                    process_id: launch.process_id,
+                    exit_code: crate::ce::kernel::STILL_ACTIVE,
+                    signaled: false,
+                },
+                thread_id: launch.thread_id,
+                cpu: Box::new(child),
+                blocked_send_id: None,
+                module_base: 0x0040_0000,
+                module_path: "\\Test\\fairness-child.exe".to_owned(),
+                module_host_path: std::path::PathBuf::from("fairness-child.exe"),
+                command_line: String::new(),
+                current_directory: None,
+            });
         assert!(active.has_runnable_parked_process(&kernel));
 
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
@@ -71667,13 +71946,19 @@ mod unicorn_tests {
         );
         idle.result?;
         assert_eq!(idle.report.attempt_id(), None);
-        assert_eq!(idle.report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
+        assert_eq!(
+            idle.report.final_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
         assert!(!active.slice_end_rotation_pending());
         assert_eq!(kernel.current_process_id(), 1);
         assert_eq!(active.saved_context_pc(), Some(entry + 4));
         assert!(kernel.is_blocked_finite_sleep_frame(sleep_frame));
         assert!(kernel.blocked_waiter(send_wait_id).is_some());
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![send_id]);
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![send_id]
+        );
 
         let rotated = active.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
@@ -71682,12 +71967,28 @@ mod unicorn_tests {
         );
         rotated.result?;
         assert_eq!(rotated.report.attempt_id(), None);
-        assert_eq!(rotated.report.final_outcome(), super::NativeSliceOutcome::NoAttempt);
+        assert_eq!(
+            rotated.report.final_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
         assert_eq!(kernel.current_process_id(), launch.process_id);
         let parent = phase1_actor_cpu(&active, &kernel, 1);
-        assert!(parent.blocked_wait_threads.iter().any(|wait| wait.wait_id == send_wait_id));
-        assert!(parent.blocked_wait_threads.iter().any(|wait| wait.frame_ref == Some(sleep_frame)));
-        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), vec![send_id]);
+        assert!(
+            parent
+                .blocked_wait_threads
+                .iter()
+                .any(|wait| wait.wait_id == send_wait_id)
+        );
+        assert!(
+            parent
+                .blocked_wait_threads
+                .iter()
+                .any(|wait| wait.frame_ref == Some(sleep_frame))
+        );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![send_id]
+        );
         Ok(())
     }
 
@@ -77581,43 +77882,62 @@ mod unicorn_tests {
         Ok(())
     }
 
+    #[derive(Clone, Copy)]
+    enum NativeSleepSendRetrieval {
+        GetMessageW,
+        PeekRemove,
+        GetMessageWNoWait,
+    }
+
     #[test]
     fn native_same_process_send_defers_wndproc_during_receiver_sleep() -> crate::Result<()> {
-        native_same_process_sleep_send_fixture(false, false)
+        native_same_process_sleep_send_fixture(false, NativeSleepSendRetrieval::GetMessageW)
     }
 
     #[test]
     fn native_same_process_send_delivers_after_receiver_sleep_timeout() -> crate::Result<()> {
-        native_same_process_sleep_send_fixture(true, false)
+        native_same_process_sleep_send_fixture(true, NativeSleepSendRetrieval::GetMessageW)
     }
 
     #[test]
-    fn native_same_process_peek_remove_delivers_after_receiver_sleep_timeout() -> crate::Result<()> {
-        native_same_process_sleep_send_fixture(true, true)
+    fn native_same_process_peek_remove_delivers_after_receiver_sleep_timeout() -> crate::Result<()>
+    {
+        native_same_process_sleep_send_fixture(true, NativeSleepSendRetrieval::PeekRemove)
+    }
+
+    #[test]
+    fn native_same_process_get_message_no_wait_delivers_after_receiver_sleep_timeout(
+    ) -> crate::Result<()> {
+        native_same_process_sleep_send_fixture(true, NativeSleepSendRetrieval::GetMessageWNoWait)
     }
 
     fn native_same_process_sleep_send_fixture(
         continue_after_send: bool,
-        peek_remove: bool,
+        retrieval: NativeSleepSendRetrieval,
     ) -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{
-            ORD_GET_MESSAGE_W, ORD_PEEK_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP,
+            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_PEEK_MESSAGE_W, ORD_SEND_MESSAGE_W,
+            ORD_SLEEP,
         };
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 
         let sleep_trap = super::IMPORT_TRAP_BASE + 0x400;
         let send_trap = sleep_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
         let retrieval_trap = send_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
-        let retrieval_ordinal = if peek_remove {
-            ORD_PEEK_MESSAGE_W
-        } else {
-            ORD_GET_MESSAGE_W
-        };
-        let retrieval_name = if peek_remove { "PeekMessageW" } else { "GetMessageW" };
-        let retrieval_source = if peek_remove {
-            "PeekMessageW/SentMessage"
-        } else {
-            "GetMessageW/SentMessage"
+        let (retrieval_ordinal, retrieval_name, retrieval_source) = match retrieval {
+            NativeSleepSendRetrieval::GetMessageW => {
+                (ORD_GET_MESSAGE_W, "GetMessageW", "GetMessageW/SentMessage")
+            }
+            NativeSleepSendRetrieval::PeekRemove => (
+                ORD_PEEK_MESSAGE_W,
+                "PeekMessageW",
+                "PeekMessageW/SentMessage",
+            ),
+            NativeSleepSendRetrieval::GetMessageWNoWait => (
+                ORD_GET_MESSAGE_WNO_WAIT,
+                "GetMessageWNoWait",
+                "GetMessageWNoWait/SentMessage",
+            ),
         };
         let mut image_bytes = tiny_mips_spinner_pe();
         for (offset, words) in [
@@ -77638,12 +77958,17 @@ mod unicorn_tests {
                     0x3739_0000 | (retrieval_trap & 0xffff),
                     0x0320_f809, // T enters real message retrieval after Sleep
                     0,
+                    0x2404_0001, // finite Sleep(1) yields after nonblocking read
+                    0x3c19_0000 | (sleep_trap >> 16),
+                    0x3739_0000 | (sleep_trap & 0xffff),
+                    0x0320_f809,
+                    0,
                     0x1000_ffff,
                     0,
                 ][..],
             ),
             (
-                0x240,
+                0x260,
                 &[
                     0x3c19_0000 | (send_trap >> 16),
                     0x3739_0000 | (send_trap & 0xffff),
@@ -77659,7 +77984,7 @@ mod unicorn_tests {
             }
         }
         for (index, word) in [0x2402_0077, 0x03e0_0008, 0].into_iter().enumerate() {
-            write_vec_u32(&mut image_bytes, 0x280 + index * 4, word);
+            write_vec_u32(&mut image_bytes, 0x2a0 + index * 4, word);
         }
         let image = crate::pe::PeImage::parse_bytes("sleep-native-send.exe", &image_bytes)?;
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
@@ -77687,7 +78012,7 @@ mod unicorn_tests {
         }
         super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
         let entry = cpu.entry.expect("fixture entry");
-        let wndproc = entry + 0x80;
+        let wndproc = entry + 0xa0;
         let receiver_sp = cpu.stack_top.expect("fixture stack") - 0x100;
         let hwnd =
             kernel.create_window_ex_w(receiver_thread, "SLEEP_NATIVE_SEND", "", None, 0, 0, 0);
@@ -77713,7 +78038,7 @@ mod unicorn_tests {
 
         // S is a ready displaced context, not a CE-suspended task. It enters
         // the genuine SendMessageW import only after T's Sleep blocks.
-        let (sender_handle, sender_thread) = kernel.create_guest_thread(entry + 0x40, 0, false);
+        let (sender_handle, sender_thread) = kernel.create_guest_thread(entry + 0x60, 0, false);
         let sender_birth = kernel
             .handles
             .thread_birth_key_by_id(sender_thread)
@@ -77728,7 +78053,7 @@ mod unicorn_tests {
             thread_birth: Some(sender_birth),
             thread_handle: Some(sender_handle),
             regs: sender_regs,
-            pc: entry + 0x40,
+            pc: entry + 0x60,
         });
 
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
@@ -77802,7 +78127,11 @@ mod unicorn_tests {
 
         let sleep_wait_id = sleep.wait_id;
         let sleep_return_pc = sleep.return_pc;
-        assert_eq!(sleep_return_pc, entry + 0x10, "T Sleep must return into the native retrieval program");
+        assert_eq!(
+            sleep_return_pc,
+            entry + 0x10,
+            "T Sleep must return into the native retrieval program"
+        );
         let sender_wait_ids: Vec<_> = cpu
             .blocked_wait_threads
             .iter()
@@ -77812,7 +78141,11 @@ mod unicorn_tests {
             })
             .map(|wait| wait.wait_id)
             .collect();
-        assert_eq!(sender_wait_ids.len(), 1, "S must publish exactly one send wait");
+        assert_eq!(
+            sender_wait_ids.len(),
+            1,
+            "S must publish exactly one send wait"
+        );
         let sender_return_pc = cpu
             .blocked_wait_threads
             .iter()
@@ -77903,20 +78236,12 @@ mod unicorn_tests {
         assert_eq!(cpu.saved_context_pc(), Some(wndproc));
         assert_eq!(cpu.saved_context_thread_birth, Some(receiver_birth));
         assert_eq!(cpu.current_thread_id, receiver_thread);
-        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(send_ids[0]));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_thread),
+            Some(send_ids[0])
+        );
         assert_eq!(cpu.pending_wndproc_returns.len(), 1);
         assert_eq!(cpu.pending_wndproc_returns[0].source, retrieval_source);
-        assert_eq!(
-            cpu.pending_wndproc_returns[0]
-                .resume_import
-                .as_ref()
-                .map(|resume| resume.regs.regs[31]),
-            Some(entry + 0x38),
-            "{retrieval_name} captured wrong native caller RA: Sleep PC=0x{sleep_return_pc:08x}, report={:?}, imports={:?}, trace={:?}",
-            delivery_attempt.report,
-            cpu.last_debug_snapshot().map(|snapshot| &snapshot.last_imports),
-            cpu.last_debug_snapshot().map(|snapshot| snapshot.last_code.iter().rev().take(24).map(|code| (code.pc, code.ra, code.instruction)).collect::<Vec<_>>()),
-        );
         assert_eq!(
             cpu.blocked_wait_threads
                 .iter()
@@ -77940,7 +78265,10 @@ mod unicorn_tests {
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
         assert!(kernel.sent_message_result_ready(send_ids[0]));
         assert_eq!(
-            kernel.gwe.sent_message(send_ids[0]).and_then(|send| send.result),
+            kernel
+                .gwe
+                .sent_message(send_ids[0])
+                .and_then(|send| send.result),
             Some(0x77),
         );
         let sender_resume_attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
@@ -77954,6 +78282,19 @@ mod unicorn_tests {
             },
         );
         sender_resume_attempt.result?;
+        if !matches!(retrieval, NativeSleepSendRetrieval::GetMessageW) {
+            let imports = &cpu
+                .last_debug_snapshot()
+                .expect("nonblocking read native return trace")
+                .last_imports;
+            assert!(
+                imports.windows(2).any(|pair| {
+                    pair[0].ordinal == Some(retrieval_ordinal)
+                        && pair[1].ordinal == Some(ORD_SLEEP)
+                }),
+                "T must issue a real finite Sleep after nonblocking {retrieval_name} before S resumes: {imports:?}"
+            );
+        }
         assert_eq!(
             cpu.saved_context_pc(),
             Some(sender_return_pc),
@@ -77965,7 +78306,8 @@ mod unicorn_tests {
             cpu.blocked_wait_threads,
             kernel.gwe.sent_message(send_ids[0]),
             cpu.pending_wndproc_returns,
-            cpu.last_debug_snapshot().map(|snapshot| (&snapshot.pc, &snapshot.last_imports)),
+            cpu.last_debug_snapshot()
+                .map(|snapshot| (&snapshot.pc, &snapshot.last_imports)),
         );
         assert_eq!(cpu.saved_context_thread_birth, Some(sender_birth));
         assert_eq!(cpu.current_thread_id, sender_thread);

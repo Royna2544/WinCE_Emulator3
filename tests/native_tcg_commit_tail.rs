@@ -8,8 +8,8 @@
 use std::sync::Mutex;
 
 use unicorn_engine::{
-    unicorn_const::{uc_ctl, uc_error, Arch, ControlType, Mode, Prot, Query},
     RegisterMIPS, Unicorn,
+    unicorn_const::{Arch, ControlType, Mode, Prot, Query, uc_ctl, uc_error},
 };
 
 const MIB: u32 = 1024 * 1024;
