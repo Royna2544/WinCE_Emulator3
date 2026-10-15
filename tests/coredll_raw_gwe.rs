@@ -30360,8 +30360,27 @@ fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<(
         .handles
         .thread_birth_key_for_handle(thread_b_handle)
         .expect("B caller birth");
+    let second_sender_tid = sender_tid + 1;
+    let second_thread_b_handle = kernel.handles.try_create_thread_in_birth(
+        process_b,
+        second_sender_tid,
+        0x0040_4000,
+        0,
+        false,
+    )?;
+    let second_thread_b = kernel
+        .handles
+        .thread_birth_key_for_handle(second_thread_b_handle)
+        .expect("second B caller birth");
     assert_ne!(process_a, process_b);
     assert_ne!(thread_a, thread_b);
+    assert_ne!(thread_b, second_thread_b);
+    assert_eq!(
+        kernel
+            .handles
+            .thread_creation_owner_by_id(second_sender_tid),
+        Some(process_b)
+    );
     assert_eq!(kernel.current_process_birth_key(), Some(process_b));
 
     let result_ptr = 0xb2f0;
@@ -30442,12 +30461,17 @@ fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<(
         caller_birth: Some(thread_b),
         ..Default::default()
     };
+    let second_current_context = CoredllRawContext {
+        thread_id: second_sender_tid,
+        caller_birth: Some(second_thread_b),
+        ..Default::default()
+    };
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer_and_context(
             &mut kernel,
             &mut memory,
             None,
-            current_context.clone(),
+            current_context,
             ORD_SEND_MESSAGE_TIMEOUT,
             [hwnd, WM_USER + 0xc3, 5, 6, 0, 500, result_ptr],
         ),
@@ -30461,7 +30485,7 @@ fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<(
             &mut kernel,
             &mut memory,
             None,
-            current_context,
+            second_current_context,
             ORD_SEND_MESSAGE_W,
             [hwnd, WM_USER + 0xc4, 7, 8],
         ),
@@ -30480,9 +30504,9 @@ fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<(
         kernel.gwe.sent_message(ids[1]).unwrap().message.msg,
         WM_USER + 0xc4
     );
-    for id in ids {
+    for (id, expected_sender_tid) in ids.into_iter().zip([sender_tid, second_sender_tid]) {
         let sent = kernel.gwe.sent_message(id).unwrap();
-        assert_eq!(sent.sender_thread_id, Some(sender_tid));
+        assert_eq!(sent.sender_thread_id, Some(expected_sender_tid));
         assert_eq!(sent.sender_process_id, Some(sender_pid));
         assert_eq!(sent.receiver_birth, Some(receiver_birth));
     }

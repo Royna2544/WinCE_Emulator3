@@ -3487,14 +3487,11 @@ impl CeKernel {
 
     fn destroy_process_windows_for_birth(&mut self, owner: ProcessBirthKey, thread_id: u32) {
         let hwnds = self.process_window_targets_for_birth(owner);
+        self.gwe.terminate_sent_messages_from_process_birth(owner);
         self.destroy_process_window_targets(owner.process_id(), thread_id, hwnds);
     }
 
     fn destroy_process_window_targets(&mut self, process_id: u32, thread_id: u32, hwnds: Vec<u32>) {
-        self.gwe.terminate_sent_messages_from_process(process_id);
-        if thread_id != 0 {
-            self.gwe.terminate_sent_messages_from_sender(thread_id);
-        }
         for hwnd in &hwnds {
             let targets = self.gwe.window_and_descendants(*hwnd).unwrap_or_default();
             self.record_window_lifecycle_trace(
@@ -6987,11 +6984,10 @@ impl CeKernel {
             for wait_id in wait_ids {
                 let _ = self.remove_blocked_waiter(wait_id);
             }
-            // Only this verified live birth may retire sends under its numeric
-            // TID. Queued sends are removed; an active receiver can finish
-            // after GWE detaches the now-dead sender.
+            // A live birth only retires its own sends. Numeric legacy fixture
+            // sends remain explicitly unowned and cannot gain birth authority.
             self.gwe
-                .terminate_sent_messages_from_sender(key.thread_id());
+                .terminate_sent_messages_from_sender_birth(key);
             self.queue_object_wake_candidates_for_key(WaitObjectKey::Thread(key));
         }
         success
@@ -10115,6 +10111,61 @@ impl CeKernel {
         lparam: u32,
         timeout_ms: Option<u32>,
     ) -> Option<u64> {
+        self.begin_cross_thread_send_message_w_with_sender(
+            caller_thread_id,
+            None,
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            timeout_ms,
+        )
+    }
+
+    /// Publish a synchronous guest send only for the caller incarnation
+    /// captured by the native/raw entrypoint. A reused numeric TID cannot
+    /// authenticate an earlier caller after its process has exited.
+    pub fn begin_cross_thread_send_message_w_for_birth(
+        &mut self,
+        caller_birth: ThreadBirthKey,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
+        if !self.is_live_thread_birth(caller_birth) {
+            return None;
+        }
+        let process = self
+            .handles
+            .live_thread_creation_owner_by_id(caller_birth.thread_id())?;
+        if !self.handles.process_execution_live_by_birth(process)
+            || self.current_process_birth_key() != Some(process)
+        {
+            return None;
+        }
+        self.begin_cross_thread_send_message_w_with_sender(
+            caller_birth.thread_id(),
+            Some((caller_birth, process)),
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            timeout_ms,
+        )
+    }
+
+    fn begin_cross_thread_send_message_w_with_sender(
+        &mut self,
+        caller_thread_id: u32,
+        sender_birth: Option<(ThreadBirthKey, ProcessBirthKey)>,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
         let window = self.gwe.window(hwnd).filter(|window| !window.destroyed)?;
         let target_thread = window.thread_id;
         if let WindowDeliveryOwner::Birth { thread, process } = window.delivery_owner()
@@ -10133,8 +10184,26 @@ impl CeKernel {
             .and_then(|birth| self.handles.active_finite_sleep_frame(birth))
             .filter(|frame| self.is_blocked_finite_sleep_frame(*frame));
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
-        let send_id = if let Some(frame) = deferred_frame {
-            self.gwe
+        let send_id = match (sender_birth, deferred_frame) {
+            (Some((thread, process)), Some(frame)) => self
+                .gwe
+                .queue_send_message_for_window_owned_deferred_by_finite_sleep(
+                    crate::ce::gwe::SentMessageSenderOwner::Birth { thread, process },
+                    hwnd,
+                    message,
+                    flags,
+                    timeout_ms,
+                    frame,
+                ),
+            (Some((thread, process)), None) => self.gwe.queue_send_message_for_window_owned(
+                crate::ce::gwe::SentMessageSenderOwner::Birth { thread, process },
+                hwnd,
+                message,
+                flags,
+                timeout_ms,
+            ),
+            (None, Some(frame)) => self
+                .gwe
                 .queue_send_message_for_window_deferred_by_finite_sleep(
                     Some(caller_thread_id),
                     hwnd,
@@ -10142,19 +10211,22 @@ impl CeKernel {
                     flags,
                     timeout_ms,
                     frame,
-                )
-        } else {
-            self.gwe.queue_send_message_for_window(
+                ),
+            (None, None) => self.gwe.queue_send_message_for_window(
                 Some(caller_thread_id),
                 hwnd,
                 message,
                 flags,
                 timeout_ms,
-            )
+            ),
         };
         if let Some(id) = send_id {
-            self.gwe
-                .set_sent_message_sender_process(id, self.current_process_id);
+            if sender_birth.is_none() {
+                // Legacy numeric fixtures retain their old projected PID, but
+                // this cannot authorize birth-owned cleanup or native resume.
+                self.gwe
+                    .set_sent_message_sender_process(id, self.current_process_id);
+            }
             self.record_message_trace(MessageTraceRecord {
                 op: "queue_send_message",
                 thread_id: target_thread,
@@ -14743,8 +14815,8 @@ mod tests {
         let thread_a = launch_a.primary_thread_birth.expect("A thread birth");
         kernel.set_current_process_id(launch_a.process_id);
         let send_a = kernel
-            .begin_cross_thread_send_message_w(
-                launch_a.thread_id,
+            .begin_cross_thread_send_message_w_for_birth(
+                thread_a,
                 hwnd,
                 crate::ce::gwe::WM_USER + 0xb1,
                 1,
@@ -14779,8 +14851,8 @@ mod tests {
         assert_ne!(launch_a.thread_id, launch_b.thread_id);
         kernel.set_current_process_id(launch_b.process_id);
         let send_b = kernel
-            .begin_cross_thread_send_message_w(
-                launch_b.thread_id,
+            .begin_cross_thread_send_message_w_for_birth(
+                launch_b.primary_thread_birth.expect("B thread birth"),
                 hwnd,
                 crate::ce::gwe::WM_USER + 0xb2,
                 3,
@@ -14811,6 +14883,157 @@ mod tests {
             vec![send_a]
         );
         assert_eq!(receiver_tid, receiver_birth.thread_id());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: reused PID host exit must not detach a prior-birth active send"]
+    fn reused_pid_host_exit_preserves_stranded_prior_birth_active_send() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_a_handle, receiver_a_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let receiver_a_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_a_handle)
+            .expect("first boot receiver birth");
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_a_birth,
+                "REUSED_PID_ACTIVE_RECEIVER_A",
+                "receiver A",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("first live boot receiver HWND");
+        let (receiver_b_handle, receiver_b_tid) = kernel.create_guest_thread(0x402000, 0, false);
+        let receiver_b_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_b_handle)
+            .expect("second boot receiver birth");
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_b_birth,
+                "REUSED_PID_ACTIVE_RECEIVER_B",
+                "receiver B",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("second live boot receiver HWND");
+
+        let launch_a = kernel.queue_process_launch(None, None);
+        let process_a = launch_a.process_birth.expect("A process birth");
+        let thread_a = launch_a.primary_thread_birth.expect("A thread birth");
+        kernel.set_current_process_id(launch_a.process_id);
+        let send_a = kernel
+            .begin_cross_thread_send_message_w_for_birth(
+                thread_a,
+                hwnd_a,
+                crate::ce::gwe::WM_USER + 0xb3,
+                1,
+                2,
+                None,
+            )
+            .expect("A queued send");
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver_birth(receiver_a_birth, send_a)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_a_tid),
+            Some(send_a)
+        );
+
+        // Fixture-only retirement strands A's active callback without invoking
+        // the normal sender-exit cleanup. A later B exit must not claim it.
+        assert!(kernel.handles.mark_thread_exited_by_birth(thread_a, 0));
+        kernel.handles.close(launch_a.thread_handle)?;
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(process_a, 0)
+                .is_some()
+        );
+        kernel.handles.close(launch_a.process_handle)?;
+        assert_eq!(kernel.handles.process_birth_key(launch_a.process_id), None);
+
+        kernel.next_process_id = launch_a.process_id;
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = launch_b.process_birth.expect("B process birth");
+        assert_eq!(launch_b.process_id, launch_a.process_id);
+        assert_ne!(process_a, process_b);
+        assert_ne!(launch_a.thread_id, launch_b.thread_id);
+        kernel.set_current_process_id(launch_b.process_id);
+        let send_b = kernel
+            .begin_cross_thread_send_message_w_for_birth(
+                launch_b.primary_thread_birth.expect("B thread birth"),
+                hwnd_b,
+                crate::ce::gwe::WM_USER + 0xb4,
+                3,
+                4,
+                Some(500),
+            )
+            .expect("B queued send");
+        assert!(kernel.gwe.set_sent_message_result_ptr(send_b, 0xb2f0));
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver_birth(receiver_b_birth, send_b)
+        );
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_b_tid),
+            Some(send_b)
+        );
+        assert_eq!(
+            kernel.gwe.reply_message(receiver_b_tid, 0x1234),
+            Some(send_b)
+        );
+        assert_eq!(
+            kernel.gwe.completed_sent_message_result_writes(),
+            vec![(send_b, 0xb2f0, 0x1234)]
+        );
+
+        assert!(kernel.mark_process_launch_exited(&launch_b, 0));
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert!(kernel.gwe.is_window(hwnd_b));
+        let retained_a = kernel
+            .gwe
+            .sent_message(send_a)
+            .expect("prior A active send");
+        assert_eq!(retained_a.sender_thread_id, Some(launch_a.thread_id));
+        assert_eq!(retained_a.sender_process_id, Some(launch_a.process_id));
+        assert_eq!(retained_a.flags & crate::ce::gwe::SMF_SENDER_TERMINATED, 0);
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_a_tid),
+            Some(send_a)
+        );
+
+        let detached_b = kernel.gwe.sent_message(send_b).expect("B active send");
+        assert_eq!(detached_b.sender_thread_id, None);
+        assert_eq!(detached_b.sender_process_id, None);
+        assert_ne!(detached_b.flags & crate::ce::gwe::SMF_SENDER_TERMINATED, 0);
+        assert_eq!(detached_b.result_ptr, None);
+        assert!(kernel.gwe.completed_sent_message_result_writes().is_empty());
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_b_tid),
+            Some(send_b)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_b_tid, 0x1234),
+            Some(send_b)
+        );
+        assert!(kernel.gwe.sent_message(send_b).is_none());
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_a_tid),
+            Some(send_a)
+        );
         Ok(())
     }
 

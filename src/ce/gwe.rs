@@ -417,9 +417,24 @@ pub enum MessagePointerPayload {
     NotifyIcon(NotifyIconMessage),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SentMessageSenderOwner {
+    /// Frozen at admission from the authenticated sender thread and its
+    /// creation process. Numeric IDs below are only projections.
+    Birth {
+        thread: ThreadBirthKey,
+        process: ProcessBirthKey,
+    },
+    /// A direct numeric compatibility caller with no authenticated birth.
+    LegacyUnknown,
+    /// System-originated send that has no waiting guest sender.
+    SystemNoWait,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentMessage {
     pub id: u64,
+    pub sender_owner: SentMessageSenderOwner,
     pub sender_thread_id: Option<u32>,
     pub sender_process_id: Option<u32>,
     pub receiver_thread_id: u32,
@@ -442,6 +457,15 @@ pub struct SentMessage {
 impl SentMessage {
     fn visible_to_reader(&self, birth: Option<ThreadBirthKey>) -> bool {
         self.receiver_birth.is_none_or(|owner| Some(owner) == birth)
+    }
+
+    /// Keep the frozen origin for diagnostics, but detach every mutable
+    /// sender projection and output pointer before the receiver can unwind.
+    fn detach_terminated_sender(&mut self) {
+        self.flags |= SMF_SENDER_TERMINATED;
+        self.sender_thread_id = None;
+        self.sender_process_id = None;
+        self.result_ptr = None;
     }
 }
 
@@ -3804,7 +3828,39 @@ impl Gwe {
         timeout_ms: Option<u32>,
     ) -> Option<u64> {
         self.queue_send_message_for_window_with_sleep_frame(
+            if sender_thread_id.is_some() {
+                SentMessageSenderOwner::LegacyUnknown
+            } else {
+                SentMessageSenderOwner::SystemNoWait
+            },
             sender_thread_id,
+            hwnd,
+            message,
+            flags,
+            timeout_ms,
+            None,
+        )
+    }
+
+    /// Publish a send with the sender's already-authenticated, immutable
+    /// birth. The owner and numeric projections enter the queue together.
+    pub fn queue_send_message_for_window_owned(
+        &mut self,
+        sender_owner: SentMessageSenderOwner,
+        hwnd: u32,
+        message: Message,
+        flags: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
+        if sender_owner == SentMessageSenderOwner::LegacyUnknown
+            || (sender_owner == SentMessageSenderOwner::SystemNoWait
+                && flags & SMF_SENDER_NO_WAIT == 0)
+        {
+            return None;
+        }
+        self.queue_send_message_for_window_with_sleep_frame(
+            sender_owner,
+            None,
             hwnd,
             message,
             flags,
@@ -3826,7 +3882,40 @@ impl Gwe {
         frame: TaskFrameRef,
     ) -> Option<u64> {
         self.queue_send_message_for_window_with_sleep_frame(
+            if sender_thread_id.is_some() {
+                SentMessageSenderOwner::LegacyUnknown
+            } else {
+                SentMessageSenderOwner::SystemNoWait
+            },
             sender_thread_id,
+            hwnd,
+            message,
+            flags,
+            timeout_ms,
+            Some(frame),
+        )
+    }
+
+    /// The finite-Sleep variant of birth-owned admission. The caller must
+    /// verify the sender and the receiver's blocked frame before publication.
+    pub fn queue_send_message_for_window_owned_deferred_by_finite_sleep(
+        &mut self,
+        sender_owner: SentMessageSenderOwner,
+        hwnd: u32,
+        message: Message,
+        flags: u32,
+        timeout_ms: Option<u32>,
+        frame: TaskFrameRef,
+    ) -> Option<u64> {
+        if sender_owner == SentMessageSenderOwner::LegacyUnknown
+            || (sender_owner == SentMessageSenderOwner::SystemNoWait
+                && flags & SMF_SENDER_NO_WAIT == 0)
+        {
+            return None;
+        }
+        self.queue_send_message_for_window_with_sleep_frame(
+            sender_owner,
+            None,
             hwnd,
             message,
             flags,
@@ -3837,6 +3926,7 @@ impl Gwe {
 
     fn queue_send_message_for_window_with_sleep_frame(
         &mut self,
+        sender_owner: SentMessageSenderOwner,
         sender_thread_id: Option<u32>,
         hwnd: u32,
         mut message: Message,
@@ -3867,14 +3957,22 @@ impl Gwe {
             WindowDeliveryOwner::Birth { thread, .. } => Some(thread),
             WindowDeliveryOwner::LegacyUnknown { .. } | WindowDeliveryOwner::SystemDesktop => None,
         };
+        let (sender_thread_id, sender_process_id) = match sender_owner {
+            SentMessageSenderOwner::Birth { thread, process } => {
+                (Some(thread.thread_id()), Some(process.process_id()))
+            }
+            SentMessageSenderOwner::LegacyUnknown => (sender_thread_id, None),
+            SentMessageSenderOwner::SystemNoWait => (None, None),
+        };
         let id = self.next_sent_message_id;
         self.next_sent_message_id = self.next_sent_message_id.saturating_add(1).max(1);
         self.sent_messages.insert(
             id,
             SentMessage {
                 id,
+                sender_owner,
                 sender_thread_id,
-                sender_process_id: None,
+                sender_process_id,
                 receiver_thread_id: window.thread_id,
                 receiver_birth,
                 deferred_from_sleep_frame,
@@ -3904,6 +4002,9 @@ impl Gwe {
         let Some(sent) = self.sent_messages.get_mut(&id) else {
             return false;
         };
+        if sent.flags & SMF_SENDER_TERMINATED != 0 {
+            return false;
+        }
         sent.result_ptr = (result_ptr != 0).then_some(result_ptr);
         true
     }
@@ -4749,7 +4850,7 @@ impl Gwe {
 
     pub fn take_completed_sent_message_result(&mut self, id: u64) -> Option<u32> {
         let sent = self.sent_messages.get(&id)?;
-        if sent.flags & SMF_RESULT_READY == 0 {
+        if sent.flags & SMF_RESULT_READY == 0 || sent.flags & SMF_SENDER_TERMINATED != 0 {
             return None;
         }
         let receiver_thread_id = sent.receiver_thread_id;
@@ -4799,7 +4900,9 @@ impl Gwe {
         let Some(sent) = self.sent_messages.get(&id) else {
             return false;
         };
-        if sent.sender_thread_id != Some(sender_thread_id)
+        if sent.sender_owner != SentMessageSenderOwner::LegacyUnknown
+            || sent.flags & SMF_SENDER_TERMINATED != 0
+            || sent.sender_thread_id != Some(sender_thread_id)
             || sent.sender_process_id != Some(sender_process_id)
             || sent.receiver_thread_id != receiver_thread_id
             || sent.result_ptr != result_ptr
@@ -4808,16 +4911,49 @@ impl Gwe {
         {
             return false;
         }
+        self.abandon_validated_sent_message(id)
+    }
+
+    /// Abandon only the exact birth-owned transaction captured by a native
+    /// sender frame. A recycled TID/PID or a legacy numeric record cannot
+    /// authorize this transition, even if all numeric fields match.
+    pub fn abandon_sent_message_from_sender_birth(
+        &mut self,
+        id: u64,
+        sender_thread_birth: ThreadBirthKey,
+        sender_process_birth: ProcessBirthKey,
+        receiver_thread_id: u32,
+        result_ptr: Option<u32>,
+        timeout_ms: Option<u32>,
+        send_timeout_flags: u32,
+    ) -> bool {
+        let Some(sent) = self.sent_messages.get(&id) else {
+            return false;
+        };
+        if sent.sender_owner
+            != (SentMessageSenderOwner::Birth {
+                thread: sender_thread_birth,
+                process: sender_process_birth,
+            })
+            || sent.flags & SMF_SENDER_TERMINATED != 0
+            || sent.receiver_thread_id != receiver_thread_id
+            || sent.result_ptr != result_ptr
+            || sent.timeout_ms != timeout_ms
+            || sent.send_timeout_flags != send_timeout_flags
+        {
+            return false;
+        }
+        self.abandon_validated_sent_message(id)
+    }
+
+    fn abandon_validated_sent_message(&mut self, id: u64) -> bool {
         let active = self
             .active_sent_stack_by_thread
             .values()
             .any(|stack| stack.contains(&id));
         if active {
             if let Some(sent) = self.sent_messages.get_mut(&id) {
-                sent.flags |= SMF_SENDER_TERMINATED;
-                sent.sender_thread_id = None;
-                sent.sender_process_id = None;
-                sent.result_ptr = None;
+                sent.detach_terminated_sender();
             }
         } else {
             self.sent_messages.remove(&id);
@@ -4874,37 +5010,42 @@ impl Gwe {
         let sent_ids = self
             .sent_messages
             .iter()
-            .filter(|(_, sent)| sent.sender_thread_id == Some(sender_thread_id))
+            .filter(|(_, sent)| {
+                sent.sender_owner == SentMessageSenderOwner::LegacyUnknown
+                    && sent.flags & SMF_SENDER_TERMINATED == 0
+                    && sent.sender_thread_id == Some(sender_thread_id)
+            })
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
-        if sent_ids.is_empty() {
-            return sent_ids;
-        }
+        self.terminate_selected_sender_sent_messages(sent_ids)
+    }
 
-        let active_ids = self
-            .active_sent_stack_by_thread
-            .values()
-            .flat_map(|stack| stack.iter().copied())
-            .collect::<std::collections::BTreeSet<_>>();
-        for id in &sent_ids {
-            if active_ids.contains(id) {
-                if let Some(sent) = self.sent_messages.get_mut(id) {
-                    sent.flags |= SMF_SENDER_TERMINATED;
-                    sent.sender_thread_id = None;
-                }
-            } else {
-                self.sent_messages.remove(id);
-            }
-        }
-        for queue in self.sent_queues.values_mut() {
-            queue.retain(|id| !sent_ids.contains(id) || active_ids.contains(id));
-        }
-        sent_ids
+    /// Retire only sends admitted by this exact sender thread incarnation.
+    pub fn terminate_sent_messages_from_sender_birth(
+        &mut self,
+        sender_thread_birth: ThreadBirthKey,
+    ) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| {
+                matches!(
+                    sent.sender_owner,
+                    SentMessageSenderOwner::Birth { thread, .. } if thread == sender_thread_birth
+                ) && sent.flags & SMF_SENDER_TERMINATED == 0
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        self.terminate_selected_sender_sent_messages(sent_ids)
     }
 
     pub fn set_sent_message_sender_process(&mut self, send_id: u64, process_id: u32) {
         if let Some(sent) = self.sent_messages.get_mut(&send_id) {
-            sent.sender_process_id = Some(process_id);
+            if sent.sender_owner == SentMessageSenderOwner::LegacyUnknown
+                && sent.flags & SMF_SENDER_TERMINATED == 0
+            {
+                sent.sender_process_id = Some(process_id);
+            }
         }
     }
 
@@ -4912,9 +5053,37 @@ impl Gwe {
         let sent_ids = self
             .sent_messages
             .iter()
-            .filter(|(_, sent)| sent.sender_process_id == Some(sender_process_id))
+            .filter(|(_, sent)| {
+                sent.sender_owner == SentMessageSenderOwner::LegacyUnknown
+                    && sent.flags & SMF_SENDER_TERMINATED == 0
+                    && sent.sender_process_id == Some(sender_process_id)
+            })
             .map(|(id, _)| *id)
             .collect::<Vec<_>>();
+        self.terminate_selected_sender_sent_messages(sent_ids)
+    }
+
+    /// Retire only sends admitted by this exact sender process incarnation.
+    pub fn terminate_sent_messages_from_process_birth(
+        &mut self,
+        sender_process_birth: ProcessBirthKey,
+    ) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| {
+                matches!(
+                    sent.sender_owner,
+                    SentMessageSenderOwner::Birth { process, .. }
+                        if process == sender_process_birth
+                ) && sent.flags & SMF_SENDER_TERMINATED == 0
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        self.terminate_selected_sender_sent_messages(sent_ids)
+    }
+
+    fn terminate_selected_sender_sent_messages(&mut self, sent_ids: Vec<u64>) -> Vec<u64> {
         if sent_ids.is_empty() {
             return sent_ids;
         }
@@ -4927,9 +5096,7 @@ impl Gwe {
         for id in &sent_ids {
             if active_ids.contains(id) {
                 if let Some(sent) = self.sent_messages.get_mut(id) {
-                    sent.flags |= SMF_SENDER_TERMINATED;
-                    sent.sender_thread_id = None;
-                    sent.sender_process_id = None;
+                    sent.detach_terminated_sender();
                 }
             } else {
                 self.sent_messages.remove(id);
@@ -5127,7 +5294,8 @@ impl Gwe {
                 let timeout = sent.flags & SMF_TIMEOUT != 0;
                 let _ = writeln!(
                     &mut out,
-                    "    id={id} sender={:?} sender_pid={:?} receiver={} hwnd=0x{:08x} msg=0x{:04x} w=0x{:08x} l=0x{:08x} flags=0x{:08x} ready={} timeout={} result={:?} result_ptr={:?} timeout_ms={:?}",
+                    "    id={id} sender_owner={:?} sender={:?} sender_pid={:?} receiver={} hwnd=0x{:08x} msg=0x{:04x} w=0x{:08x} l=0x{:08x} flags=0x{:08x} ready={} timeout={} result={:?} result_ptr={:?} timeout_ms={:?}",
+                    sent.sender_owner,
                     sent.sender_thread_id,
                     sent.sender_process_id,
                     sent.receiver_thread_id,
@@ -8261,6 +8429,258 @@ mod tests {
         );
         assert!(gwe.sent_message(send_id).is_none());
         assert_eq!(gwe.take_completed_sent_message_result(send_id), None);
+    }
+
+    #[test]
+    fn owned_send_admission_rejects_legacy_unknown_and_waiting_system_sender() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(80, "target", "");
+        let message = Message::new(hwnd, WM_USER + 89, 0, 0, 0);
+        let first_id = gwe.next_sent_message_id;
+        assert_eq!(
+            gwe.queue_send_message_for_window_owned(
+                SentMessageSenderOwner::LegacyUnknown,
+                hwnd,
+                message.clone(),
+                SMF_NULL,
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            gwe.queue_send_message_for_window_owned(
+                SentMessageSenderOwner::SystemNoWait,
+                hwnd,
+                message.clone(),
+                SMF_NULL,
+                None,
+            ),
+            None
+        );
+        assert_eq!(gwe.next_sent_message_id, first_id);
+        assert!(!gwe.has_pending_sent_message_for_thread(80));
+        let id = gwe
+            .queue_send_message_for_window_owned(
+                SentMessageSenderOwner::SystemNoWait,
+                hwnd,
+                message,
+                SMF_SENDER_NO_WAIT,
+                None,
+            )
+            .unwrap();
+        assert_eq!(id, first_id);
+        assert_eq!(
+            gwe.sent_message(id).unwrap().sender_owner,
+            SentMessageSenderOwner::SystemNoWait
+        );
+    }
+
+    #[test]
+    fn sender_birth_owner_survives_pid_reuse_and_numeric_cleanup_cannot_select_it() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let old_process_handle = handles.create_process(41);
+        let old_process = handles
+            .process_birth_key_for_handle(old_process_handle)
+            .unwrap();
+        let old_thread_handle = handles
+            .try_create_thread_in_birth(old_process, 23, 0x401000, 0, false)
+            .unwrap();
+        let old_thread = handles
+            .thread_birth_key_for_handle(old_thread_handle)
+            .unwrap();
+
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(80, "target", "");
+        let old_id = gwe
+            .queue_send_message_for_window_owned(
+                SentMessageSenderOwner::Birth {
+                    thread: old_thread,
+                    process: old_process,
+                },
+                hwnd,
+                Message::new(hwnd, WM_USER + 90, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+        gwe.set_sent_message_sender_process(old_id, 999);
+        assert_eq!(
+            gwe.sent_message(old_id).unwrap().sender_process_id,
+            Some(41)
+        );
+
+        // Keep the old GWE transaction as a deliberate defensive artifact
+        // while the canonical records retire without calling GWE cleanup.
+        assert!(handles.mark_thread_exited(old_thread_handle, 0));
+        handles.close(old_thread_handle).unwrap();
+        assert!(handles.mark_process_exited(old_process_handle, 0));
+        handles.close(old_process_handle).unwrap();
+
+        let new_process_handle = handles.create_process(41);
+        let new_process = handles
+            .process_birth_key_for_handle(new_process_handle)
+            .unwrap();
+        assert_ne!(old_process, new_process);
+        let new_thread_handle = handles
+            .try_create_thread_in_birth(new_process, 24, 0x402000, 0, false)
+            .unwrap();
+        let new_thread = handles
+            .thread_birth_key_for_handle(new_thread_handle)
+            .unwrap();
+        let new_id = gwe
+            .queue_send_message_for_window_owned(
+                SentMessageSenderOwner::Birth {
+                    thread: new_thread,
+                    process: new_process,
+                },
+                hwnd,
+                Message::new(hwnd, WM_USER + 91, 3, 4, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+
+        assert!(gwe.terminate_sent_messages_from_process(41).is_empty());
+        assert!(gwe.terminate_sent_messages_from_sender(24).is_empty());
+        assert_eq!(
+            gwe.terminate_sent_messages_from_process_birth(new_process),
+            vec![new_id]
+        );
+        assert!(gwe.sent_message(old_id).is_some());
+        assert!(gwe.sent_message(new_id).is_none());
+        assert_eq!(
+            gwe.terminate_sent_messages_from_sender_birth(old_thread),
+            vec![old_id]
+        );
+        assert!(gwe.sent_message(old_id).is_none());
+    }
+
+    #[test]
+    fn exact_sender_detachment_clears_ready_result_pointer_and_preserves_origin() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let process_handle = handles.create_process(43);
+        let process = handles
+            .process_birth_key_for_handle(process_handle)
+            .unwrap();
+        let thread_handle = handles
+            .try_create_thread_in_birth(process, 25, 0x401000, 0, false)
+            .unwrap();
+        let thread = handles.thread_birth_key_for_handle(thread_handle).unwrap();
+
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(81, "target", "");
+        let id = gwe
+            .queue_send_message_for_window_owned(
+                SentMessageSenderOwner::Birth { thread, process },
+                hwnd,
+                Message::new(hwnd, WM_USER + 92, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .unwrap();
+        assert!(gwe.set_sent_message_result_ptr(id, 0x5678));
+        assert_eq!(gwe.get_message(81).unwrap().msg, WM_USER + 92);
+        assert_eq!(gwe.reply_message(81, 0xbeef), Some(id));
+        assert_eq!(
+            gwe.completed_sent_message_result_writes(),
+            vec![(id, 0x5678, 0xbeef)]
+        );
+
+        assert_eq!(
+            gwe.terminate_sent_messages_from_sender_birth(thread),
+            vec![id]
+        );
+        let sent = gwe
+            .sent_message(id)
+            .expect("receiver still owns active send");
+        assert_eq!(
+            sent.sender_owner,
+            SentMessageSenderOwner::Birth { thread, process }
+        );
+        assert_eq!(sent.sender_thread_id, None);
+        assert_eq!(sent.sender_process_id, None);
+        assert_eq!(sent.result_ptr, None);
+        assert_ne!(sent.flags & SMF_SENDER_TERMINATED, 0);
+        assert!(gwe.completed_sent_message_result_writes().is_empty());
+        assert!(!gwe.set_sent_message_result_ptr(id, 0x9999));
+        assert_eq!(gwe.take_completed_sent_message_result(id), None);
+        assert!(
+            gwe.terminate_sent_messages_from_process_birth(process)
+                .is_empty()
+        );
+        assert_eq!(gwe.complete_active_sent_message(81, 0xbeef), Some(id));
+        assert!(gwe.sent_message(id).is_none());
+    }
+
+    #[test]
+    fn birth_owned_abandon_rejects_recycled_numeric_sender_authority() {
+        let mut handles = crate::ce::object::HandleTable::default();
+        let old_process_handle = handles.create_process(44);
+        let old_process = handles
+            .process_birth_key_for_handle(old_process_handle)
+            .unwrap();
+        let old_thread_handle = handles
+            .try_create_thread_in_birth(old_process, 26, 0x401000, 0, false)
+            .unwrap();
+        let old_thread = handles
+            .thread_birth_key_for_handle(old_thread_handle)
+            .unwrap();
+        assert!(handles.mark_thread_exited(old_thread_handle, 0));
+        handles.close(old_thread_handle).unwrap();
+        assert!(handles.mark_process_exited(old_process_handle, 0));
+        handles.close(old_process_handle).unwrap();
+
+        let new_process_handle = handles.create_process(44);
+        let new_process = handles
+            .process_birth_key_for_handle(new_process_handle)
+            .unwrap();
+        let new_thread_handle = handles
+            .try_create_thread_in_birth(new_process, 26, 0x402000, 0, false)
+            .unwrap();
+        let new_thread = handles
+            .thread_birth_key_for_handle(new_thread_handle)
+            .unwrap();
+
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(82, "target", "");
+        let id = gwe
+            .queue_send_message_for_window_owned(
+                SentMessageSenderOwner::Birth {
+                    thread: new_thread,
+                    process: new_process,
+                },
+                hwnd,
+                Message::new(hwnd, WM_USER + 93, 0, 0, 0),
+                SMF_NULL,
+                Some(90),
+            )
+            .unwrap();
+        assert!(gwe.set_sent_message_result_ptr(id, 0x5678));
+        assert!(gwe.set_sent_message_timeout_flags(id, 0x4));
+
+        assert!(
+            !gwe.abandon_sent_message_from_sender(id, 26, 44, 82, Some(0x5678), Some(90), 0x4,)
+        );
+        assert!(!gwe.abandon_sent_message_from_sender_birth(
+            id,
+            old_thread,
+            old_process,
+            82,
+            Some(0x5678),
+            Some(90),
+            0x4,
+        ));
+        assert!(gwe.sent_message(id).is_some());
+        assert!(gwe.abandon_sent_message_from_sender_birth(
+            id,
+            new_thread,
+            new_process,
+            82,
+            Some(0x5678),
+            Some(90),
+            0x4,
+        ));
+        assert!(gwe.sent_message(id).is_none());
     }
 
     #[test]

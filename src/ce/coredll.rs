@@ -7219,7 +7219,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
         ))),
         ORD_DEF_DLG_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
-            kernel, memory, thread_id, args, false,
+            kernel, memory, context, thread_id, args, false,
         ))),
         ORD_SET_DLG_ITEM_TEXT_W => Some(CoredllValue::Bool(set_dlg_item_text_w_raw(
             kernel, memory, thread_id, args,
@@ -7234,7 +7234,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_SEND_DLG_ITEM_MESSAGE_W => Some(CoredllValue::U32(send_dlg_item_message_w_raw(
-            kernel, memory, thread_id, args,
+            kernel, memory, context, thread_id, args,
         ))),
         ORD_CHECK_RADIO_BUTTON => Some(CoredllValue::Bool(check_radio_button_raw(
             kernel, thread_id, args,
@@ -8102,9 +8102,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_SEND_MESSAGE_W => Some(CoredllValue::U32(send_message_w_raw(
-            kernel, memory, thread_id, args, true,
+            kernel, memory, context, thread_id, args, true,
         ))),
         ORD_DEF_WINDOW_PROC_W => {
+            if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+                return Some(CoredllValue::U32(0));
+            }
             let msg = raw_arg(args, 1);
             if msg == crate::ce::gwe::WM_ERASEBKGND {
                 Some(CoredllValue::U32(def_window_proc_erasebkgnd_raw(
@@ -8116,7 +8119,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 )))
             } else {
                 Some(CoredllValue::U32(send_message_w_raw(
-                    kernel, memory, thread_id, args, false,
+                    kernel, memory, context, thread_id, args, false,
                 )))
             }
         }
@@ -8128,6 +8131,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(send_message_w_raw(
                 kernel,
                 memory,
+                context,
                 thread_id,
                 shifted_args,
                 false,
@@ -8151,7 +8155,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(ok))
         }
         ORD_SEND_MESSAGE_TIMEOUT => Some(CoredllValue::U32(send_message_timeout_raw(
-            kernel, memory, thread_id, args,
+            kernel, memory, context, thread_id, args,
         ))),
         ORD_IN_SEND_MESSAGE => Some(CoredllValue::Bool(kernel.gwe.in_send_message(thread_id))),
         ORD_GET_MESSAGE_SOURCE => Some(CoredllValue::U32(kernel.gwe.get_message_source(thread_id))),
@@ -32677,13 +32681,60 @@ const COLOR_SCROLLBAR: u32 = 0;
 const COLOR_WINDOW: u32 = 5;
 const COLOR_BTNFACE: u32 = 15;
 
+/// A captured native caller must still own this import before even the
+/// same-thread raw path may return a result or mutate GWES. `None` is the
+/// explicit legacy raw-fixture path; never recover a birth from a reused TID.
+fn raw_send_caller_is_live(
+    kernel: &CeKernel,
+    caller_birth: Option<ThreadBirthKey>,
+    thread_id: u32,
+) -> bool {
+    let Some(birth) = caller_birth else {
+        return true;
+    };
+    if birth.thread_id() != thread_id || !kernel.is_live_thread_birth(birth) {
+        return false;
+    }
+    let Some(process) = kernel.handles.live_thread_creation_owner_by_id(thread_id) else {
+        return false;
+    };
+    kernel.handles.process_execution_live_by_birth(process)
+        && kernel.current_process_birth_key() == Some(process)
+}
+
+fn begin_cross_thread_send_message_for_raw_caller(
+    kernel: &mut CeKernel,
+    caller_birth: Option<ThreadBirthKey>,
+    thread_id: u32,
+    hwnd: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+    timeout_ms: Option<u32>,
+) -> Option<u64> {
+    match caller_birth {
+        Some(birth) if birth.thread_id() == thread_id => kernel
+            .begin_cross_thread_send_message_w_for_birth(
+                birth, hwnd, msg, wparam, lparam, timeout_ms,
+            ),
+        Some(_) => None,
+        None => kernel.begin_cross_thread_send_message_w(
+            thread_id, hwnd, msg, wparam, lparam, timeout_ms,
+        ),
+    }
+}
+
 fn send_message_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
     queue_cross_thread: bool,
 ) -> u32 {
+    if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+        return 0;
+    }
     let hwnd = raw_arg(args, 0);
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
@@ -32701,9 +32752,17 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
             return 0;
         };
         if target_thread != thread_id {
-            if kernel
-                .begin_cross_thread_send_message_w(thread_id, hwnd, msg, wparam, lparam, None)
-                .is_none()
+            if begin_cross_thread_send_message_for_raw_caller(
+                kernel,
+                context.caller_birth,
+                thread_id,
+                hwnd,
+                msg,
+                wparam,
+                lparam,
+                None,
+            )
+            .is_none()
             {
                 kernel
                     .threads
@@ -32824,9 +32883,13 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
 fn send_dlg_item_message_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+        return 0;
+    }
     let hwnd = raw_arg(args, 0);
     let id = raw_arg(args, 1);
     let msg = raw_arg(args, 2);
@@ -32854,6 +32917,7 @@ fn send_dlg_item_message_w_raw<M: CoredllGuestMemory>(
             return send_message_w_raw(
                 kernel,
                 memory,
+                context,
                 thread_id,
                 &[child, msg, wparam, lparam],
                 true,
@@ -64582,9 +64646,13 @@ fn write_completed_send_message_timeout_result<M: CoredllGuestMemory>(
 fn send_message_timeout_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+        return 0;
+    }
     let hwnd = raw_arg(args, 0);
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
@@ -64600,7 +64668,14 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     }
     if hwnd == crate::ce::gwe::HWND_BROADCAST {
         return send_message_timeout_broadcast_raw(
-            kernel, thread_id, msg, wparam, lparam, flags, timeout_ms,
+            kernel,
+            context,
+            thread_id,
+            msg,
+            wparam,
+            lparam,
+            flags,
+            timeout_ms,
         );
     }
     let Some(target_thread) = kernel
@@ -64627,7 +64702,9 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
             return 0;
         }
-        let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+        let Some(send_id) = begin_cross_thread_send_message_for_raw_caller(
+            kernel,
+            context.caller_birth,
             thread_id,
             hwnd,
             msg,
@@ -64666,6 +64743,7 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
 
 fn send_message_timeout_broadcast_raw(
     kernel: &mut CeKernel,
+    context: &CoredllRawContext,
     thread_id: u32,
     msg: u32,
     wparam: u32,
@@ -64673,6 +64751,9 @@ fn send_message_timeout_broadcast_raw(
     flags: u32,
     timeout_ms: u32,
 ) -> u32 {
+    if !raw_send_caller_is_live(kernel, context.caller_birth, thread_id) {
+        return 0;
+    }
     let targets: Vec<(u32, u32)> = kernel
         .gwe
         .z_order_snapshot()
@@ -64706,7 +64787,9 @@ fn send_message_timeout_broadcast_raw(
             timed_out = true;
             continue;
         }
-        if let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+        if let Some(send_id) = begin_cross_thread_send_message_for_raw_caller(
+            kernel,
+            context.caller_birth,
             thread_id,
             target_hwnd,
             msg,
@@ -64762,9 +64845,37 @@ pub(crate) struct SendMessageTimeoutBlockState {
 #[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) fn send_message_timeout_block_prepare(
     kernel: &mut CeKernel,
+    sender_birth: ThreadBirthKey,
+    args: &[u32],
+) -> Option<SendMessageTimeoutBlockState> {
+    send_message_timeout_block_prepare_for_raw_caller(
+        kernel,
+        Some(sender_birth),
+        sender_birth.thread_id(),
+        args,
+    )
+}
+
+/// These old unit fixtures have no registered Task birth. Keep that explicit
+/// numeric lane confined to tests, not the native parked-send producer.
+#[cfg(test)]
+fn send_message_timeout_block_prepare_legacy(
+    kernel: &mut CeKernel,
     thread_id: u32,
     args: &[u32],
 ) -> Option<SendMessageTimeoutBlockState> {
+    send_message_timeout_block_prepare_for_raw_caller(kernel, None, thread_id, args)
+}
+
+fn send_message_timeout_block_prepare_for_raw_caller(
+    kernel: &mut CeKernel,
+    caller_birth: Option<ThreadBirthKey>,
+    thread_id: u32,
+    args: &[u32],
+) -> Option<SendMessageTimeoutBlockState> {
+    if !raw_send_caller_is_live(kernel, caller_birth, thread_id) {
+        return None;
+    }
     let hwnd = raw_arg(args, 0);
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
@@ -64785,7 +64896,9 @@ pub(crate) fn send_message_timeout_block_prepare(
             .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
         return None;
     }
-    let send_id = kernel.begin_cross_thread_send_message_w(
+    let send_id = begin_cross_thread_send_message_for_raw_caller(
+        kernel,
+        caller_birth,
         thread_id,
         hwnd,
         msg,
@@ -73324,7 +73437,7 @@ mod tests {
         let hwnd =
             kernel.create_window_ex_w(receiver_thread, "SMTO_ZERO_BLOCK_PREP", "", None, 0, 0, 0);
 
-        let prepared = send_message_timeout_block_prepare(
+        let prepared = send_message_timeout_block_prepare_legacy(
             &mut kernel,
             sender_thread,
             &[hwnd, crate::ce::gwe::WM_USER + 1, 0, 0, 0, 0, 0],
@@ -73356,7 +73469,7 @@ mod tests {
             .gwe
             .record_thread_dispatched(receiver_thread, kernel.timers.tick_count() - 4999);
 
-        let prepared = send_message_timeout_block_prepare(
+        let prepared = send_message_timeout_block_prepare_legacy(
             &mut kernel,
             sender_thread,
             &[
@@ -73408,7 +73521,7 @@ mod tests {
             .gwe
             .record_thread_dispatched(receiver_thread, kernel.timers.tick_count() - 5001);
 
-        let prepared = send_message_timeout_block_prepare(
+        let prepared = send_message_timeout_block_prepare_legacy(
             &mut kernel,
             sender_thread,
             &[
