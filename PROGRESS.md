@@ -4,6 +4,22 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Live-run preparation (no app run)
+
+The current D: source has a [final source/build seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
+over 21 required files and a preserved, clean-built release EXE/PDB pair with
+matching RSDS. The pre-run Rust telemetry seal passed 1,996/0/9 release and
+1,456/0/3 no-default tests across 18 result blocks each, plus Unicorn-only
+and desktop-without-trace checks. The narrow live guest stable-page budget and
+per-server debug-summary publication stamp are source-tested, not guest-memory
+or cross-endpoint snapshot acceptance. The separate offline safety gate passed
+97 preflight, 40 runner, 14 backup and 9 observer controls. The package-scoped
+clean build removed 9.6 GiB of disposable output after retaining evidence;
+the new binary and symbols are preserved outside `target/`. See the
+[ledger](docs/evidence/ledger.md) for hashes and limitations. No iNavi guest,
+writable mount, real ZIP backup or live observer was run for this gate. A fresh,
+distinct one-run approval remains pending.
+
 ## 2026-10-15 Stage 3 source gates
 
 Each gate is bounded; none is full Stage 3 or live-app acceptance. Newest
