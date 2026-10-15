@@ -3383,8 +3383,8 @@ impl CeKernel {
             0
         };
         let backing_store_targets =
-            self.process_window_backing_store_targets(launch.process_id, cleanup_thread_id);
-        self.destroy_process_windows(launch.process_id, cleanup_thread_id);
+            self.process_window_backing_store_targets_for_birth(exiting_birth);
+        self.destroy_process_windows_for_birth(exiting_birth, cleanup_thread_id);
         if let Some(framebuffer) = framebuffer {
             let _ = self.restore_window_backing_stores(&backing_store_targets, framebuffer);
         } else {
@@ -3470,6 +3470,22 @@ impl CeKernel {
             .collect()
     }
 
+    /// A host exit with a verified process birth must not claim a window from
+    /// an older incarnation of the same public PID. The numeric selector above
+    /// remains only for legacy callers without a process-birth witness.
+    fn process_window_targets_for_birth(&self, owner: ProcessBirthKey) -> Vec<u32> {
+        self.gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                !window.destroyed
+                    && window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                    && window.delivery_owner().process_birth() == Some(owner)
+            })
+            .map(|window| window.hwnd)
+            .collect()
+    }
+
     fn process_window_backing_store_targets(&self, process_id: u32, thread_id: u32) -> Vec<u32> {
         self.gwe
             .windows_snapshot()
@@ -3483,12 +3499,35 @@ impl CeKernel {
             .collect()
     }
 
+    /// Include an already-destroyed HWND so its captured backing can be
+    /// restored, but only if its immutable creation owner is this exit birth.
+    fn process_window_backing_store_targets_for_birth(&self, owner: ProcessBirthKey) -> Vec<u32> {
+        self.gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                    && window.delivery_owner().process_birth() == Some(owner)
+            })
+            .map(|window| window.hwnd)
+            .collect()
+    }
+
+    fn destroy_process_windows_for_birth(&mut self, owner: ProcessBirthKey, thread_id: u32) {
+        let hwnds = self.process_window_targets_for_birth(owner);
+        self.destroy_process_window_targets(owner.process_id(), thread_id, hwnds);
+    }
+
     fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
+        let hwnds = self.process_window_targets(process_id, thread_id);
+        self.destroy_process_window_targets(process_id, thread_id, hwnds);
+    }
+
+    fn destroy_process_window_targets(&mut self, process_id: u32, thread_id: u32, hwnds: Vec<u32>) {
         self.gwe.terminate_sent_messages_from_process(process_id);
         if thread_id != 0 {
             self.gwe.terminate_sent_messages_from_sender(thread_id);
         }
-        let hwnds = self.process_window_targets(process_id, thread_id);
         for hwnd in &hwnds {
             let targets = self.gwe.window_and_descendants(*hwnd).unwrap_or_default();
             self.record_window_lifecycle_trace(
@@ -7162,10 +7201,16 @@ impl CeKernel {
 
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         if Self::is_current_process_pseudo_handle(handle) {
-            self.destroy_process_windows(self.current_process_id, 0);
+            let process_key = self.current_process_birth_key();
+            if let Some(owner) = process_key {
+                self.destroy_process_windows_for_birth(owner, 0);
+            } else {
+                // Direct legacy fixtures can select an unregistered numeric
+                // process. They have no birth witness to filter against.
+                self.destroy_process_windows(self.current_process_id, 0);
+            }
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
-            let process_key = self.handles.process_birth_key(self.current_process_id);
             let was_signaled = self.handles.process_signaled_by_id(self.current_process_id);
             if self
                 .handles
@@ -14600,7 +14645,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: host teardown selects a stale window by reused numeric PID"]
     fn reused_pid_host_teardown_preserves_stale_prior_birth_window_and_backing() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
@@ -14707,6 +14751,60 @@ mod tests {
             })
         );
         assert_eq!(kernel.window_backing_stores.get(&hwnd_a), Some(&backing_a));
+        Ok(())
+    }
+
+    #[test]
+    fn reused_pid_pseudo_host_teardown_preserves_stale_prior_birth_window() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let process_handle_a = kernel.handles.create_process(77);
+        let process_a = kernel
+            .handles
+            .process_birth_key(77)
+            .expect("A process birth");
+        kernel.set_current_process_id(77);
+        let hwnd_a = kernel.create_window_ex_w(9, "STALE_PSEUDO_A", "A", None, 0, 0, 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(process_a)
+        );
+
+        // Keep only A's inert host HWND while the public PID becomes reusable.
+        kernel.set_current_process_id(1);
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(process_a, 0)
+                .is_some()
+        );
+        assert!(kernel.close_handle(process_handle_a)?);
+        let process_handle_b = kernel.handles.create_process(77);
+        let process_b = kernel
+            .handles
+            .process_birth_key(77)
+            .expect("B process birth");
+        assert_ne!(process_a, process_b);
+        kernel.set_current_process_id(77);
+        let hwnd_b = kernel.create_window_ex_w(10, "PSEUDO_B", "B", None, 0, 0, 0);
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_b)
+                .unwrap()
+                .delivery_owner()
+                .process_birth(),
+            Some(process_b)
+        );
+
+        assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert!(!kernel.gwe.is_window(hwnd_b));
+        assert!(kernel.close_handle(process_handle_b)?);
         Ok(())
     }
 
