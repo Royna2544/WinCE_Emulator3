@@ -12,7 +12,7 @@
 //! K is the authentic (thread ID, saved scalar CPU context) resume key. P is the
 //! engine's mapping ledger; cloning never copies a live engine or that ledger.
 
-use crate::ce::memory::PrivatePageIdentity;
+use crate::ce::memory::{PrivatePageIdentity, WritableImageRunIdentity};
 use std::{
     any::Any,
     cell::RefCell,
@@ -60,6 +60,7 @@ struct NativePinSet {
     generic: Vec<Rc<dyn Any>>,
     private_pages: BTreeMap<PrivatePageIdentity, PrivateNativePin>,
     image_runs: BTreeMap<u32, ImageNativePin>,
+    writable_image_runs: BTreeMap<WritableImageRunIdentity, ImageNativePin>,
 }
 
 struct PrivateNativePin {
@@ -164,6 +165,47 @@ impl NativeMappingPins {
             .is_some_and(|pin| pin.host_address == host_address && pin.len == len)
     }
 
+    /// Retain the VM's native-access guard under the exact birth/module/load
+    /// identity. A base-only sealed-image pin cannot protect mutable reuse.
+    pub(crate) fn pin_writable_image<T: 'static>(
+        &self,
+        identity: WritableImageRunIdentity,
+        host_address: usize,
+        len: u32,
+        native_access: T,
+    ) -> bool {
+        let mut pins = self.0.borrow_mut();
+        if pins.writable_image_runs.contains_key(&identity) {
+            return false;
+        }
+        pins.writable_image_runs.insert(
+            identity,
+            ImageNativePin {
+                host_address,
+                len,
+                _backing: Rc::new(native_access),
+            },
+        );
+        true
+    }
+
+    pub(crate) fn has_writable_image(
+        &self,
+        identity: WritableImageRunIdentity,
+        host_address: usize,
+        len: u32,
+    ) -> bool {
+        self.0
+            .borrow()
+            .writable_image_runs
+            .get(&identity)
+            .is_some_and(|pin| pin.host_address == host_address && pin.len == len)
+    }
+
+    pub(crate) fn writable_image_len(&self) -> usize {
+        self.0.borrow().writable_image_runs.len()
+    }
+
     pub(crate) fn image_len(&self) -> usize {
         self.0.borrow().image_runs.len()
     }
@@ -187,7 +229,10 @@ impl NativeMappingPins {
 
     pub(crate) fn len(&self) -> usize {
         let pins = self.0.borrow();
-        pins.generic.len() + pins.private_pages.len() + pins.image_runs.len()
+        pins.generic.len()
+            + pins.private_pages.len()
+            + pins.image_runs.len()
+            + pins.writable_image_runs.len()
     }
 
     pub(crate) fn private_len(&self) -> usize {

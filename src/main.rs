@@ -2483,6 +2483,11 @@ fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
             "slab-backed private VM needs machine-level checkpoint relineage".to_owned(),
         ));
     }
+    if kernel.memory.has_stable_writable_image_runs() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "writable image backing needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -4396,7 +4401,9 @@ fn ce_module_path(path: &str) -> String {
 mod tests {
     use super::*;
     use std::io::Read as _;
-    use wince_emulation_v3::ce::memory::{MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource};
+    use wince_emulation_v3::ce::memory::{
+        MEM_COMMIT, MEM_RESERVE, VirtualAllocationSource, WritableImageRunIdentity,
+    };
 
     #[test]
     fn monitor_recovery_rejects_post_refusal_checkpoint_save() {
@@ -4438,6 +4445,23 @@ mod tests {
             .expect("prepare a committed private slab");
         assert_ne!(kernel.memory.commit_prepared_private_vm(prepared), None);
         assert!(kernel.memory.has_stable_private_slabs());
+        kernel
+    }
+
+    fn kernel_with_writable_image_run() -> CeKernel {
+        let config = RuntimeConfig::load_default().expect("checkpoint test config loads");
+        let mut kernel = CeKernel::boot(config);
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let identity = WritableImageRunIdentity::new(owner, 0x6000_0000, 1, 0x6000_0000)
+            .expect("aligned writable image identity");
+        let prepared = kernel
+            .memory
+            .prepare_writable_image_run(identity, &[0; 4096])
+            .expect("prepare writable image run");
+        assert!(kernel.memory.commit_prepared_writable_image_run(prepared).is_some());
+        assert!(kernel.memory.has_stable_writable_image_runs());
         kernel
     }
 
@@ -4530,6 +4554,39 @@ mod tests {
         ));
         assert_eq!(kernel.memory.virtual_allocations_for(owner).count(), before);
         assert!(kernel.memory.has_stable_private_slabs());
+    }
+
+    #[test]
+    fn monitor_checkpoint_save_and_restore_reject_writable_image_backing() {
+        let clean = CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
+        let framebuffer = VirtualFramebuffer::default();
+        let clean_checkpoint =
+            try_monitor_checkpoint_save("clean".to_owned(), &cpu, &clean, &framebuffer)
+                .expect("clean checkpoint saves");
+        let image_kernel = kernel_with_writable_image_run();
+
+        assert!(matches!(
+            try_monitor_checkpoint_save("image".to_owned(), &cpu, &image_kernel, &framebuffer),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("writable image backing")
+        ));
+        assert!(matches!(
+            try_monitor_checkpoint_restore(&clean_checkpoint, &image_kernel),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("writable image backing")
+        ));
+        let image_checkpoint = MonitorCheckpoint {
+            name: "pre-guard image snapshot".to_owned(),
+            cpu,
+            kernel: image_kernel,
+            framebuffer,
+        };
+        assert!(matches!(
+            try_monitor_checkpoint_restore(&image_checkpoint, &clean),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("writable image backing")
+        ));
     }
 
     #[test]

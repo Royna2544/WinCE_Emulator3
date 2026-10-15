@@ -202,6 +202,8 @@ pub(crate) const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports
 pub(crate) struct PeLoadResult {
     pub(crate) entry: u32,
     pub(crate) entry_image_base: u32,
+    /// One generation for every final run of this main-image load.
+    pub(crate) main_image_generation: u64,
     pub(crate) stack_top: u32,
     /// Memory regions that must be mapped (PE image, DLLs, trampolines, stack).
     pub(crate) memory_regions: Vec<(u32, u32, MemoryPerms, String)>,
@@ -225,6 +227,7 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     let mut result = PeLoadResult {
         entry: 0,
         entry_image_base: 0,
+        main_image_generation: 0,
         stack_top: 0,
         memory_regions: Vec::new(),
         shared_memory_regions: Vec::new(),
@@ -378,7 +381,8 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     // patched branch origins are final executable bytes, not future writes;
     // their stub tails live beyond SizeOfImage. Split only this image; DLLs
     // and runtime import/trap pages remain copy-backed.
-    let main_image_runs = final_main_image_runs(image, mapped)?;
+    let (main_image_runs, main_image_generation) = final_main_image_runs(image, mapped)?;
+    result.main_image_generation = main_image_generation;
 
     // Memory regions: main image runs, DLLs, trampolines (same address order).
     for (blob, perms) in &main_image_runs {
@@ -641,7 +645,7 @@ fn next_image_load_generation() -> Result<u64> {
 fn final_main_image_runs(
     image: &PeImage,
     mapped: Vec<u8>,
-) -> Result<Vec<(MappedBlob, MemoryPerms)>> {
+) -> Result<(Vec<(MappedBlob, MemoryPerms)>, u64)> {
     let mut excluded = Vec::new();
     for descriptor in &image.imports {
         for thunk in &descriptor.imports {
@@ -659,12 +663,21 @@ fn final_main_image_runs(
         .into_iter()
         .map(|page| (page.rva, page.perms))
         .collect::<Vec<_>>();
-    partition_main_image_runs(&image.path, image.image_base(), mapped, &eligible)
+    let generation = next_image_load_generation()?;
+    let runs = partition_main_image_runs(
+        &image.path,
+        image.image_base(),
+        generation,
+        mapped,
+        &eligible,
+    )?;
+    Ok((runs, generation))
 }
 
 fn partition_main_image_runs(
     path: &str,
     base: u32,
+    generation: u64,
     mut mapped: Vec<u8>,
     eligible: &[(u32, MemoryPerms)],
 ) -> Result<Vec<(MappedBlob, MemoryPerms)>> {
@@ -689,7 +702,6 @@ fn partition_main_image_runs(
         page_perms[page_index] = Some(perms);
     }
 
-    let generation = next_image_load_generation()?;
     let mut bytes = mapped.into_iter();
     let mut runs = Vec::new();
     let mut page_index = 0;
@@ -1098,6 +1110,7 @@ mod immutable_image_page_tests {
         let runs = partition_main_image_runs(
             "synthetic.exe",
             0x0040_0000,
+            1,
             final_bytes,
             &[
                 (0x1000, MemoryPerms::READ | MemoryPerms::EXEC),

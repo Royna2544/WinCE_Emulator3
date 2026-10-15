@@ -24,7 +24,8 @@ use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
 use crate::ce::memory::{
     PreparedPrivateVm, PreparedPrivateVmChange, PrivatePageIdentity, PrivateVmNativePageChange,
     STABLE_PRIVATE_PAGE_SIZE, StablePrivatePageExecutionGuard, StablePrivatePagePin,
-    VirtualAllocationBacking, VirtualAllocationSource,
+    VirtualAllocationBacking, VirtualAllocationSource, WritableImageRunIdentity,
+    WritableImageVmLineage,
 };
 #[cfg(all(test, feature = "unicorn"))]
 use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, user_kdata_page};
@@ -169,6 +170,10 @@ pub struct UnicornMips {
     memory: MemoryMap,
     entry: Option<u32>,
     entry_image_base: Option<u32>,
+    #[cfg(feature = "unicorn")]
+    main_image_generation: Option<u64>,
+    #[cfg(feature = "unicorn")]
+    writable_main_image: Option<WritableMainImageAdoption>,
     stack_top: Option<u32>,
     initial_thread_id: u32,
     dll_search_dirs: Vec<std::path::PathBuf>,
@@ -288,6 +293,34 @@ pub struct UnicornMips {
     /// alias) may be reused before the host consumes that stop.
     #[cfg(feature = "unicorn")]
     saved_worker_exit_birth: Option<crate::ce::object::ThreadBirthKey>,
+}
+
+/// Explicit, synthetic-only Stage 2 adoption until the whole CPU run path
+/// (including live code indexing and parked writes) is migrated. A CPU clone
+/// retains the fence but cannot reuse this VM lineage as execution authority.
+#[cfg(feature = "unicorn")]
+#[derive(Debug)]
+struct WritableMainImageAdoption {
+    owner: crate::ce::object::ProcessBirthKey,
+    module_base: u32,
+    load_generation: u64,
+    vm_lineage: WritableImageVmLineage,
+    runs: Vec<WritableImageRunIdentity>,
+    valid: bool,
+}
+
+#[cfg(feature = "unicorn")]
+impl Clone for WritableMainImageAdoption {
+    fn clone(&self) -> Self {
+        Self {
+            owner: self.owner,
+            module_base: self.module_base,
+            load_generation: self.load_generation,
+            vm_lineage: self.vm_lineage.clone(),
+            runs: self.runs.clone(),
+            valid: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2184,6 +2217,10 @@ impl UnicornMips {
             memory: MemoryMap::default(),
             entry: None,
             entry_image_base: None,
+            #[cfg(feature = "unicorn")]
+            main_image_generation: None,
+            #[cfg(feature = "unicorn")]
+            writable_main_image: None,
             stack_top: None,
             initial_thread_id: MAIN_GUEST_THREAD_ID,
             dll_search_dirs: Vec::new(),
@@ -7830,6 +7867,8 @@ impl UnicornMips {
                 dll_search_dirs: std::mem::take(&mut self.dll_search_dirs),
                 entry: self.entry.take(),
                 entry_image_base: self.entry_image_base.take(),
+                main_image_generation: self.main_image_generation.take(),
+                writable_main_image: self.writable_main_image.take(),
                 stack_top: self.stack_top.take(),
                 initial_thread_id: self.initial_thread_id,
                 mapped_blobs: std::mem::take(&mut self.mapped_blobs),
@@ -8113,8 +8152,139 @@ impl UnicornMips {
     }
 
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
+        #[cfg(feature = "unicorn")]
+        if self.writable_main_image.is_some() {
+            return Err(Error::Backend(
+                "writable main image remains owned by its exact VM load".to_owned(),
+            ));
+        }
         let result = super::pe_loader::load_pe_image_with_dlls(image, dlls)?;
         self.apply_pe_load_result(result)
+    }
+
+    /// Explicit Stage 2 source-test seam. The ordinary app loader stays
+    /// copy-backed while O-M3 image-page physical charging is unresolved.
+    /// The caller must supply the current canonical live birth; this consumes
+    /// the loader's final patched mutable main-image runs into VM ownership.
+    #[cfg(feature = "unicorn")]
+    pub(crate) fn adopt_writable_main_image_for_birth(
+        &mut self,
+        kernel: &mut CeKernel,
+        owner: crate::ce::object::ProcessBirthKey,
+    ) -> Result<()> {
+        if self.writable_main_image.is_some()
+            || self.run_slice_generation != 0
+            || kernel.current_process_birth_key() != Some(owner)
+            || !kernel.handles.process_birth_can_create_threads(owner)
+        {
+            return Err(Error::Backend(
+                "writable main-image adoption has no fresh live process authority".to_owned(),
+            ));
+        }
+        let module_base = self.entry_image_base.ok_or_else(|| {
+            Error::Backend("writable main-image adoption has no loaded EXE".to_owned())
+        })?;
+        let generation = self.main_image_generation.filter(|generation| *generation != 0).ok_or_else(
+            || Error::Backend("writable main-image load generation is missing".to_owned()),
+        )?;
+        let mut selected = Vec::new();
+        for (index, blob) in self.mapped_blobs.iter().enumerate() {
+            if !blob.name.starts_with("image:") {
+                continue;
+            }
+            let Some(bytes) = (match &blob.bytes {
+                crate::emulator::pe_loader::BlobBytes::Owned(bytes) => Some(bytes),
+                crate::emulator::pe_loader::BlobBytes::Sealed(_) => None,
+            }) else {
+                continue;
+            };
+            let len = u32::try_from(bytes.len()).map_err(|_| {
+                Error::Backend("writable main-image run exceeds guest address width".to_owned())
+            })?;
+            let region = self.memory.region_containing(blob.base).ok_or_else(|| {
+                Error::Backend("writable main-image run has no mapped region".to_owned())
+            })?;
+            if !self.memory.contains_range(blob.base, len)
+                || region.name != "pe-image"
+                || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+                || len == 0
+                || len & 0xfff != 0
+            {
+                return Err(Error::Backend(format!(
+                    "writable main-image run 0x{:08x} has invalid extent or protection",
+                    blob.base
+                )));
+            }
+            let identity = WritableImageRunIdentity::new(
+                owner,
+                module_base,
+                generation,
+                blob.base,
+            )
+            .ok_or_else(|| Error::Backend("invalid writable main-image identity".to_owned()))?;
+            selected.push((index, identity));
+        }
+        if selected.is_empty() {
+            return Err(Error::Backend(
+                "main image has no mutable final-byte run to adopt".to_owned(),
+            ));
+        }
+        let mut committed = Vec::new();
+        for (index, identity) in &selected {
+            let bytes = &self.mapped_blobs[*index].bytes;
+            let published = kernel
+                .memory
+                .prepare_writable_image_run(*identity, bytes)
+                .and_then(|prepared| kernel.memory.commit_prepared_writable_image_run(prepared));
+            if published.is_none() {
+                if !committed.is_empty() {
+                    kernel
+                        .memory
+                        .retire_writable_image_module(owner, module_base, generation);
+                }
+                return Err(Error::Backend(format!(
+                    "VM refused writable main-image run 0x{:08x}",
+                    identity.run_base()
+                )));
+            }
+            committed.push(*identity);
+        }
+        let adopted_bases: BTreeSet<_> = committed.iter().map(|key| key.run_base()).collect();
+        self.mapped_blobs.retain(|blob| {
+            !adopted_bases.contains(&blob.base)
+                || !blob.name.starts_with("image:")
+        });
+        self.writable_main_image = Some(WritableMainImageAdoption {
+            owner,
+            module_base,
+            load_generation: generation,
+            vm_lineage: kernel.memory.writable_image_lineage(),
+            runs: committed,
+            valid: true,
+        });
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn checked_writable_main_image<'a>(
+        &'a self,
+        kernel: &CeKernel,
+    ) -> Result<&'a WritableMainImageAdoption> {
+        let adoption = self.writable_main_image.as_ref().ok_or_else(|| {
+            Error::Backend("writable main image was not explicitly adopted".to_owned())
+        })?;
+        if !adoption.valid
+            || kernel.current_process_birth_key() != Some(adoption.owner)
+            || !kernel.handles.process_birth_can_create_threads(adoption.owner)
+            || !kernel.memory.contains_writable_image_lineage(&adoption.vm_lineage)
+            || self.entry_image_base != Some(adoption.module_base)
+            || self.main_image_generation != Some(adoption.load_generation)
+        {
+            return Err(Error::Backend(
+                "writable main image has stale CPU/process/VM lineage".to_owned(),
+            ));
+        }
+        Ok(adoption)
     }
 
     fn apply_pe_load_result(&mut self, result: PeLoadResult) -> Result<()> {
@@ -8129,6 +8299,10 @@ impl UnicornMips {
         }
         self.entry = Some(result.entry);
         self.entry_image_base = Some(result.entry_image_base);
+        #[cfg(feature = "unicorn")]
+        {
+            self.main_image_generation = Some(result.main_image_generation);
+        }
         self.stack_top = Some(result.stack_top);
         self.import_traps.merge(result.import_traps);
         self.fast_start_site_cache.clear();
@@ -8209,6 +8383,16 @@ impl UnicornMips {
     ) -> AttemptExecution {
         let mut report = NativeAttemptReport::no_attempt(limits);
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+        if self.writable_main_image.is_some() {
+            report.failure_operation = Some("unmigrated writable-image run boundary");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "opt-in writable main image cannot enter the ordinary CPU run path"
+                        .to_owned(),
+                )),
+            };
+        }
         if self.completed_active_process_exit {
             report.failure_operation = Some("completed process CPU preflight");
             return AttemptExecution {
@@ -15070,6 +15254,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             memory: MemoryMap::default(),
             entry: None,
             entry_image_base: None,
+            main_image_generation: None,
+            writable_main_image: None,
             stack_top: None,
             initial_thread_id: MAIN_GUEST_THREAD_ID,
             dll_search_dirs: Vec::new(),
@@ -17217,6 +17403,15 @@ struct NativeSealedImageRunRecord {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeWritableImageRunRecord {
+    identity: WritableImageRunIdentity,
+    len: u32,
+    host_address: usize,
+    perms: u32,
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
 struct KernelMemoryMappings {
     ranges: Vec<(u32, u32)>,
@@ -17230,6 +17425,7 @@ struct KernelMemoryMappings {
     // strong page pins before FFI and across all metadata transfers.
     private_pages: BTreeMap<u32, NativePrivatePageRecord>,
     sealed_image_runs: BTreeMap<u32, NativeSealedImageRunRecord>,
+    writable_image_runs: BTreeMap<WritableImageRunIdentity, NativeWritableImageRunRecord>,
     heap_generation: u64,
     virtual_generation: u64,
 }
@@ -17245,6 +17441,7 @@ impl KernelMemoryMappings {
             virtual_pages: HashSet::new(),
             private_pages: BTreeMap::new(),
             sealed_image_runs: BTreeMap::new(),
+            writable_image_runs: BTreeMap::new(),
             heap_generation: u64::MAX,
             virtual_generation: u64::MAX,
         }
@@ -17430,6 +17627,180 @@ fn map_sealed_image_runs<D>(
         })?;
         mapped.sealed_image_runs.insert(blob.base, record);
         mapped.ranges.push((blob.base, record.len));
+    }
+    Ok(())
+}
+
+/// Reconcile every unmigrated region while excluding the VM-owned image runs
+/// from ordinary anonymous `mem_map`. This opt-in seam does not enter the
+/// normal app run path until its other code/restore consumers are migrated.
+#[cfg(feature = "unicorn")]
+fn reconcile_native_memory_for_adopted_main<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+    memory: &MemoryMap,
+    blobs: &[MappedBlob],
+    expected_sealed: &BTreeMap<u32, NativeSealedImageRunRecord>,
+) -> Result<Vec<(u32, u32)>> {
+    let adoption = cpu.checked_writable_main_image(kernel)?;
+    let mut copy_regions = memory.clone();
+    for identity in &adoption.runs {
+        let pin = kernel.memory.writable_image_run_pin(*identity).ok_or_else(|| {
+            Error::Backend("writable main-image run is no longer active in VM".to_owned())
+        })?;
+        if !kernel.memory.contains_writable_image_run_pin(&pin) {
+            return Err(Error::Backend(
+                "writable main-image run has a foreign VM pin".to_owned(),
+            ));
+        }
+        let len = u32::try_from(pin.len())
+            .map_err(|_| Error::Backend("writable image run is too large".to_owned()))?;
+        let region = copy_regions.region_containing(identity.run_base()).ok_or_else(|| {
+            Error::Backend("adopted image run has no ordinary region".to_owned())
+        })?;
+        if region.base != identity.run_base()
+            || region.size != len
+            || region.name != "pe-image"
+            || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+            || copy_regions.unmap_exact(identity.run_base(), len).is_none()
+        {
+            return Err(Error::Backend(
+                "adopted image run cannot be excluded from ordinary mapping".to_owned(),
+            ));
+        }
+    }
+    reconcile_persistent_native_memory_with_private(
+        uc,
+        &copy_regions,
+        blobs,
+        &HashSet::new(),
+        &BTreeMap::new(),
+        expected_sealed,
+    )
+}
+
+/// Pin the exact VM run before passing its pointer to Unicorn. Every guard
+/// remains in NativeMappingPins until the native lease's checked owner close;
+/// a failed map must abort that owner before its pins are released.
+#[cfg(feature = "unicorn")]
+fn map_adopted_writable_main_image_runs<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+    mapped: &mut KernelMemoryMappings,
+    native_pins: &NativeMappingPins,
+) -> Result<()> {
+    let adoption = cpu.checked_writable_main_image(kernel)?;
+    if !mapped.writable_image_runs.is_empty() || native_pins.writable_image_len() != 0 {
+        return Err(Error::Backend(
+            "writable image owner reuse is not accepted by this source cut".to_owned(),
+        ));
+    }
+    let native_regions = uc
+        .mem_regions()
+        .map_err(|err| Error::Backend(format!("inspect native image regions: {err:?}")))?;
+    let mut planned = Vec::new();
+    for identity in &adoption.runs {
+        if identity.owner() != adoption.owner
+            || identity.module_base() != adoption.module_base
+            || identity.load_generation() != adoption.load_generation
+        {
+            return Err(Error::Backend(
+                "writable main-image run differs from adopted module".to_owned(),
+            ));
+        }
+        let pin = kernel.memory.writable_image_run_pin(*identity).ok_or_else(|| {
+            Error::Backend("writable main-image run is no longer active in VM".to_owned())
+        })?;
+        if !kernel.memory.contains_writable_image_run_pin(&pin) {
+            return Err(Error::Backend(
+                "writable main-image run has a foreign VM pin".to_owned(),
+            ));
+        }
+        let len = u32::try_from(pin.len())
+            .map_err(|_| Error::Backend("writable image run is too large".to_owned()))?;
+        let region = cpu.memory.region_containing(identity.run_base()).ok_or_else(|| {
+            Error::Backend("writable image run has no CPU memory region".to_owned())
+        })?;
+        if region.base != identity.run_base()
+            || region.size != len
+            || region.name != "pe-image"
+            || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+        {
+            return Err(Error::Backend(
+                "writable image run lost its exact CPU extent or protection".to_owned(),
+            ));
+        }
+        let native_access = pin.begin_native_access().map_err(|err| {
+            Error::Backend(format!("writable image native lease refused: {err:?}"))
+        })?;
+        let host_address = native_access.native_ptr() as usize;
+        let begin = u64::from(identity.run_base());
+        let end = begin + u64::from(len);
+        if host_address & 0xfff != 0
+            || native_regions
+                .iter()
+                .any(|native| native.begin < end && native.end >= begin)
+            || mapped.ranges.iter().any(|(base, size)| {
+                let other_begin = u64::from(*base);
+                let other_end = other_begin + u64::from(*size);
+                other_begin < end && begin < other_end
+            })
+        {
+            return Err(Error::Backend(format!(
+                "writable image run 0x{:08x} collides with a native mapping",
+                identity.run_base()
+            )));
+        }
+        let record = NativeWritableImageRunRecord {
+            identity: *identity,
+            len,
+            host_address,
+            perms: unicorn_perms(region.perms).0 as u32,
+        };
+        planned.push((record, native_access));
+    }
+    for (record, native_access) in planned {
+        if !native_pins.pin_writable_image(
+            record.identity,
+            record.host_address,
+            record.len,
+            native_access,
+        ) {
+            return Err(Error::Backend(
+                "writable image native pin identity already exists".to_owned(),
+            ));
+        }
+        if !native_pins.has_writable_image(
+            record.identity,
+            record.host_address,
+            record.len,
+        ) {
+            return Err(Error::Backend(
+                "writable image native pin changed before map".to_owned(),
+            ));
+        }
+        // SAFETY: the exact VM run is page-aligned and the native-access
+        // guard is already owned by this native lease's strong pin table.
+        unsafe {
+            uc.mem_map_ptr(
+                u64::from(record.identity.run_base()),
+                u64::from(record.len),
+                unicorn_perms(MemoryPerms::from_bits_truncate(record.perms as u8)),
+                record.host_address as *mut std::ffi::c_void,
+            )
+        }
+        .map_err(|err| {
+            Error::Backend(format!(
+                "pointer-map writable image run 0x{:08x}: {err:?}",
+                record.identity.run_base()
+            ))
+        })?;
+        mapped
+            .writable_image_runs
+            .insert(record.identity, record);
+        mapped.ranges.push((record.identity.run_base(), record.len));
     }
     Ok(())
 }
@@ -91765,7 +92136,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red until writable main-image pages have one pinned byte authority"]
     fn writable_main_image_store_survives_fresh_owner_without_blob_readback() -> crate::Result<()> {
         const ENTRY: u32 = 0x0040_2000;
         const TARGET: u32 = 0x0040_2100;
@@ -91783,82 +92153,139 @@ mod unicorn_tests {
         let image = crate::pe::PeImage::parse_bytes("writable-image-red.exe", &bytes)?;
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
+        let mut kernel = phase1_kernel("writable-image-red.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        cpu.adopt_writable_main_image_for_birth(&mut kernel, owner)?;
+        let adoption = cpu.writable_main_image.as_ref().expect("adopted main image");
+        let identity = adoption
+            .runs
+            .iter()
+            .copied()
+            .find(|identity| {
+                kernel
+                    .memory
+                    .writable_image_run_pin(*identity)
+                    .is_some_and(|pin| {
+                        TARGET >= identity.run_base()
+                            && (TARGET - identity.run_base()) as usize + 4 <= pin.len()
+                    })
+            })
+            .expect("production loader's writable target run");
+        let pin = kernel
+            .memory
+            .writable_image_run_pin(identity)
+            .expect("canonical VM image backing");
+        assert!(ENTRY >= identity.run_base());
+        assert!((ENTRY - identity.run_base()) as usize + 8 <= pin.len());
         let image_blobs: Vec<_> = cpu
             .mapped_blobs
             .iter()
-            .filter(|blob| {
-                blob.name.starts_with("image:")
-                    && TARGET >= blob.base
-                    && (TARGET - blob.base) as usize + 4 <= blob.bytes.len()
-            })
+            .filter(|blob| blob.name.starts_with("image:"))
             .cloned()
             .collect();
-        assert_eq!(image_blobs.len(), 1, "production loader's target run");
-        let blob = &image_blobs[0];
-        assert!(ENTRY >= blob.base);
-        assert!((ENTRY - blob.base) as usize + 8 <= blob.bytes.len());
+        assert!(image_blobs.is_empty(), "adopted Owned run must be dropped");
         let mut image_memory = MemoryMap::default();
         image_memory.map(
-            blob.base,
-            blob.bytes.len() as u32,
+            identity.run_base(),
+            pin.len() as u32,
             MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
             "pe-image",
         )?;
         let guard = super::SealedHostWriteGuard::from_mapped_blobs(&image_blobs)?;
         let empty_sealed = BTreeMap::new();
 
-        let mut first = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let first_pins = super::NativeMappingPins::default();
+        // A copied CPU and a cloned VM cannot reuse the original adoption.
+        let clone_cpu = cpu.clone();
+        let mut clone_probe = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let mut clone_mapped = super::KernelMemoryMappings::new(&image_blobs);
+        let clone_pins = super::NativeMappingPins::default();
+        assert!(super::map_adopted_writable_main_image_runs(
+            &mut clone_probe,
+            &clone_cpu,
+            &kernel,
+            &mut clone_mapped,
+            &clone_pins,
+        )
+        .is_err());
+        let cloned_kernel = kernel.clone();
+        assert!(super::map_adopted_writable_main_image_runs(
+            &mut clone_probe,
+            &cpu,
+            &cloned_kernel,
+            &mut clone_mapped,
+            &clone_pins,
+        )
+        .is_err());
+        assert_eq!(clone_pins.writable_image_len(), 0);
+        drop(clone_probe);
+
+        let slot: super::ProcessNativeEngine<(), super::KernelMemoryMappings> =
+            super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
+
+        let mut first = slot
+            .lease()
+            .map_err(|err| crate::Error::Backend(format!("first native lease: {err:?}")))?;
+        let first_pins = first.mapping_pins();
         let mut first_mapped = super::KernelMemoryMappings::new(&image_blobs);
-        first_mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+        first_mapped.ranges = super::reconcile_native_memory_for_adopted_main(
             &mut first,
+            &cpu,
+            &kernel,
             &image_memory,
             &image_blobs,
-            &HashSet::new(),
-            &BTreeMap::new(),
             &empty_sealed,
         )?;
-        super::map_sealed_image_runs(
+        super::map_adopted_writable_main_image_runs(
             &mut first,
-            &image_blobs,
+            &cpu,
+            &kernel,
             &mut first_mapped,
-            &empty_sealed,
             &first_pins,
         )?;
         let first_copy_bytes =
             super::sync_persisted_blobs_to_native(&mut first, &image_blobs, false, &guard)?;
+        assert_eq!(first_mapped.writable_image_runs.len(), 1);
+        assert_eq!(first_pins.writable_image_len(), 1);
         first.reg_write(RegisterMIPS::V0, u64::from(TARGET)).unwrap();
         first.reg_write(RegisterMIPS::T1, u64::from(VALUE)).unwrap();
         first.emu_start(u64::from(ENTRY), u64::from(ENTRY + 4), 0, 1).unwrap();
         assert_eq!(super::read_unicorn_u32(&first, TARGET), Some(VALUE));
-        let offset = (TARGET - blob.base) as usize;
+        let offset = (TARGET - identity.run_base()) as usize;
+        let mut canonical = [0; 4];
+        assert!(pin.read_bytes(offset, &mut canonical).is_err());
         // Deliberately do not call sync_mapped_blobs_from_unicorn: the migrated
         // writable page must already be the one byte authority after real MIPS.
-        let canonical_after_store = u32::from_le_bytes(
-            blob.bytes[offset..offset + 4]
-                .try_into()
-                .expect("target word in loader-backed run"),
-        );
-        drop(first); // Native owner closes before its pointer pins.
-        drop(first_mapped);
+        first.set_metadata(first_mapped);
+        first
+            .finish()
+            .map_err(|err| crate::Error::Backend(format!("close first native owner: {err:?}")))?;
         drop(first_pins);
+        pin.read_bytes(offset, &mut canonical)
+            .map_err(|err| crate::Error::Backend(format!("read canonical image: {err:?}")))?;
+        let canonical_after_store = u32::from_le_bytes(canonical);
 
-        let mut fresh = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
-        let fresh_pins = super::NativeMappingPins::default();
+        let mut fresh = slot
+            .lease()
+            .map_err(|err| crate::Error::Backend(format!("fresh native lease: {err:?}")))?;
+        let fresh_pins = fresh.mapping_pins();
         let mut fresh_mapped = super::KernelMemoryMappings::new(&image_blobs);
-        fresh_mapped.ranges = super::reconcile_persistent_native_memory_with_private(
+        fresh_mapped.ranges = super::reconcile_native_memory_for_adopted_main(
             &mut fresh,
+            &cpu,
+            &kernel,
             &image_memory,
             &image_blobs,
-            &HashSet::new(),
-            &BTreeMap::new(),
             &empty_sealed,
         )?;
-        super::map_sealed_image_runs(
+        super::map_adopted_writable_main_image_runs(
             &mut fresh,
-            &image_blobs,
+            &cpu,
+            &kernel,
             &mut fresh_mapped,
-            &empty_sealed,
             &fresh_pins,
         )?;
         let fresh_copy_bytes =
@@ -91869,8 +92296,10 @@ mod unicorn_tests {
             .emu_start(u64::from(ENTRY + 4), u64::from(ENTRY + 8), 0, 1)
             .unwrap();
         let fresh_load = fresh.reg_read(RegisterMIPS::T2).unwrap() as u32;
-        drop(fresh);
-        drop(fresh_mapped);
+        fresh.set_metadata(fresh_mapped);
+        fresh
+            .finish()
+            .map_err(|err| crate::Error::Backend(format!("close fresh native owner: {err:?}")))?;
         drop(fresh_pins);
 
         eprintln!(
