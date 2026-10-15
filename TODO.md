@@ -123,6 +123,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Separately prove ownership of nonmodal descendant CPU queues on successful
      natural parked, initial-child `Exited` and active exact-birth completion;
      either hoist/extract them or fail closed before a destructive drop.
+     Give the already-exited parked-CPU cleanup branch a typed retention or
+     quarantine rule for residual modal state; it has no earlier exit to
+     preflight at that point.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their

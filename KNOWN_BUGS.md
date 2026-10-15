@@ -198,6 +198,10 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     initial-child `Completed` instead hoist descendants. This is an untested
     ownership-loss path, not an attributed live failure, and a modal-presence
     refusal alone does not repair it.
+    The `parked_process_handle_exit_code` branch also drops an already-exited
+    parked CPU without inspecting its modal state; an earlier external Kernel
+    exit cannot be made atomic by this later finalizer preflight. Retention or
+    quarantine for that stale-CPU path remains a separate source-audited gap.
     Failures after preflight are not proven
     whole-exit atomic. CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin
