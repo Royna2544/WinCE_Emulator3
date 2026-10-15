@@ -1609,7 +1609,7 @@ full exit capture retirement, implicit gesture ownership, owner-filtered host
 teardown, remaining producers, CE6 implementation parity, full Stage 3 and
 live iNavi acceptance remain open.
 
-## Live-run preparation: telemetry, clean build and offline safety (2026-10-15, source-only)
+## Live-run preparation: telemetry, clean build and offline safety (2026-10-15, historical source-only gate)
 
 After the W-B1c source gate, a pre-run Rust
 [seal](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-pre-run-seal.md)
@@ -1651,14 +1651,74 @@ records the source-to-binary checks and independent review. Its build-receipt
 test flags are cross-checked attestations, not cryptographic execution proof.
 
 No iNavi guest, real writable-mount backup, mount write or live observer ran
-for this gate. A fresh, distinct one-run chat approval remains pending; its
-authenticity needs human review. A future approved run must make fresh adjacent
-ZIPs after approval, recheck mount content and preserved artifacts, keep the
+for this historical gate. At that time, a fresh, distinct one-run chat approval
+was pending and would require human authenticity review. A future approved run
+must make fresh adjacent ZIPs after approval, recheck mount content and
+preserved artifacts, keep the
 mounts quiescent, and disclose LAN exposure at the mandated
 `192.168.0.39:8765` endpoint. Offline controls do not eliminate a simultaneous
 driver/monitor death immediately after spawn or external writes after the
 last mount scan. Splash/map readiness, boot time, guest response lag and the
 current build's live memory footprint are still unmeasured.
+
+## Aborted prelaunch backup, withdrawn approval and script-only reseal (2026-10-15, no app run)
+
+Approval `call_9b35e9d31fdf402ea082a3eb6a40ae16` was verified at
+02:50:21Z for one backup/run workflow. The adjacent backup began at 02:55:00Z
+and stopped at 03:00:01Z when the old `File.Replace` helper passed an empty
+backup-file path while updating the existing manifest; its recovery update
+failed the same way. The [failure record](../../evidence/pre-live-mount-backup-20261015T025500Z/failure.json)
+(SHA-256 `8D2B9F4291F55F3396F2FE1C4E17D6CBD3D029C0DFA69B55AED4C30E697EDF29`)
+and [disposition](../../evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)
+retain the scope. `manifest.json` remained `complete=false`; only the SD ZIP
+was verified and published adjacent to its original folder:
+`D:\INAVI_Emulator\INAVI-pre-live-20261015T025500Z.zip`, 5,973,898,396 bytes,
+SHA-256 `6032F822551CFB5F28ED079CB5B41CB02B1585F8AFF16EA303B54A74B0C2C949`.
+No ResidentFlash or EmulatorRoot ZIP, complete triplet, runner reservation or
+guest launch followed. This workflow made no guest write to the original
+mounts; independent writers were not audited. The SD ZIP is retained pending
+the user's disposal choice and cannot be reused for a future run.
+
+The approval was withdrawn/void. A deny-only `withdrawn` row records its
+approval reference, attempt ID, UTC, reason, the one actual ZIP hash and a
+hash-preserved failure-evidence path—no invented run manifest or process.
+Both append-only [local](../../evidence/live-run-use.jsonl) and
+[tracked](live-run-use.jsonl) ledgers now have seven byte-identical rows,
+SHA-256 `53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`.
+The repaired runner independently rehashes withdrawal evidence when validating
+the ledger. Reusing that approval or ZIP remains denied; a fresh approval is
+required before **any** further backup or launch.
+
+The backup and runner JSON overwrite defects were captured by
+[expected-red controls](../../evidence/stage3-live-evidence-20261015/atomic-json-overwrite-expected-red-receipt.md)
+and then closed by the [green offline control](../../evidence/stage3-live-evidence-20261015/atomic-json-overwrite-green-receipt.md).
+The current [22-file a02 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+has SHA-256 `1DC1537217C621EBD1B8C2D5E682C50B9CFA6FA131D22CC3202F54C7C5651F97`;
+its full W-B1c-scoped [patch](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-full-scoped.patch)
+has SHA-256 `8CF8CA60072D4F0ECDA8B21D5400A6B00F25344671D8082E374145F19CDAD18C`.
+The [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
+has SHA-256 `A3746E1729186997CC684030E5E5BA772A1A3038132F49E5BAE9A04C6A21D580`.
+Its [raw offline gate](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-offline-gate.raw.txt)
+(SHA-256 `3843D86AC1495D9A29D64CA284ECA51A63A3B05FD4700E6D7E963F1CD761D268`)
+records **123/123 preflight, 40/40 runner, 14/14 backup, 9/9 observer** and
+green atomic overwrite controls. The previously sealed 11 Rust/Cargo files
+and `.gitattributes` match the clean-build source; the same preserved EXE/PDB
+and RSDS are carried forward, **without a Rust rebuild**. The earlier 21-file
+seal and 97/40/14/9 controls above remain historical; the interim a01 seal
+is superseded and **not live-usable**. The
+[withdrawn-ZIP cross-row receipt](../../evidence/stage3-live-evidence-20261015/withdrawn-zip-conflict-red-green-receipt.md)
+preserves an expected-red log (SHA-256
+`DB936FA73ABD15C757259A59A6B683FE29105D34B36A62838A5455CAE5DE2505`):
+three false accepts shared a withdrawn ZIP with earlier/later historical rows
+or another withdrawal. A02 rejects those conflicts with `LEDGER_INVALID` and
+requires withdrawal evidence to contain exactly path and hash. Build-bridge
+pass flags are attestations linked to preserved Rust and script receipts, not
+a new binary test execution or live-app acceptance. No fresh Claude review of
+the a02 seal was available because that session reached its limit; this is
+not a waived review or new run authorization.
+The [a02 source/build receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-build-receipt.md)
+records the per-file/binary hashes, actual-ledger and synthetic-bridge checks,
+and the remaining prelaunch conditions together.
 
 ## Chat-project validation notes (not in this repository)
 

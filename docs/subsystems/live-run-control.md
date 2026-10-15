@@ -1,10 +1,14 @@
 # Mounted live-run control
 
-Status: host-workflow design and source-only safety gate. This page does **not**
-record an iNavi launch, a fresh backup, a consumed approval, or full CE6
-bring-up. The current executable and scripts were sealed and tested offline in
-the [final preparation receipt](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md);
-the original writable mounts were not used by that gate.
+Status: host-workflow design and source-only safety gate, with one **aborted
+prelaunch backup** recorded below. It did not produce a complete three-mount
+backup or launch the runner/guest. The current scripts have a
+[22-file a02 seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+and [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json);
+the earlier [21-file preparation gate](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
+is historical, not the current script identity. Interim a01 is superseded and
+not live-usable. No fresh Claude review of a02 was available because that
+session reached its limit. Neither gate establishes full CE6 bring-up.
 
 The [common anchor](../ARCHITECTURE.md) A1, A5 and A6 owns guest authority,
 time and evidence semantics; the [migration plan](../PLAN.md) owns runtime
@@ -22,10 +26,11 @@ preserved EXE/PDB pair, configuration/app hashes, three new backup ZIP hashes,
 approval citation and run caps. The [pure preflight core](../../scripts/inavi_run_preflight_core.ps1)
 validates this structure; the [runner](../../scripts/inavi_bounded_e22.ps1)
 re-reads and rehashes it under the launch monitor's lock. In the current
-source-only gate, the seal enumerates 21 required source files and a scoped
-patch; the preserved release EXE and PDB share an RSDS GUID+age and are outside
-disposable `target/` ([seal and build receipt](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md),
-[clean-build receipt](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-clean-build-receipt.md)).
+source-only gate, the current seal enumerates 22 required source files and a
+full W-B1c-scoped patch; the preserved release EXE and PDB share an RSDS
+GUID+age and are outside disposable `target/`. The bridge binds the repaired
+scripts to that unchanged [clean-built binary](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-clean-build-receipt.md);
+it is **not** a new Rust build. The old 21-file seal remains historical.
 The test-pass flags and patch identity in the build receipt are reviewed
 attestations tied to preserved receipts, **not** cryptographic proof that the
 runner executed those tests. An old EXE, a same-named PDB, a Git HEAD alone,
@@ -52,6 +57,12 @@ one bounded run. Where supervisory cross-check is requested, retain that
 check as another review receipt before invoking the runner. No approval in
 earlier run history or in this design page authorizes a new launch.
 
+Approval `call_9b35e9d31fdf402ea082a3eb6a40ae16` was used to start a
+prelaunch backup, then withdrawn/void after its script failed. It cannot
+authorize another backup or launch. The [disposition](../../evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)
+and `withdrawn` ledger row preserve the reason and one completed SD ZIP.
+A **new** distinct approval is required before any further backup or launch.
+
 The script checks manifest/caller citation equality, timestamp syntax,
 backup-start time after the reported approval observation and ledger
 non-reuse. It cannot authenticate the conversation, determine the message's
@@ -73,8 +84,23 @@ all three source trees again after all archives exist. Only then may its
 schema-2 manifest say `complete=true`, with each row's post-backup inventory
 and `postBackupInventoryVerified=true`. Failure leaves an incomplete manifest
 and only its own unfinished partial is eligible for cleanup. These are source
-contracts and offline fixture results, not proof that a real backup has yet
-run ([freshness receipt](../../evidence/stage3-live-evidence-20261015/backup-manifest-offline-a02-freshness-receipt.md)).
+contracts and offline fixture results, not proof of a **completed** real
+three-mount backup ([freshness receipt](../../evidence/stage3-live-evidence-20261015/backup-manifest-offline-a02-freshness-receipt.md)).
+
+One real attempt began under the now-withdrawn approval. The old backup
+helper's existing-file `File.Replace` call failed while updating its manifest
+after verifying the adjacent SD ZIP. Its recovery update failed the same way;
+the manifest remains `complete=false`. The verified SD archive is
+5,973,898,396 bytes, SHA-256
+`6032F822551CFB5F28ED079CB5B41CB02B1585F8AFF16EA303B54A74B0C2C949`.
+No ResidentFlash or EmulatorRoot ZIP followed, and this incomplete triplet
+cannot satisfy preflight or be reused. The SD ZIP remains adjacent pending
+the user's disposal choice; no runner or guest launch occurred
+([failure](../../evidence/pre-live-mount-backup-20261015T025500Z/failure.json),
+[disposition](../../evidence/pre-live-mount-backup-20261015T025500Z/aborted-approval-disposition.md)).
+Both JSON overwrite helpers now pass offline creation, replacement and
+locked-target failure/cleanup controls; this is not a second live backup
+([green receipt](../../evidence/stage3-live-evidence-20261015/atomic-json-overwrite-green-receipt.md)).
 
 Preflight requires the completed backup script's hash to match the sealed
 source, the backup tag to match its `startedUtc` second, `startedUtc` to be
@@ -115,6 +141,19 @@ separate backup manifest/analysis receipt; both triplets remain denied
 ([seed receipt](../../evidence/stage3-live-evidence-20261015/historical-ledger-seed-a01-receipt.md)).
 The ledger proves recorded uniqueness and byte integrity at validation time,
 not the historical processes' authenticity or approval authorship.
+
+A seventh `withdrawn` terminal row denies this aborted approval, attempt ID
+and its one verified SD ZIP hash without inventing a run manifest, other ZIPs
+or process fields. Its reason, UTC and evidence path/hash are required; the
+runner independently rehashes that evidence before accepting ledger history.
+The local and tracked ledgers are byte-identical at SHA-256
+`53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`.
+This is a **deny**, not a `reserved`/`spent` launch, and does not substitute
+for a new human approval. Duplicate or conflicting use of its approval,
+attempt or listed ZIP remains invalid or denied. The a02 offline suite added
+three expected-red-then-green cross-row ZIP conflicts: a withdrawn ZIP cannot
+also appear in an earlier/later historical row or another withdrawal
+([receipt](../../evidence/stage3-live-evidence-20261015/withdrawn-zip-conflict-red-green-receipt.md)).
 
 Once `Start-Process` returns, the monitor holds the process object. A
 post-spawn identity/spend/descriptor failure closes that held object before
@@ -161,6 +200,7 @@ filenames requested on the command line are not terminal artifacts.
 | Phase or result | Classification and next action |
 | --- | --- |
 | Approval, seal, RSDS, config, backup, current mount or ledger check fails before reservation | No launch authority. Preserve the reason and repair inputs; obtain a new approval/backup where needed. |
+| Prelaunch backup aborts and approval is withdrawn | Retain the failure, incomplete manifest and any verified ZIP as evidence; record a deny-only `withdrawn` row. Do not complete or reuse that triplet. Obtain a new approval before another backup. |
 | Reservation exists but launch is not proved | Deny retry. Investigate exact monitor/process evidence and require independent confirmed-no-spawn reconciliation; do not infer it from a missing descriptor. |
 | Spawn or post-spawn spend/descriptor commit fails | Attempt failure; close the held process and preserve partial ledger plus cleanup evidence. Treat uncertain termination as unresolved. |
 | Watchdog, RSS/log cap, driver/worker failure, guest CPU exception, unexplained PC zero or nonzero/early exit | Failed or incomplete workload, never a clean CE exit or map-readiness result. Preserve crash/native and containment evidence. |

@@ -12,7 +12,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Item | State |
 | --- | --- |
 | Installed baseline | BED2: clean bounded 330 s run, still on the decorative splash (ledger E-1) |
-| App goal | The latest approved E-38 fresh-owner run survived 330 s with COM7 reads and returned tap handlers, but stayed on the splash. The newly sealed source/build has not run iNavi; map and responsive navigation remain open |
+| App goal | The latest launched E-38 fresh-owner run survived 330 s with COM7 reads and returned tap handlers, but stayed on the splash. The current script-only-sealed source and carried-forward binary have not run iNavi; map and responsive navigation remain open |
 | Architecture implemented | Process-birth identity, public private/shared slabs, sealed immutable main-image pages, fixed initial heap/stack and per-birth heap source gates exist with fresh owners by default. Canonical Task/Frame authority, remaining VM families and full Stage 2 acceptance are not complete |
 | Experiment | Persistent-owner 650 passed 1,618 tests, then host-crashed at 129.108 s with 1.62 GiB RSS (E-2). Source preserved in the D: checkout; deferred to Stage 8 |
 | Plan position | Stage 0 evidence is diagnostic and ongoing; Stage 1 pages are written. E-21 migrated public process-birth aliases, not full Stage 2/3 Task ownership. Stages 3-6 run on fresh engines (D-003) |
@@ -20,7 +20,8 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Decisions | D-001 to D-009 decided; D-008's byte-authority design has bounded private/shared, immutable main-image and fixed/per-birth heap source gates, while writable image/DLL, clone lineage and broader acceptance remain open. E-34 closes O-P1 stop classification |
 | Source control | D-004 now permits an external supervisor's unsigned backup commits on `main`; those snapshots are not reviewed releases and do not replace frozen test evidence |
 | Source of truth | One active source dir (this repo) and one disposable Cargo target dir (D-007). Fresh native owners are the default; persistent reuse is a Stage 8 opt-in. O-P1 classification is closed, but report hardening and Stage 2 VM coherence remain open |
-| Next action | Continue writable image/DLL and clone-lineage design gates while advancing the canonical Task/continuation plan. A [sealed release build and offline live-run preflight](../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md) are ready, not a live acceptance result. One fresh approval and verified adjacent backups are required before any original-mount iNavi run; the E-29 attempt trace remains a parallel evidence lane |
+| Live-run gate | The current [22-file a02 script-only seal](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json) and [build bridge](../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json) carry forward the unchanged clean-built EXE/PDB; interim a01 is superseded and not live-usable. Offline script controls passed; no Rust rebuild or new iNavi run occurred. An approved prelaunch backup stopped after one verified SD ZIP and no runner/guest launch; its approval is withdrawn and both ledgers now have seven deny rows. Fresh Claude review of a02 was unavailable at the session limit ([evidence](evidence/ledger.md)) |
+| Next action | Continue writable image/DLL and clone-lineage design gates while advancing the canonical Task/continuation plan. Before any further backup or original-mount iNavi run, obtain a new distinct approval, make a complete fresh adjacent ZIP triplet and verify its inventory. The retained incomplete SD ZIP cannot be reused; the E-29 attempt trace remains a parallel evidence lane |
 
 ## Standalone boundaries
 
