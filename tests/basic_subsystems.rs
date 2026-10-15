@@ -8,7 +8,7 @@ use wince_emulation_v3::{
         devices::{CommDcb, CommTimeouts, PURGE_RXCLEAR, PURGE_TXCLEAR},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
-            GWL_USERDATA, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_SEND, QS_POSTMESSAGE,
+            GWL_USERDATA, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_SEND, Point, QS_POSTMESSAGE,
             QS_SENDMESSAGE, QS_TIMER, Rect, SM_CMONITORS, SM_CMOUSEBUTTONS, SM_CXBORDER,
             SM_CXCURSOR, SM_CXDLGFRAME, SM_CXDOUBLECLK, SM_CXEDGE, SM_CXFRAME, SM_CXFULLSCREEN,
             SM_CXHSCROLL, SM_CXICON, SM_CXICONSPACING, SM_CXMENUSIZE, SM_CXMINTRACK, SM_CXSCREEN,
@@ -20,7 +20,7 @@ use wince_emulation_v3::{
             SM_PENWINDOWS, SM_SAMEDISPLAYFORMAT, SM_SWAPBUTTON, SM_XVIRTUALSCREEN,
             SM_YVIRTUALSCREEN, SMF_TIMEOUT, WA_ACTIVE, WM_ACTIVATE, WM_CHAR, WM_ERASEBKGND,
             WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WNDCLASSW_SIZE, WS_CHILD,
-            WS_POPUP, WS_VISIBLE,
+            WS_POPUP, WS_VISIBLE, WindowDeliveryOwner,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -1825,25 +1825,57 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
-    let thread_id = 99;
-    let hwnd = kernel.create_window_ex_w(thread_id, "REMOTE", "remote", None, 1, 0, 0);
+    let (thread_handle, thread_id) = kernel.create_guest_thread(0x401000, 0, false);
+    let birth = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_handle)
+        .expect("live remote thread birth");
+    let hwnd = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            birth,
+            "REMOTE",
+            "remote",
+            None,
+            None,
+            1,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        )
+        .expect("live Birth-owned remote window");
+    assert!(matches!(
+        kernel.gwe.window(hwnd).expect("remote window").delivery_owner(),
+        WindowDeliveryOwner::Birth { thread, .. } if thread == birth
+    ));
+    assert!(kernel.gwe.is_window_visible(hwnd));
+    assert!(kernel.gwe.is_window_enabled(hwnd));
+    assert_eq!(
+        kernel.gwe.window_from_point(Point { x: 12, y: 34 }),
+        Some(hwnd)
+    );
     let wait_id = kernel.register_blocked_waiter(
         thread_id,
-        CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        thread_handle,
         Vec::new(),
         SchedulerBlockedWaitKind::GetMessage {
             hwnd: Some(hwnd),
-            min_msg: 0,
-            max_msg: 0,
+            min_msg: WM_LBUTTONDOWN,
+            max_msg: WM_LBUTTONDOWN,
         },
         kernel.timers.tick_count(),
         INFINITE,
     );
+    assert_ne!(wait_id, 0);
 
     assert_eq!(
         kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
             matches!(blocked.kind, SchedulerBlockedWaitKind::GetMessage { .. })
-                && kernel.gwe.has_queue_input(blocked.thread_id, u32::MAX)
+                && kernel.gwe.has_message_filtered(
+                    blocked.thread_id,
+                    Some(hwnd),
+                    WM_LBUTTONDOWN,
+                    WM_LBUTTONDOWN,
+                )
         }),
         None
     );
@@ -1864,14 +1896,18 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
     assert_eq!(
         kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
             matches!(blocked.kind, SchedulerBlockedWaitKind::GetMessage { .. })
-                && kernel.gwe.has_queue_input(blocked.thread_id, u32::MAX)
+                && kernel.gwe.has_message_filtered(
+                    blocked.thread_id,
+                    Some(hwnd),
+                    WM_LBUTTONDOWN,
+                    WM_LBUTTONDOWN,
+                )
         }),
         Some(wait_id)
     );
-    let down = (0..4)
-        .filter_map(|_| kernel.get_message_w(thread_id))
-        .find(|message| message.msg == WM_LBUTTONDOWN)
-        .unwrap();
+    let down = kernel
+        .get_message_w_filtered(thread_id, Some(hwnd), WM_LBUTTONDOWN, WM_LBUTTONDOWN)
+        .expect("remote mouse down wakes the filtered GetMessage reader");
     assert_eq!(down.hwnd, hwnd);
     assert_eq!(down.lparam & 0xffff, 12);
     assert_eq!((down.lparam >> 16) & 0xffff, 34);
