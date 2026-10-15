@@ -14600,6 +14600,117 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "expected red: host teardown selects a stale window by reused numeric PID"]
+    fn reused_pid_host_teardown_preserves_stale_prior_birth_window_and_backing() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            64,
+            64,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        let launch_a = kernel.queue_process_launch(None, None);
+        let process_a = launch_a.process_birth.expect("A process birth");
+        let thread_a = launch_a.primary_thread_birth.expect("A thread birth");
+        kernel.set_current_process_id(launch_a.process_id);
+        let hwnd_a = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_a,
+                "STALE_PID_A",
+                "A",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(0, 0, 16, 16),
+            )
+            .expect("A exact-birth window");
+        assert!(kernel.capture_window_backing_store(hwnd_a, &framebuffer));
+        let backing_a = kernel.window_backing_stores[&hwnd_a].clone();
+
+        // Fixture-only: retire A's canonical task/process without the normal
+        // host-window teardown, leaving an inert prior-birth HWND/backing.
+        // B's later teardown must not claim that artifact by recycled PID.
+        assert!(kernel.mark_guest_thread_exited_by_birth(thread_a, 0));
+        assert!(kernel.close_handle(launch_a.thread_handle)?);
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(process_a, 0)
+                .is_some()
+        );
+        assert!(kernel.close_handle(launch_a.process_handle)?);
+        assert_eq!(kernel.handles.process_birth_key(launch_a.process_id), None);
+        assert!(kernel.gwe.is_window(hwnd_a));
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth {
+                thread: thread_a,
+                process: process_a,
+            })
+        );
+
+        kernel.next_process_id = launch_a.process_id;
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = launch_b.process_birth.expect("B process birth");
+        let thread_b = launch_b.primary_thread_birth.expect("B thread birth");
+        assert_eq!(launch_b.process_id, launch_a.process_id);
+        assert_ne!(process_b, process_a);
+        kernel.set_current_process_id(launch_b.process_id);
+        let hwnd_b = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_b,
+                "REUSED_PID_B",
+                "B",
+                None,
+                None,
+                0,
+                WS_VISIBLE,
+                0,
+                Rect::from_origin_size(20, 20, 16, 16),
+            )
+            .expect("B exact-birth window");
+        assert!(kernel.capture_window_backing_store(hwnd_b, &framebuffer));
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_b)
+                .map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth {
+                thread: thread_b,
+                process: process_b,
+            })
+        );
+
+        assert!(kernel.mark_process_launch_exited_with_framebuffer(
+            &launch_b,
+            0,
+            Some(&mut framebuffer),
+        ));
+        assert!(!kernel.gwe.is_window(hwnd_b));
+        assert!(!kernel.window_backing_stores.contains_key(&hwnd_b));
+        assert!(
+            kernel.gwe.is_window(hwnd_a),
+            "B teardown must not destroy an HWND owned by prior process birth A"
+        );
+        assert_eq!(
+            kernel
+                .gwe
+                .window(hwnd_a)
+                .map(|window| window.delivery_owner()),
+            Some(WindowDeliveryOwner::Birth {
+                thread: thread_a,
+                process: process_a,
+            })
+        );
+        assert_eq!(kernel.window_backing_stores.get(&hwnd_a), Some(&backing_a));
+        Ok(())
+    }
+
+    #[test]
     fn remote_input_active_window_drain_posts_mouse_messages() -> Result<()> {
         let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
