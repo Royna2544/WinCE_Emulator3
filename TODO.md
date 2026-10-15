@@ -57,11 +57,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   any/all mode of the TID 10 wait; wait id 833 needs a boot-forward trace. Each
   writable-mount live run needs fresh user approval and a verified backup
   (`scripts/backup_rw_mounts.ps1`).
-- The [22-file script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+- The historical [22-file a02 script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
   and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
-  supersede the historical 21-file gate for current scripts; the clean-built
-  EXE/PDB pair is unchanged, not rebuilt. The interim a01 seal is not
-  live-usable. The a02 offline gate passed 123
+  superseded the older 21-file gate, but a02 and interim a01 are now **not
+  live-usable**: the runner changed again to add a separate watchdog. The
+  clean-built EXE/PDB pair is unchanged, not rebuilt. The a02 offline gate passed 123
   preflight, 40 runner, 14 backup, 9 observer and atomic overwrite controls.
   The attempted adjacent backup under approval
   `call_9b35e9d31fdf402ea082a3eb6a40ae16` failed after one verified SD ZIP;
@@ -74,8 +74,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   adjacent triplet after that approval. Keep the writable folders quiescent,
   validate the post-backup inventory and current mount content, then use only
   the preserved sealed EXE/PDB in one bounded run.
-  A fresh Claude review of a02 was unavailable because the session reached
-  its limit; do not treat this source gate as supervisory approval.
+  The current watchdog candidate starts and verifies an independent worker
+  before requesting launch; it has a 355-second post-scan monotonic deadline,
+  two-second RSS/raw-log checks and exact process cleanup. Its offline controls
+  reached 123 preflight, 66 runner, 14 backup, 9 observer and atomic overwrite
+  greens. Recheck after the last path-matching correction and seal the new a03
+  source/build identity before proposing any run. Claude's read-only review
+  found no concrete launch blocker, but is not a live dead-driver proof or
+  approval. Do not start backups or the guest while that gate is unfinished.
   Note the required `192.168.0.39:8765` LAN endpoint exposure. Report input
   ACK, drain/post, guest WNDPROC and frame separately, with phase-aligned busy-
   slice MIPS, per-slice setup cost, host RSS/private memory and the narrow guest

@@ -6,17 +6,18 @@ references for historical reconstruction.
 
 ## 2026-10-15 Live-run preparation and aborted backup (no app run)
 
-The current D: source has a [22-file script-only seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+The repaired pre-watchdog D: source had a [22-file script-only a02 seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
 (SHA-256 `1DC1537217C621EBD1B8C2D5E682C50B9CFA6FA131D22CC3202F54C7C5651F97`)
 and [build bridge](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json)
 (SHA-256 `A3746E1729186997CC684030E5E5BA772A1A3038132F49E5BAE9A04C6A21D580`).
 The W-B1c-scoped patch is SHA-256
 `8CF8CA60072D4F0ECDA8B21D5400A6B00F25344671D8082E374145F19CDAD18C`.
-The [offline script gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-offline-gate.raw.txt)
+Its [offline script gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-offline-gate.raw.txt)
 passed 123 preflight, 40 runner, 14 backup, 9 observer and atomic JSON overwrite
 controls. Rust/Cargo and `.gitattributes` are unchanged from the prior clean
 build; its preserved EXE/PDB pair and matching RSDS are carried forward, **not
-rebuilt**. The interim a01 seal is superseded and not live-usable; the earlier
+rebuilt**. A02 and interim a01 are now historical and **not live-usable** because
+the runner has changed again; the earlier
 [21-file seal](evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
 and its 97/40/14/9 offline gate remain historical evidence. The pre-run Rust
 telemetry gate passed 1,996/0/9 release and 1,456/0/3 no-default tests, plus
@@ -35,8 +36,17 @@ byte-identical ledgers to seven rows (SHA-256
 `53BAD1ABCAEA7F723737014E182228922122951F1CFB0574773E49EE3DFD1A08`).
 See the [ledger](docs/evidence/ledger.md) for the evidence chain and limits.
 A new, distinct approval is required before any further backup or launch.
-No fresh Claude review of the a02 seal was available because that session
-reached its limit; this source gate is not an approval or live acceptance.
+The current runner candidate adds an independent `WatchdogWorker`: its exact
+process identity and heartbeat are checked before the launch request, and it
+enforces a monotonic 355-second deadline from the post-mount scan, with
+two-second RSS/raw-log probes and exact-identity cleanup on failure. The
+existing detached monitor's 390-second guard remains. Offline controls reached
+123/123 preflight, 66/66 runner, 14/14 backup, 9/9 observer plus atomic JSON
+overwrite tests; a final check after a small path-matching correction and a
+new a03 source/build seal are pending. Claude's read-only review of this
+watchdog candidate found no concrete launch blocker, but did not prove a live
+dead-driver integration path or authorize a run. No new backup or guest run
+followed the aborted attempt.
 
 ## 2026-10-15 Stage 3 source gates
 
