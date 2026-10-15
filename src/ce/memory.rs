@@ -276,10 +276,18 @@ impl WritableImageRunIdentity {
     }
 }
 
+/// Opaque identity for the VM instance that owns writable image run keys.
+/// Cloned MemorySystems receive fresh lineage even when copied keys match.
+#[derive(Debug, Clone)]
+pub struct WritableImageVmLineage {
+    instance: Rc<()>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WritableImageRunAccessError {
     OutOfRange,
     NativeExecutionActive,
+    Retired,
 }
 
 /// O-M3 has not classified these image pages as boot-counted RAM, new RAM,
@@ -780,12 +788,14 @@ struct StableWritableImageRun {
     bytes: NonNull<u8>,
     len: usize,
     native_execution_guards: Cell<u32>,
+    retired: Cell<bool>,
 }
 
 impl fmt::Debug for StableWritableImageRun {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StableWritableImageRun")
             .field("len", &self.len)
+            .field("retired", &self.retired.get())
             .field(
                 "native_execution_guards",
                 &self.native_execution_guards.get(),
@@ -807,6 +817,7 @@ impl StableWritableImageRun {
             bytes,
             len,
             native_execution_guards: Cell::new(0),
+            retired: Cell::new(false),
         })
     }
 
@@ -920,6 +931,9 @@ impl StableWritableImageRunPin {
         &self,
     ) -> std::result::Result<StableWritableImageRunNativeAccessGuard, WritableImageRunAccessError>
     {
+        if self.run.retired.get() {
+            return Err(WritableImageRunAccessError::Retired);
+        }
         if self.run.native_execution_guards.get() != 0 {
             return Err(WritableImageRunAccessError::NativeExecutionActive);
         }
@@ -3128,6 +3142,16 @@ impl MemorySystem {
         self.stable_writable_image_runs_seen
     }
 
+    pub fn writable_image_lineage(&self) -> WritableImageVmLineage {
+        WritableImageVmLineage {
+            instance: Rc::clone(&self.instance),
+        }
+    }
+
+    pub fn contains_writable_image_lineage(&self, lineage: &WritableImageVmLineage) -> bool {
+        Rc::ptr_eq(&self.instance, &lineage.instance)
+    }
+
     /// Stage 2 VM foundation: copy final loader bytes into a stable run before
     /// publication. The caller verifies the process birth in HandleTable and
     /// must arrange native unmap/owner close before dropping its strong pin.
@@ -3148,6 +3172,9 @@ impl MemorySystem {
 
     /// Recheck the exact VM lineage, generation, module load and range before
     /// changing any canonical image record. A rejected token is just dropped.
+    /// This publishes one run, not a whole module transaction: a loader with
+    /// multiple runs must prepare/commit sequentially and retire the exact
+    /// module generation if any later native/VM step fails.
     pub fn commit_prepared_writable_image_run(
         &mut self,
         prepared: PreparedWritableImageRun,
@@ -3163,6 +3190,7 @@ impl MemorySystem {
             identity: prepared.identity,
             run: Rc::clone(&prepared.run),
         };
+        self.prune_retired_writable_image_pins();
         self.writable_image_runs
             .insert(prepared.identity, prepared.run);
         self.writable_image_modules.insert(
@@ -3206,6 +3234,7 @@ impl MemorySystem {
         if !state.active || state.load_generation != load_generation {
             return None;
         }
+        self.prune_retired_writable_image_pins();
         let identities: Vec<_> = self
             .writable_image_runs
             .keys()
@@ -3221,6 +3250,7 @@ impl MemorySystem {
                 .writable_image_runs
                 .remove(identity)
                 .expect("selected writable image run exists");
+            run.retired.set(true);
             self.retired_writable_image_pins
                 .push((*identity, Rc::downgrade(&run)));
         }
@@ -3228,6 +3258,8 @@ impl MemorySystem {
             .get_mut(&(owner, module_base))
             .expect("checked writable image module")
             .active = false;
+        // u64::MAX is terminal: commit requires checked_add and rejects all
+        // later proposals, so saturation cannot revive a stale token.
         self.writable_image_generation = self.writable_image_generation.saturating_add(1);
         Some(identities.len())
     }
@@ -3235,6 +3267,7 @@ impl MemorySystem {
     /// Exit fence for this exact process birth. A later PID incarnation is a
     /// different key and may reuse the same VA; this birth cannot republish.
     pub fn retire_writable_image_runs_for_owner(&mut self, owner: ProcessBirthKey) -> usize {
+        self.prune_retired_writable_image_pins();
         let identities: Vec<_> = self
             .writable_image_runs
             .keys()
@@ -3246,6 +3279,7 @@ impl MemorySystem {
                 .writable_image_runs
                 .remove(identity)
                 .expect("selected writable image run exists");
+            run.retired.set(true);
             self.retired_writable_image_pins
                 .push((*identity, Rc::downgrade(&run)));
         }
@@ -3256,9 +3290,17 @@ impl MemorySystem {
         }
         let newly_retired = self.retired_writable_image_owners.insert(owner);
         if newly_retired || !identities.is_empty() {
+            // At u64::MAX publication is already closed by checked_add.
             self.writable_image_generation = self.writable_image_generation.saturating_add(1);
         }
         identities.len()
+    }
+
+    fn prune_retired_writable_image_pins(&mut self) {
+        // Rc/Weak are thread-local here. Remove only dead native-owner pins;
+        // live weak records remain an exact same-birth VA reuse fence.
+        self.retired_writable_image_pins
+            .retain(|(_, run)| run.strong_count() != 0);
     }
 
     fn can_publish_writable_image_run(
@@ -3885,9 +3927,21 @@ mod tests {
             None
         );
         assert!(memory.contains_writable_image_run_pin(&pin));
+        let active_lease = pin.begin_native_access().expect("lease before retire");
+        let active_ptr = active_lease.native_ptr();
         assert_eq!(
             memory.retire_writable_image_module(owner, 0x6100_0000, 1),
             Some(1)
+        );
+        assert_eq!(active_lease.native_ptr(), active_ptr);
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
+        );
+        drop(active_lease);
+        assert_eq!(
+            pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
         );
         assert!(!memory.contains_writable_image_run_pin(&pin));
         assert_eq!(
@@ -3916,9 +3970,16 @@ mod tests {
         let next_pin = memory
             .commit_prepared_writable_image_run(next)
             .expect("publish next generation");
+        assert!(memory.retired_writable_image_pins.is_empty());
         assert_eq!(memory.retire_writable_image_runs_for_owner(owner), 1);
         assert!(!memory.contains_writable_image_run_pin(&next_pin));
+        assert_eq!(
+            next_pin.begin_native_access().err(),
+            Some(WritableImageRunAccessError::Retired)
+        );
         drop(next_pin);
+        assert_eq!(memory.retire_writable_image_runs_for_owner(owner), 0);
+        assert!(memory.retired_writable_image_pins.is_empty());
         assert!(
             memory
                 .prepare_writable_image_run(reused_va, &bytes)
@@ -3926,12 +3987,22 @@ mod tests {
         );
         assert!(memory.prepare_writable_image_run(other, &bytes).is_some());
         assert_eq!(memory.private_commit_used_bytes(), 0);
+        memory.writable_image_generation = u64::MAX;
+        let terminal = memory
+            .prepare_writable_image_run(other, &bytes)
+            .expect("terminal generation may prepare detached bytes");
+        assert!(
+            memory
+                .commit_prepared_writable_image_run(terminal)
+                .is_none()
+        );
     }
 
     #[test]
     fn writable_image_run_clone_copies_bytes_but_rejects_foreign_pin_and_token() {
         let owner = boot_owner();
         let mut source = MemorySystem::default();
+        let source_lineage = source.writable_image_lineage();
         let identity = writable_image_identity(owner, 0x6200_0000, 1, 0x6200_0000);
         let source_pin = source
             .commit_prepared_writable_image_run(
@@ -3946,6 +4017,11 @@ mod tests {
             .prepare_writable_image_run(pending_identity, &vec![0; STABLE_PRIVATE_PAGE_SIZE])
             .expect("prepare detached source token");
         let mut copy = source.clone();
+        let copy_lineage = copy.writable_image_lineage();
+        assert!(source.contains_writable_image_lineage(&source_lineage));
+        assert!(copy.contains_writable_image_lineage(&copy_lineage));
+        assert!(!copy.contains_writable_image_lineage(&source_lineage));
+        assert!(!source.contains_writable_image_lineage(&copy_lineage));
         assert!(copy.has_stable_writable_image_runs());
         assert!(!copy.contains_writable_image_run_pin(&source_pin));
         assert!(copy.commit_prepared_writable_image_run(pending).is_none());
