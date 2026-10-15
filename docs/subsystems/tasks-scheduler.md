@@ -332,6 +332,16 @@ compatibility continuation. This bounded shape is not general Task/Frame
 authority, whole-exit atomicity after preflight, a conversion of the raw or
 decoded pseudo-exit paths, or live iNavi acceptance.
 
+### Next pseudo self-exit cut (proposed, not source-tested)
+
+Route decoded pseudo self-exit through the same post-owner finalizer targeted
+for native exit, with a frozen caller/lease and CPU stop before Task/VM effects.
+Delete the decoded compatibility tail only after that path is covered by
+positive and stale/refusal controls. Check live modal backing in the CPU owner
+before committing exit; Kernel selection cannot substitute for that witness.
+Keep the raw COREDLL pseudo-exit shim fixture-only and fail closed for guest
+callers; do not introduce a raw executor in this cut.
+
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval
 enters WNDPROC and returns the one blocked sender's result. A wake bit alone

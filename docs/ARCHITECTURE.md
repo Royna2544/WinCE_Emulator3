@@ -213,6 +213,16 @@ new checkpoint after refusal and permits only an earlier checkpoint restore
 to clear its execution hold. It does not make later teardown effects atomic or complete the
 machine-owned Task/VM lifecycle.
 
+### Stage 3 pseudo self-exit convergence (target)
+
+Native and decoded guest pseudo self-exit should reach one machine-owned
+stopped-exit finalizer after verified CPU-owner closure. That finalizer must
+prepare D-011 restoration and exact-birth Task/VM effects before mutation;
+decoded synchronous retirement tails should then be removed. The CPU backend
+owns refusal while live modal backing remains. The raw COREDLL pseudo-exit
+shim stays fixture-only and fail-closed for guest callers; no raw executor
+is proposed for this cut. This is not the completed native/decoded behavior.
+
 ## A3. Execution and continuation boundary
 
 `RunOutcome` distinguishes guest exit, unrecoverable native/backend or
