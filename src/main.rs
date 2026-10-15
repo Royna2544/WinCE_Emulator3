@@ -2201,8 +2201,7 @@ fn run_monitor(
         let Some(command) = words.next() else {
             continue;
         };
-        if recovery_required
-            && matches!(command, "continue" | "c" | "until" | "run-until" | "tap")
+        if recovery_required && matches!(command, "continue" | "c" | "until" | "run-until" | "tap")
         {
             println!(
                 "  host-exit framebuffer recovery required; restore a checkpoint or quit before running or queuing input"
@@ -2720,7 +2719,10 @@ fn monitor_run_and_report(
     framebuffer_dump: Option<&Path>,
 ) -> bool {
     if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump, None) {
-        if matches!(&err, wince_emulation_v3::Error::HostExitRecoveryRequired { .. }) {
+        if matches!(
+            &err,
+            wince_emulation_v3::Error::HostExitRecoveryRequired { .. }
+        ) {
             eprintln!("  stopped for host-exit recovery: {err}");
             return true;
         } else if cpu.last_debug_snapshot().is_some() {

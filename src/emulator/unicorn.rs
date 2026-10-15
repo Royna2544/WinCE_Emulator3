@@ -6180,13 +6180,39 @@ impl UnicornMips {
                 );
                 return Ok(false);
             }
-            // The boot process does not have a queued child launch. Its
-            // broader root/worker execution handoff remains a separate slice.
-            let _ = kernel.terminate_process(
-                crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            // The boot process has no queued child launch. Authenticate its
+            // stopped primary thread before any root-process exit effect;
+            // the selected numeric PID is not a CPU ownership witness.
+            let Some(primary_birth) = self.saved_context_thread_birth.filter(|birth| {
+                self.current_thread_id == self.initial_thread_id
+                    && birth.thread_id() == self.initial_thread_id
+                    && kernel
+                        .handles
+                        .thread_birth_key_by_id(self.initial_thread_id)
+                        == Some(*birth)
+            }) else {
+                return Err(Error::Backend(
+                    "stopped boot process exit lacks a verified primary thread birth".to_owned(),
+                ));
+            };
+            let Some(expected_birth) = kernel
+                .handles
+                .thread_creation_owner_by_id(primary_birth.thread_id())
+            else {
+                return Err(Error::Backend(
+                    "stopped boot process exit lacks a verified process owner".to_owned(),
+                ));
+            };
+            if !kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                expected_birth,
                 exit_code,
-            );
-            return self.try_switch_to_next_parked_process(kernel, false);
+                framebuffer,
+            )? {
+                return Ok(false);
+            }
+            self.seal_completed_active_process_cpu();
+            let switched = self.try_switch_to_next_parked_process(kernel, false)?;
+            return Ok(switched || self.completed_active_process_exit);
         };
         if launch.process_birth.is_none() {
             tracing::warn!(
@@ -6763,7 +6789,10 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         requeue_current: bool,
     ) -> bool {
-        assert!(requeue_current, "terminal switch must use fallible completion");
+        assert!(
+            requeue_current,
+            "terminal switch must use fallible completion"
+        );
         let Some(parked) = self.pop_next_runnable_parked_process(kernel) else {
             return false;
         };
@@ -7109,7 +7138,10 @@ impl UnicornMips {
         requeue_current: bool,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) {
-        assert!(requeue_current, "terminal switch must use fallible completion");
+        assert!(
+            requeue_current,
+            "terminal switch must use fallible completion"
+        );
         self.activate_parked_process(kernel, parked, true, framebuffer, None);
     }
 
@@ -51348,6 +51380,98 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn stopped_boot_process_framebuffer_mismatch_retains_cpu_before_pseudo_exit() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let boot_birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let primary = kernel
+            .handles
+            .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
+            .expect("boot primary thread birth");
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        scheduler.current_thread_id = MAIN_GUEST_THREAD_ID;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x52;
+        scheduler.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        scheduler.saved_context_thread_birth = Some(primary);
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x52,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        scheduler.native_engine = ProcessNativeEngine::new_persistent_for_test(
+            unicorn_engine::unicorn_const::Arch::MIPS,
+            unicorn_engine::unicorn_const::Mode::MIPS32
+                | unicorn_engine::unicorn_const::Mode::LITTLE_ENDIAN,
+        );
+        let mut lease = scheduler.native_engine.lease().expect("boot native owner");
+        lease.set_metadata(super::KernelMemoryMappings::new(&[]));
+        lease.finish().expect("publish boot native owner");
+        let engine_before = scheduler.native_engine_identity_for_test();
+        assert!(engine_before.is_some());
+
+        let source = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                primary,
+                "D011_BOOT_EXIT",
+                "",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("boot-owned window");
+        assert!(kernel.capture_window_backing_store(hwnd, &source));
+        let process_before = kernel.current_process_state();
+        let trace_len = kernel.recent_process_ops().len();
+        let mut incompatible = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Bgra8888,
+        )?;
+        let error = scheduler
+            .try_complete_active_process_thread_exit(&mut kernel, Some(&mut incompatible))
+            .expect_err("boot pseudo exit must stop before incompatible restore");
+        assert!(matches!(
+            error,
+            Error::HostExitRecoveryRequired { process_id, hwnd: Some(rejected_hwnd), .. }
+                if process_id == boot_birth.process_id() && rejected_hwnd == hwnd
+        ));
+        assert_eq!(kernel.current_process_state(), process_before);
+        assert_eq!(kernel.current_process_id(), boot_birth.process_id());
+        assert!(kernel.handles.process_execution_live_by_birth(boot_birth));
+        assert_eq!(
+            kernel
+                .handles
+                .process_signaled_by_id(boot_birth.process_id()),
+            Some(false)
+        );
+        assert!(kernel.gwe.is_window(hwnd));
+        assert_eq!(kernel.recent_process_ops().len(), trace_len);
+        assert!(!scheduler.active_process_execution_completed());
+        assert_eq!(scheduler.native_engine_identity_for_test(), engine_before);
+        assert_eq!(
+            scheduler.saved_context.as_ref().map(|saved| saved.pc),
+            Some(THREAD_EXIT_STUB_ADDR)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
@@ -51649,13 +51773,16 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
-    fn requested_parked_child_framebuffer_mismatch_retains_blocked_cpu_for_recovery() -> Result<()> {
+    fn requested_parked_child_framebuffer_mismatch_retains_blocked_cpu_for_recovery() -> Result<()>
+    {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let parent_launch = kernel.queue_process_launch(None, None);
         let child_launch = kernel.queue_process_launch(None, None);
         let child_birth = child_launch.process_birth.expect("parked child birth");
-        let receiver = child_launch.primary_thread_birth.expect("child primary thread birth");
+        let receiver = child_launch
+            .primary_thread_birth
+            .expect("child primary thread birth");
         let _ = kernel.take_pending_process_launches();
 
         let event = kernel.create_event_w(None, true, false);
@@ -51744,12 +51871,25 @@ mod guest_thread_stack_tests {
         let retained = &scheduler.parked_child_processes[0];
         assert_eq!(retained.cpu.as_ref() as *const UnicornMips, owner_before);
         assert_eq!(retained.cpu.run_slice_generation, 1);
-        assert_eq!(retained.cpu.owned_process_launch.as_ref().and_then(|owned| owned.process_birth), Some(child_birth));
+        assert_eq!(
+            retained
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(child_birth)
+        );
         assert_eq!(retained.cpu.blocked_wait_threads.len(), 1);
         assert!(kernel.blocked_waiter(wait_id).is_some());
         assert!(kernel.handles.process_execution_live_by_birth(child_birth));
-        assert_eq!(kernel.process_exit_code(child_launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
-        assert_eq!(kernel.is_wait_ready(child_launch.process_handle, 1), Some(false));
+        assert_eq!(
+            kernel.process_exit_code(child_launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(
+            kernel.is_wait_ready(child_launch.process_handle, 1),
+            Some(false)
+        );
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(kernel.recent_process_ops().len(), trace_len);
 
@@ -51760,8 +51900,14 @@ mod guest_thread_stack_tests {
         assert!(scheduler.parked_child_processes.is_empty());
         assert!(kernel.blocked_waiter(wait_id).is_none());
         assert!(!kernel.handles.process_execution_live_by_birth(child_birth));
-        assert_eq!(kernel.process_exit_code(child_launch.process_handle), Some(0x7b));
-        assert_eq!(kernel.is_wait_ready(child_launch.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel.process_exit_code(child_launch.process_handle),
+            Some(0x7b)
+        );
+        assert_eq!(
+            kernel.is_wait_ready(child_launch.process_handle, 1),
+            Some(true)
+        );
         assert!(!kernel.gwe.is_window(hwnd));
         Ok(())
     }
@@ -73647,44 +73793,46 @@ mod unicorn_tests {
         let mut kernel = phase1_kernel("d011-active-parent.exe")?;
         let parent_pid = kernel.current_process_id();
         let parent_state = kernel.current_process_state();
-        let mut parent_cpu = phase1_counter_cpu(0x110, "d011-active-parent.exe")?;
+        let mut parent_cpu = phase1_persistent_counter_cpu(0x110, "d011-active-parent.exe")?;
         let mut initial_framebuffer = VirtualFramebuffer::default_primary()?;
         phase1_run_twenty(&mut parent_cpu, &mut kernel, &mut initial_framebuffer)?;
         let parent_engine = phase1_engine_id(&parent_cpu);
         let parent_counter = phase1_counter(&parent_cpu);
 
-        let launch = kernel.queue_process_launch(Some("\\Test\\d011-active-child.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\d011-active-child.exe".to_owned()), None);
         let birth = launch.process_birth.expect("child birth");
-        let receiver = launch.primary_thread_birth.expect("child primary thread birth");
+        let receiver = launch
+            .primary_thread_birth
+            .expect("child primary thread birth");
         let _ = kernel.take_pending_process_launches();
         kernel.set_current_process_id(launch.process_id);
-        let mut child_cpu = phase1_counter_cpu(0x220, "d011-active-child.exe")?;
+        let mut child_cpu = phase1_persistent_counter_cpu(0x220, "d011-active-child.exe")?;
         child_cpu.owned_process_launch = Some(launch.clone());
         child_cpu.set_initial_thread_id(launch.thread_id);
         phase1_run_twenty(&mut child_cpu, &mut kernel, &mut initial_framebuffer)?;
         let child_engine = phase1_engine_id(&child_cpu);
         let child_counter = phase1_counter(&child_cpu);
         let child_generation = child_cpu.run_slice_generation;
-        child_cpu.parked_child_processes.push_back(super::ParkedProcess {
-            application: Some("\\Test\\d011-active-parent.exe".to_owned()),
-            process_handle: None,
-            thread_handle: None,
-            process_state: parent_state,
-            thread_id: super::MAIN_GUEST_THREAD_ID,
-            cpu: Box::new(parent_cpu),
-            blocked_send_id: None,
-            module_base: 0x0040_0000,
-            module_path: "\\Test\\d011-active-parent.exe".to_owned(),
-            module_host_path: std::path::PathBuf::from("d011-active-parent.exe"),
-            command_line: String::new(),
-            current_directory: None,
-        });
+        child_cpu
+            .parked_child_processes
+            .push_back(super::ParkedProcess {
+                application: Some("\\Test\\d011-active-parent.exe".to_owned()),
+                process_handle: None,
+                thread_handle: None,
+                process_state: parent_state,
+                thread_id: super::MAIN_GUEST_THREAD_ID,
+                cpu: Box::new(parent_cpu),
+                blocked_send_id: None,
+                module_base: 0x0040_0000,
+                module_path: "\\Test\\d011-active-parent.exe".to_owned(),
+                module_host_path: std::path::PathBuf::from("d011-active-parent.exe"),
+                command_line: String::new(),
+                current_directory: None,
+            });
 
-        let mut compatible = VirtualFramebuffer::new(
-            8,
-            8,
-            crate::ce::framebuffer::PixelFormat::Rgb565,
-        )?;
+        let mut compatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Rgb565)?;
         kernel.set_current_process_id(launch.process_id);
         let hwnd = kernel
             .create_window_ex_w_with_parent_owner_and_rect_for_birth(
@@ -73702,11 +73850,8 @@ mod unicorn_tests {
         assert!(kernel.capture_window_backing_store(hwnd, &compatible));
         assert!(kernel.terminate_process(launch.process_handle, 0x55));
         let process_trace_len = kernel.recent_process_ops().len();
-        let mut incompatible = VirtualFramebuffer::new(
-            8,
-            8,
-            crate::ce::framebuffer::PixelFormat::Bgra8888,
-        )?;
+        let mut incompatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Bgra8888)?;
         let rejected = child_cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut incompatible,
@@ -73731,14 +73876,32 @@ mod unicorn_tests {
         assert_eq!(phase1_counter(&child_cpu), child_counter);
         assert_eq!(phase1_engine_id(&child_cpu), child_engine);
         assert_eq!(kernel.current_process_id(), launch.process_id);
-        assert_eq!(child_cpu.owned_process_launch.as_ref().and_then(|owned| owned.process_birth), Some(birth));
+        assert_eq!(
+            child_cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(birth)
+        );
         assert!(!child_cpu.active_process_execution_completed());
         assert_eq!(child_cpu.parked_child_processes.len(), 1);
-        assert_eq!(child_cpu.parked_child_processes[0].process_state.process_id, parent_pid);
-        assert_eq!(phase1_counter(&child_cpu.parked_child_processes[0].cpu), parent_counter);
-        assert_eq!(phase1_engine_id(&child_cpu.parked_child_processes[0].cpu), parent_engine);
+        assert_eq!(
+            child_cpu.parked_child_processes[0].process_state.process_id,
+            parent_pid
+        );
+        assert_eq!(
+            phase1_counter(&child_cpu.parked_child_processes[0].cpu),
+            parent_counter
+        );
+        assert_eq!(
+            phase1_engine_id(&child_cpu.parked_child_processes[0].cpu),
+            parent_engine
+        );
         assert!(kernel.handles.process_execution_live_by_birth(birth));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(kernel.recent_process_ops().len(), process_trace_len);
@@ -73750,8 +73913,14 @@ mod unicorn_tests {
         );
         retried.result?;
         assert_eq!(retried.report.attempt_id(), None);
-        assert_eq!(phase1_counter(&child_cpu.parked_child_processes[0].cpu), parent_counter);
-        assert_eq!(phase1_engine_id(&child_cpu.parked_child_processes[0].cpu), parent_engine);
+        assert_eq!(
+            phase1_counter(&child_cpu.parked_child_processes[0].cpu),
+            parent_counter
+        );
+        assert_eq!(
+            phase1_engine_id(&child_cpu.parked_child_processes[0].cpu),
+            parent_engine
+        );
         assert!(child_cpu.active_process_execution_completed());
         assert!(!kernel.handles.process_execution_live_by_birth(birth));
         assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x55));
@@ -73811,12 +73980,12 @@ mod unicorn_tests {
             None,
         );
         let birth = launch.process_birth.expect("pending child birth");
-        let receiver = launch.primary_thread_birth.expect("pending child primary thread birth");
-        let mut compatible = VirtualFramebuffer::new(
-            8,
-            8,
-            crate::ce::framebuffer::PixelFormat::Rgb565,
-        )?;
+        let receiver = launch
+            .primary_thread_birth
+            .expect("pending child primary thread birth");
+        let mut compatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Rgb565)?;
+        kernel.set_current_process_id(launch.process_id);
         let hwnd = kernel
             .create_window_ex_w_with_parent_owner_and_rect_for_birth(
                 receiver,
@@ -73841,11 +74010,8 @@ mod unicorn_tests {
             .map_err(|err| Error::Backend(format!("read fixture parent PC: {err:?}")))?;
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
-        let mut incompatible = VirtualFramebuffer::new(
-            8,
-            8,
-            crate::ce::framebuffer::PixelFormat::Bgra8888,
-        )?;
+        let mut incompatible =
+            VirtualFramebuffer::new(8, 8, crate::ce::framebuffer::PixelFormat::Bgra8888)?;
         let error = super::run_pending_process_launches(
             &mut parent_uc,
             &mut kernel,
@@ -73866,7 +74032,10 @@ mod unicorn_tests {
         assert_eq!(parent_uc.reg_read(RegisterMIPS::PC).unwrap(), parent_pc);
         assert!(parked.borrow().is_empty());
         assert!(kernel.handles.process_execution_live_by_birth(birth));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(kernel.recent_process_ops().len(), trace_len);
