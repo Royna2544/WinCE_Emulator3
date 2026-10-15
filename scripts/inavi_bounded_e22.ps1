@@ -262,14 +262,28 @@ function Assert-InaviBackupComplete([hashtable]$Manifest, [hashtable]$BackupMani
     }
 }
 
-function Assert-InaviCheapMountInventory([hashtable]$BackupManifest) {
+function Assert-InaviCurrentMountInventory([hashtable]$BackupManifest) {
+    $startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $fileCount = 0L
+    $fileBytes = 0L
     for ($index = 0; $index -lt 3; $index++) {
         $row = $BackupManifest.completed[$index]
         $root = [System.IO.Path]::GetFullPath([string]$row.sourceRoot).TrimEnd('\')
+        $rootAncestor = [System.IO.DirectoryInfo]::new($root)
+        while ($null -ne $rootAncestor) {
+            if (-not $rootAncestor.Exists -or
+                ($rootAncestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                throw "Mounted path has a missing or reparse-point ancestor: $root"
+            }
+            $rootAncestor = $rootAncestor.Parent
+        }
         $snapshot = Read-InaviJson ([string]$row.postBackupSourceManifest)
         if ([string]$snapshot.sourceRoot -ne [string]$row.sourceRoot -or
             $snapshot.files -isnot [array] -or $snapshot.directories -isnot [array]) {
             throw "Invalid post-backup mount inventory: $($row.postBackupSourceManifest)"
+        }
+        if (($snapshot.files.Count + $snapshot.directories.Count) -gt 100000) {
+            throw "Post-backup mount inventory exceeded 100,000 entries: $root"
         }
         $expected = [System.Collections.Generic.Dictionary[string,object]]::new(
             [StringComparer]::OrdinalIgnoreCase)
@@ -308,6 +322,7 @@ function Assert-InaviCheapMountInventory([hashtable]$BackupManifest) {
                             kind = $kind; length = if ($kind -eq 'file') { [long]$child.Length } else { $null }
                             lastWriteUtc = $child.LastWriteTimeUtc.ToString('O')
                             attributes = [int]$child.Attributes
+                            fullPath = $child.FullName
                         })) {
                     throw "Duplicate current mount entry: $relative"
                 }
@@ -329,7 +344,23 @@ function Assert-InaviCheapMountInventory([hashtable]$BackupManifest) {
                 $current.attributes -ne [int]$old.attributes) {
                 throw "Mount size/mtime changed since backup: $root\$($pair.Key)"
             }
+            if ($current.kind -eq 'file') {
+                if ([string]$old.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') {
+                    throw "Post-backup mount manifest lacks a valid file hash: $root\$($pair.Key)"
+                }
+                $currentHash = Get-Sha256 ([string]$current.fullPath)
+                if ($currentHash -ne [string]$old.sha256) {
+                    throw "Mount content changed since backup: $root\$($pair.Key)"
+                }
+                $fileCount++
+                $fileBytes += [long]$current.length
+            }
         }
+    }
+    return @{
+        filesHashed = $fileCount; fileBytesHashed = $fileBytes
+        elapsedSeconds = ([System.Diagnostics.Stopwatch]::GetTimestamp() -
+            $startedTicks) / [double]$frequency
     }
 }
 
@@ -586,9 +617,10 @@ function Assert-InaviManifestPreflight(
     }
     Assert-NoReparseMounts $observed.backups
     Assert-SlowBootMarkers ([string]$observed.backups[0].Source)
-    Assert-InaviCheapMountInventory $observed.backupManifest
+    $mountContentScan = Assert-InaviCurrentMountInventory $observed.backupManifest
     Assert-RemoteEndpointAvailable
-    return @{ manifest = $manifest; observed = $observed; ledgers = $ledgers }
+    return @{ manifest = $manifest; observed = $observed; ledgers = $ledgers
+        mountContentScan = $mountContentScan }
 }
 
 function Write-MountedInventory([object[]]$Backups, [string]$OutputPath) {
@@ -1286,6 +1318,14 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
         try {
             $checked = Assert-InaviManifestPreflight $ManifestPath $ManifestSha256 `
                 $ApprovalReference $repository
+            Write-AtomicJsonFile (Join-Path $Directory 'prelaunch-mount-content-scan.json') @{
+                checkedUtc = [DateTime]::UtcNow.ToString('O')
+                filesHashed = $checked.mountContentScan.filesHashed
+                fileBytesHashed = $checked.mountContentScan.fileBytesHashed
+                elapsedSeconds = $checked.mountContentScan.elapsedSeconds
+                approvalReference = $ApprovalReference
+                manifestSha256 = $ManifestSha256
+            }
             $manifest = $checked.manifest
             if ([string]$manifest.runTag -cne [string]$claim.runTag -or
                 [string]$manifest.approvalObservedUtc -cne [string]$claim.approvalObservedUtc -or

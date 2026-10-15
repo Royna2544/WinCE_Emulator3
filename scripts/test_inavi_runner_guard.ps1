@@ -19,7 +19,8 @@ $definitions = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $true))
 foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
-        'Get-InaviPdbRsds', 'Get-Sha256',
+        'Get-InaviPdbRsds', 'Get-Sha256', 'Read-InaviJson',
+        'Assert-InaviCurrentMountInventory',
         'Get-InaviLedgerEvidenceHashes', 'Get-InaviReconciliationProofHashes',
         'Get-InaviHistoricalRunEvidenceHashes',
         'Stop-InaviProcessObject',
@@ -30,6 +31,7 @@ foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
 }
 
 $passed = 0
+$frequency = [System.Diagnostics.Stopwatch]::Frequency
 function Assert-Guard([bool]$Condition, [string]$Name) {
     if (-not $Condition) { throw "Offline runner guard failed: $Name" }
     $script:passed++
@@ -158,6 +160,69 @@ try {
     }
 }
 
+# Three synthetic mount roots, each with one file, exercise the exact
+# prelaunch content check. The SD file is then replaced with the same byte
+# length and its original timestamp/attributes are restored. No real mount
+# or backup artifact is read or changed, and every temp path is removed.
+$scratchRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
+    'inavi-mount-hash-offline-' + [Guid]::NewGuid().ToString('N'))
+$syntheticDirectories = [System.Collections.Generic.List[string]]::new()
+$syntheticFiles = [System.Collections.Generic.List[string]]::new()
+try {
+    [void][System.IO.Directory]::CreateDirectory($scratchRoot)
+    $rows = @()
+    foreach ($name in @('SD', 'ResidentFlash', 'EmulatorRoot')) {
+        $root = Join-Path $scratchRoot $name
+        [void][System.IO.Directory]::CreateDirectory($root)
+        $syntheticDirectories.Add($root)
+        $filePath = Join-Path $root 'data.bin'
+        [System.IO.File]::WriteAllBytes($filePath, [System.Text.Encoding]::ASCII.GetBytes('AAAA'))
+        $syntheticFiles.Add($filePath)
+        $file = Get-Item -LiteralPath $filePath
+        $snapshot = Join-Path $scratchRoot "$name-post-backup.json"
+        [System.IO.File]::WriteAllText($snapshot, (@{
+                    sourceRoot = $root
+                    files = @(@{
+                            relative = 'data.bin'; length = [long]$file.Length
+                            lastWriteUtc = $file.LastWriteTimeUtc.ToString('O')
+                            attributes = [int]$file.Attributes
+                            sha256 = (Get-Sha256 $filePath)
+                        })
+                    directories = @()
+                } | ConvertTo-Json -Depth 10))
+        $syntheticFiles.Add($snapshot)
+        $rows += @{ name = $name; sourceRoot = $root
+            postBackupSourceManifest = $snapshot }
+    }
+    $syntheticManifest = @{ completed = $rows }
+    $scan = Assert-InaviCurrentMountInventory $syntheticManifest
+    Assert-Guard ($scan.filesHashed -eq 3 -and $scan.fileBytesHashed -eq 12 -and
+        $scan.elapsedSeconds -ge 0) 'three synthetic mount files match backup contents'
+    $changedFile = Join-Path ([string]$rows[0].sourceRoot) 'data.bin'
+    $original = Get-Item -LiteralPath $changedFile
+    $originalUtc = $original.LastWriteTimeUtc
+    $originalAttributes = $original.Attributes
+    [System.IO.File]::WriteAllBytes($changedFile, [System.Text.Encoding]::ASCII.GetBytes('BBBB'))
+    [System.IO.File]::SetLastWriteTimeUtc($changedFile, $originalUtc)
+    [System.IO.File]::SetAttributes($changedFile, $originalAttributes)
+    $changed = Get-Item -LiteralPath $changedFile
+    Assert-Guard ($changed.Length -eq $original.Length -and
+        $changed.LastWriteTimeUtc.ToString('O') -eq $originalUtc.ToString('O') -and
+        [int]$changed.Attributes -eq [int]$originalAttributes) `
+        'synthetic replacement retains original length, timestamp and attributes'
+    Assert-Reject {
+        Assert-InaviCurrentMountInventory $syntheticManifest
+    } 'same-size same-mtime mount content replacement rejects'
+} finally {
+    foreach ($filePath in $syntheticFiles) {
+        if (Test-Path -LiteralPath $filePath) { Remove-Item -LiteralPath $filePath -Force }
+    }
+    foreach ($root in $syntheticDirectories) {
+        if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Force }
+    }
+    if (Test-Path -LiteralPath $scratchRoot) { Remove-Item -LiteralPath $scratchRoot -Force }
+}
+
 $source = [System.IO.File]::ReadAllText($path)
 $lockAt = $source.IndexOf('$ledgerLock = [System.IO.FileStream]::new(', [StringComparison]::Ordinal)
 $preflightAt = $source.IndexOf('$checked = Assert-InaviManifestPreflight $ManifestPath $ManifestSha256', [StringComparison]::Ordinal)
@@ -171,8 +236,16 @@ Assert-Guard ($lockAt -ge 0 -and $preflightAt -gt $lockAt -and
     $spentAt -gt $appAt) 'worker lock/preflight/reserve/spawn/spent order'
 Assert-Guard ($source -notmatch '\$request\.arguments|Test-OriginalMountPreflight|e37-live-|wince_emulation_v3-e37\.exe') 'legacy request and E-37 launch path removed'
 Assert-Guard ($source.Contains('Assert-InaviBackupComplete') -and
-    $source.Contains('Assert-InaviCheapMountInventory') -and
+    $source.Contains('Assert-InaviCurrentMountInventory') -and
+    $source.Contains('prelaunch-mount-content-scan.json') -and
     $source.Contains('Assert-SlowBootMarkers')) 'worker retains backup, mount and marker gates'
+$mountDefinition = @($definitions | Where-Object Name -eq 'Assert-InaviCurrentMountInventory')
+if ($mountDefinition.Count -ne 1) { throw 'Expected one current mount inventory function.' }
+$mountText = $mountDefinition[0].Extent.Text
+Assert-Guard ($mountText.Contains('$currentHash = Get-Sha256 ([string]$current.fullPath)') -and
+    $mountText.Contains('Mounted path has a missing or reparse-point ancestor') -and
+    $mountText.Contains('Writable mount contains a reparse point') -and
+    $mountText.Contains('100,000 entries')) 'mount preflight hashes all bounded files after reparse checks'
 Assert-Guard ($source.Contains("phase = 'prelaunch'") -and
     $source.Contains('launchRelativeHorizonSeconds = 420') -and
     $source.Contains('observer-worker-heartbeat.json') -and
