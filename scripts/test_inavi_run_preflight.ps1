@@ -1,12 +1,12 @@
 #requires -Version 7.5
 <#
 Offline acceptance controls for a future bounded-run preflight. This file never
-dot-sources the old runner or backup script, creates fixture files, enumerates
-mounts, launches a process, or writes a use ledger. All evidence artifact paths
-are synthetic strings under this repository's evidence directory. The source
-root string names the requested D: checkout; no source or mount path is opened.
+dot-sources the effectful runner or backup script, creates fixture files,
+enumerates mounts, launches a process, or writes a use ledger. All evidence
+artifact paths are synthetic strings under this repository's evidence
+directory. Source paths are injected strings; no source or mount path is opened.
 
-Proposed pure contract in scripts/inavi_run_preflight_core.ps1:
+The core validation contract with an injected source inventory:
   Test-InaviRunManifestCore -Manifest <hashtable-or-null> -Observed <hashtable>
     -LocalLedger <array> -TrackedLedger <array>
 returns { accepted: bool, codes: string[] }. Observed values are independently
@@ -14,8 +14,9 @@ collected by the future monitor worker; the production worker must recheck its
 own observations immediately before spawn. Core validation cannot itself
 grant or spend approval. The exclusive dual-ledger reservation is separate.
 
--FixturesOnly checks the in-memory fixture inventory. Until the core exists,
-normal execution produces a dependency red, not a behavioral validator red.
+-FixturesOnly checks the in-memory fixture inventory. Normal execution adds
+behavioral checks without using Git; the production worker resolves the same
+source inventory from the D: checkout immediately before launch.
 #>
 [CmdletBinding()]
 param([switch]$FixturesOnly)
@@ -37,12 +38,13 @@ function New-Baseline {
     $root = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only'
     $sourceRoot = 'D:\GitHub\Wince_emulation_v3'
     $backupTag = '20261015T020000Z'
-    $sourceFiles = @{}
-    foreach ($relative in @(
+    $discoveredSourcePaths = @(
         'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
         'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
-        'tests/basic_subsystems.rs', 'src/ce/memory.rs',
-        'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
+        'src/ce/framebuffer.rs', 'src/ce/memory.rs', 'src/error.rs',
+        'src/lib.rs', 'src/emulator/cpu.rs', 'src/emulator/stub.rs',
+        'src/emulator/unicorn.rs', 'tests/basic_subsystems.rs',
+        'vendor/unicorn-engine-sys/build.rs', 'Cargo.toml', 'Cargo.lock',
         '.gitattributes',
         'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
         'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
@@ -52,7 +54,11 @@ function New-Baseline {
         'scripts/test_inavi_summary_observer.ps1',
         'scripts/test_inavi_runner_guard.ps1',
         'scripts/test_atomic_json_overwrite.ps1'
-    )) { $sourceFiles[$relative] = New-SyntheticHash "source $relative" }
+    )
+    $sourceFiles = @{}
+    foreach ($relative in $discoveredSourcePaths) {
+        $sourceFiles[$relative] = New-SyntheticHash "source $relative"
+    }
     $hash = @{
         sd = (New-SyntheticHash 'SD archive')
         resident = (New-SyntheticHash 'ResidentFlash archive')
@@ -157,7 +163,11 @@ function New-Baseline {
         }
         existingEvidenceTags = @()
     }
-    return @{ manifest = $manifest; observed = $observed; localLedger = @(); trackedLedger = @() }
+    return @{
+        manifest = $manifest; observed = $observed
+        localLedger = @(); trackedLedger = @()
+        discoveredSourcePaths = $discoveredSourcePaths
+    }
 }
 
 function New-UseEntry([string]$Approval, [string]$State, [string[]]$ZipHashes) {
@@ -1068,6 +1078,22 @@ $sample.observed.sourceFileSha256['src/main.rs'] = New-SyntheticHash 'changed te
 $cases.Add(@{ name = 'changed_main_source_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
 
 $sample = Copy-Fixture $base
+$sample.observed.sourceFileSha256['src/ce/framebuffer.rs'] = New-SyntheticHash 'changed D-011 framebuffer source'
+$cases.Add(@{ name = 'changed_framebuffer_source_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.sourceFileSha256['src/emulator/cpu.rs'] = New-SyntheticHash 'changed D-011 CPU source'
+$cases.Add(@{ name = 'changed_cpu_source_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.sourceFileSha256['vendor/unicorn-engine-sys/build.rs'] = New-SyntheticHash 'changed vendored build source'
+$cases.Add(@{ name = 'changed_vendor_build_source_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.discoveredSourcePaths += 'src/ce/new_untracked_module.rs'
+$cases.Add(@{ name = 'new_untracked_source_not_in_seal'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
 $sample.observed.sourceFileSha256['scripts/inavi_bounded_e22.ps1'] = New-SyntheticHash 'changed effectful runner'
 $cases.Add(@{ name = 'changed_effectful_runner_bytes'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
 
@@ -1133,7 +1159,7 @@ $sample.observed.fileSha256.Remove($oldPath)
 $sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
 $cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
 
-if ($cases.Count -ne 123) { throw "Unexpected fixture count: $($cases.Count)" }
+if ($cases.Count -ne 127) { throw "Unexpected fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress
@@ -1169,7 +1195,7 @@ if ($null -eq (Get-Command Test-InaviRunManifestCore -CommandType Function -Erro
 $failures = [System.Collections.Generic.List[string]]::new()
 foreach ($test in $cases) {
     try {
-        $result = Test-InaviRunManifestCore -Manifest $test.data.manifest -Observed $test.data.observed -LocalLedger $test.data.localLedger -TrackedLedger $test.data.trackedLedger
+        $result = Test-InaviRunManifestCore -Manifest $test.data.manifest -Observed $test.data.observed -LocalLedger $test.data.localLedger -TrackedLedger $test.data.trackedLedger -DiscoveredSourcePaths $test.data.discoveredSourcePaths
         if ($null -eq $result -or $null -eq $result.accepted -or $null -eq $result.codes) {
             throw 'Core did not return accepted and codes fields'
         }

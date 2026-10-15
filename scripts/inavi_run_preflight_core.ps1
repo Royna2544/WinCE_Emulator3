@@ -1,11 +1,13 @@
 #requires -Version 7.0
 <#
-Pure validation of a proposed bounded iNavi run. The caller must collect
-Observed independently, immediately before launch, and must separately reserve
-approval/ZIP use under an exclusive lock in both durable ledgers. This module
-does not read a path, grant approval, mutate a ledger, back up a mount or start
-a process. Rejecting a manifest here is safe; accepting one is not authority
-to launch without the effectful worker's remaining checks.
+Validation of a proposed bounded iNavi run. The caller must collect Observed
+independently, immediately before launch, and must separately reserve
+approval/ZIP use under an exclusive lock in both durable ledgers. Production
+resolves only a read-only, repo-scoped Git source-path inventory; offline tests
+inject that inventory so their behavioral checks remain process-free. This
+module does not hash mounted data, grant approval, mutate a ledger, back up a
+mount or start the emulator. Rejecting a manifest here is safe; accepting one
+is not authority to launch without the effectful worker's remaining checks.
 #>
 
 function Test-InaviCoreMap([object]$Value) {
@@ -65,23 +67,93 @@ function Test-InaviCoreSamePath([object]$Left, [object]$Right) {
 }
 
 function Get-InaviRequiredSourceFiles {
-    # One pure list for the validator and the effectful worker's independent
-    # file-hash collector. Add a file here before sealing a new run build.
-    return @(
-        'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
-        'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
-        'tests/basic_subsystems.rs', 'src/ce/memory.rs',
-        'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
-        '.gitattributes',
-        'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
-        'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
-        'scripts/backup_rw_mounts_inventory_core.ps1',
-        'scripts/test_backup_rw_mounts_inventory.ps1',
-        'scripts/inavi_summary_observer_core.ps1',
-        'scripts/test_inavi_summary_observer.ps1',
-        'scripts/test_inavi_runner_guard.ps1',
-        'scripts/test_atomic_json_overwrite.ps1'
+    [CmdletBinding()]
+    param(
+        # Tests inject paths to keep the validator's behavioral fixtures
+        # process-free. Production discovers both tracked and non-ignored
+        # untracked files from the one authorized source checkout.
+        [AllowNull()][string[]]$DiscoveredPaths = $null,
+        [string]$SourceRoot = 'D:\GitHub\Wince_emulation_v3'
     )
+
+    $pathspecs = @(
+        'src', 'tests', 'scripts', 'vendor/unicorn-engine-sys',
+        'Cargo.toml', 'Cargo.lock', '.gitattributes', 'build.rs',
+        '.cargo', 'rust-toolchain', 'rust-toolchain.toml'
+    )
+    $repositoryInventory = $null -eq $DiscoveredPaths
+    if ($repositoryInventory) {
+        if (-not (Test-InaviCoreSamePath $SourceRoot 'D:\GitHub\Wince_emulation_v3')) {
+            throw "Unexpected source checkout for run seal: $SourceRoot"
+        }
+        # Repo-scoped index plus non-ignored untracked files: a newly added
+        # Rust module cannot enter a build without entering the source seal.
+        $DiscoveredPaths = @(& git -C $SourceRoot -c core.quotePath=false `
+            ls-files --cached --others --exclude-standard --full-name -- @pathspecs)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not inventory source inputs from Git: $SourceRoot"
+        }
+    }
+
+    $root = [System.IO.Path]::GetFullPath($SourceRoot).TrimEnd('\') + '\'
+    $required = [System.Collections.Generic.SortedSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    foreach ($relative in $DiscoveredPaths) {
+        if ([string]::IsNullOrWhiteSpace($relative) -or
+            $relative -cnotmatch '^[A-Za-z0-9._/-]+$' -or
+            $relative -cmatch '(^|/)\.\.?(/|$)|//' -or
+            $relative.StartsWith('/') -or
+            $relative.Contains('\')) {
+            throw "Non-canonical source path in run seal inventory: $relative"
+        }
+        $full = [System.IO.Path]::GetFullPath((Join-Path $SourceRoot $relative))
+        if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Source path escapes the run checkout: $relative"
+        }
+        if ($repositoryInventory) {
+            $cursor = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+            if ($cursor -is [System.IO.DirectoryInfo]) {
+                throw "Source inventory entry is not a file: $relative"
+            }
+            while ($null -ne $cursor) {
+                if ($cursor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    throw "Source inventory path contains a reparse point: $relative"
+                }
+                if ([string]::Equals($cursor.FullName.TrimEnd('\'),
+                        $root.TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+                    break
+                }
+                $cursor = if ($cursor -is [System.IO.DirectoryInfo]) {
+                    $cursor.Parent
+                } else {
+                    $cursor.Directory
+                }
+            }
+            if ($null -eq $cursor) {
+                throw "Source inventory path could not reach the run checkout: $relative"
+            }
+        }
+        $allowed = $relative -in @(
+            'Cargo.toml', 'Cargo.lock', '.gitattributes', 'build.rs',
+            'rust-toolchain', 'rust-toolchain.toml'
+        ) -or $relative -cmatch '^(src|tests|scripts|vendor/unicorn-engine-sys|\.cargo)/'
+        if (-not $allowed) {
+            throw "Unexpected source path in run seal inventory: $relative"
+        }
+        [void]$required.Add($relative)
+    }
+    foreach ($anchor in @(
+        'Cargo.toml', 'Cargo.lock', 'src/main.rs', 'src/lib.rs',
+        'scripts/inavi_bounded_e22.ps1',
+        'scripts/inavi_run_preflight_core.ps1',
+        'scripts/backup_rw_mounts.ps1',
+        'vendor/unicorn-engine-sys/build.rs'
+    )) {
+        if (-not $required.Contains($anchor)) {
+            throw "Required source anchor absent from run seal inventory: $anchor"
+        }
+    }
+    return [string[]]@($required)
 }
 
 function Add-InaviCoreCode([System.Collections.Generic.List[string]]$Codes, [string]$Code) {
@@ -185,7 +257,8 @@ function Test-InaviRunManifestCore {
         [AllowNull()][object]$Manifest,
         [AllowNull()][object]$Observed,
         [AllowNull()][object]$LocalLedger,
-        [AllowNull()][object]$TrackedLedger
+        [AllowNull()][object]$TrackedLedger,
+        [AllowNull()][string[]]$DiscoveredSourcePaths = $null
     )
 
     $codes = [System.Collections.Generic.List[string]]::new()
@@ -296,7 +369,11 @@ function Test-InaviRunManifestCore {
             Add-InaviCoreCode $codes 'SOURCE_SEAL_MISMATCH'
         }
     }
-    $requiredSourceFiles = @(Get-InaviRequiredSourceFiles)
+    $requiredSourceFiles = if ($null -eq $DiscoveredSourcePaths) {
+        @(Get-InaviRequiredSourceFiles)
+    } else {
+        @(Get-InaviRequiredSourceFiles -DiscoveredPaths $DiscoveredSourcePaths)
+    }
     if (-not (Test-InaviCoreSamePath $seal.sourceRoot 'D:\GitHub\Wince_emulation_v3') -or
         -not (Test-InaviCoreMap $seal.sourceFiles) -or
         $seal.sourceFiles.Count -ne $requiredSourceFiles.Count) {

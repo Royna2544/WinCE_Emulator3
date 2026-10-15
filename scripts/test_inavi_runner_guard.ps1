@@ -415,12 +415,36 @@ if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 3) {
 foreach ($coreFunction in $coreFunctions) {
     . ([scriptblock]::Create($coreFunction.Extent.Text))
 }
-$requiredFiles = @(Get-InaviRequiredSourceFiles)
+$fixtureSourcePaths = @(
+    'src/main.rs', 'src/lib.rs', 'src/ce/framebuffer.rs',
+    'src/emulator/cpu.rs', 'src/emulator/stub.rs', 'src/error.rs',
+    'Cargo.toml', 'Cargo.lock',
+    'vendor/unicorn-engine-sys/build.rs',
+    'scripts/inavi_bounded_e22.ps1',
+    'scripts/inavi_run_preflight_core.ps1',
+    'scripts/backup_rw_mounts.ps1',
+    'scripts/test_inavi_runner_guard.ps1'
+)
+$requiredFiles = @(Get-InaviRequiredSourceFiles -DiscoveredPaths $fixtureSourcePaths)
+$ordinalSortedFiles = [string[]]$requiredFiles.Clone()
+[Array]::Sort($ordinalSortedFiles, [System.StringComparer]::Ordinal)
 Assert-Guard ($source.Contains('foreach ($relative in (Get-InaviRequiredSourceFiles))') -and
-    $coreSource.Contains('$requiredSourceFiles = @(Get-InaviRequiredSourceFiles)') -and
-    $requiredFiles.Count -eq 22 -and '.gitattributes' -in $requiredFiles -and
-    'scripts/test_inavi_runner_guard.ps1' -in $requiredFiles -and
-    'scripts/test_atomic_json_overwrite.ps1' -in $requiredFiles) 'worker and validator use one 22-file source map'
+    $coreSource.Contains('$requiredSourceFiles = if ($null -eq $DiscoveredSourcePaths)') -and
+    $coreSource.Contains('@(Get-InaviRequiredSourceFiles -DiscoveredPaths $DiscoveredSourcePaths)') -and
+    $coreSource.Contains('ls-files --cached --others --exclude-standard --full-name') -and
+    'src/ce/framebuffer.rs' -in $requiredFiles -and
+    'src/emulator/cpu.rs' -in $requiredFiles -and
+    'src/emulator/stub.rs' -in $requiredFiles -and
+    'src/error.rs' -in $requiredFiles -and
+    'vendor/unicorn-engine-sys/build.rs' -in $requiredFiles -and
+    [string]::Join("`n", $requiredFiles) -ceq [string]::Join("`n", $ordinalSortedFiles)) `
+    'worker and validator share an ordered tracked-plus-untracked source inventory'
+Assert-Reject {
+    Get-InaviRequiredSourceFiles -DiscoveredPaths ($fixtureSourcePaths + 'target/release/app.exe')
+} 'build output cannot enter the source inventory'
+Assert-Reject {
+    Get-InaviRequiredSourceFiles -DiscoveredPaths ($fixtureSourcePaths + '../src/main.rs')
+} 'source inventory rejects path traversal'
 
 $repository = 'D:\GitHub\Wince_emulation_v3'
 $emptyProofs = Get-InaviReconciliationProofHashes @(@{ state = 'reserved' }) $repository
