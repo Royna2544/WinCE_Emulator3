@@ -78757,6 +78757,9 @@ mod unicorn_tests {
     fn decoded_current_process_terminate_marks_current_process_exited() {
         let config = crate::config::RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        // A selected numeric PID alone is not an exit authority. Mirror the
+        // registered process birth that a real child launch publishes.
+        let _process_handle = kernel.handles.create_process(67);
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: 67,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
