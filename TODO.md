@@ -16,13 +16,18 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Repair the real-MIPS ordinary cross-thread `SendMessageW` receiver-context
-     expected red ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md))
-     with a plan-first exact-birth native-frame handoff. Prove receiver stack,
-     provenance and one-return/send-wait retirement before unignoring it.
-     Then test the reciprocal boundary: T wakes from finite Sleep and sends to
-     S while S remains blocked sending to T. Keep post-wake MsgWait/sent
-     processing as a separate gate; neither is a reproduced failure.
+   - Repair the three ignored real-MIPS cross-thread `SendMessageW` entry reds
+     ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md))
+     with the planned exact-birth queue→GetMessage bridge, not an in-hook
+     receiver relabel. Before unignoring: test ordinary queued-send receiver
+     exit/TID reuse, two-sender exact completion, checked restore failure,
+     receiver stack/provenance and one-return/send-wait retirement. The
+     ignored ordinary receiver-exit/TID-reuse control is now red with a
+     [receipt](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md);
+     turn it green as part of this cut. Then test
+     reciprocal T→S after finite Sleep while S remains blocked sending to T.
+     Keep post-wake MsgWait/sent processing separate; neither later path is a
+     reproduced failure.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.

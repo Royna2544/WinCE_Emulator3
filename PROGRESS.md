@@ -30,20 +30,36 @@ cross-Send after receiver wake and post-wake MsgWait remain untested; neither
 is a reproduced failure. The user skipped the a04 run; no new adjacent mount
 backup or iNavi launch followed this scheduler cut.
 
-## 2026-10-15 Receiver-context cross-thread Send expected red (no app run)
+## 2026-10-15 Receiver-context cross-thread Send expected reds (no app run)
 
-A new ignored real-MIPS control first puts receiver B in a verified-birth
-`GetMessageW` wait, then runs sender A's `SendMessageW` toward B. B's wait and
-A's activation pass; the second native attempt fails before B's WNDPROC
-assertions with `Backend("native staged context has stale or unverified thread
-birth")`. The [test-only receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
-preserves the exact 196-line patch, source hash and targeted 1-failed/1-ignored
-results. Source inspection also shows the receiver-context shortcut derives
-callback SP from A's live registers, but the red did **not** observe B's stack
-or prove a reciprocal deadlock. No production fix, reciprocal fixture, full
-suite reseal, mount backup or iNavi launch occurred. The next design gate is
-a checked, exact-birth receiver-frame handoff; one-return/send-wait cleanup
-remains to be tested after callback entry is repaired.
+Three ignored real-MIPS controls now reach same-process cross-thread send:
+ordinary A→B after B blocks in verified-birth `GetMessageW`; a 64-instruction
+slice stop *inside* B's WNDPROC; and A→displaced C after C and B both block in
+GetMessage. Each fails at the native slice-end guard with
+`Backend("native staged context has stale or unverified thread birth")` before
+receiver-stack/return assertions. The [test-only receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
+preserves distinct a02–a04 source patches, hashes and complete targeted raw
+logs. Historical a01 has an exact patch and excerpt only; its complete raw
+output was not retained and its waiter assertion was corrected in a02. The
+file originally named `expected-red-a01.raw.log` was mislabeled a02 output;
+its exact bytes are retained once under the a02 name, with the move and
+temporary duplicate/removal recorded in the receipt. The
+a03 report confirms a real count stop within B's WNDPROC; a04 proves the
+target C was displaced before A sent, not that the ready-ID bridge selected
+the wrong receiver. Source inspection shows the old in-hook shortcut derives
+callback SP from A's live registers, but no red directly measured B's SP or
+proved a reciprocal deadlock.
+
+Plan-first review selected queue→birth-verified GetMessage resume at a slice
+boundary instead of an in-hook TID/register relabel. The connected repair must
+also freeze ordinary sent-message receiver birth, retire old-birth sends on
+exit, complete by exact send ID, and make GetMessage/sender context restore
+checked before consuming waits/results. An ignored
+[receiver-exit/TID-reuse Kernel control](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
+now fails as expected: B-prime takes B's queued send while A has no failure
+result. Those production changes, plus one-return and failure controls,
+remain open. No production fix, reciprocal
+fixture, full-suite reseal, mount backup or iNavi launch occurred.
 
 ## 2026-10-15 Architecture and measurement design refresh (no source/run)
 
