@@ -52,39 +52,69 @@ general drawing parity or live iNavi rendering.
 
 ### D-011 modal backing extension (design record; not implemented)
 
-The frozen GWE window-backing target set is not the only saved display image.
+The frozen GWE window-backing target set is not the only display state.
 `MessageBoxModalState` in `coredll.rs:18655-18692` owns a separate captured
 rectangle. Its current `restore_framebuffer_rect` silently returns on an
-incompatible row stride (`coredll.rs:54084-54122`). Requested active and
-parked child termination calls Kernel's checked GWE exit first, then takes and
-best-effort restores this modal state (`unicorn.rs:5890-5960,6139-6200`). A
-synthetically parked modal can therefore expose post-exit display failure;
-current production modal entry does not appear to create that parked state,
-so this is a latent source-boundary gate, not an observed iNavi defect.
+incompatible row stride (`coredll.rs:54084-54122`); rendering can also
+succeed when capture returned no backing (`coredll.rs:18618-18633`). A
+test-injected blocked MessageBox can reach requested active/parked child
+termination, which calls Kernel's checked GWE exit first and restores the
+modal only afterward (`unicorn.rs:5890-5960,6139-6200`). Current production
+MessageBox entry does not appear to create this parked state. By contrast,
+`TrackPopupMenuEx` can render and park in production
+(`unicorn.rs:23055-23116`; `coredll.rs:36456-36461`), but
+`PopupMenuModalState` has no captured backing (`coredll.rs:36367-36380`).
+Requested termination currently neither preflights nor refuses that popup;
+natural active/parked completion can also reach a finalizer from a terminal
+snapshot with a popup slot; the terminal-return selectors reject a blocked
+MessageBox but not popup (`unicorn.rs:5989-6037,6334-6433,6646-6650,6705-6721,6892-6910`).
+An initial child returning from its bounded run can take another stopped
+completion route (`unicorn.rs:19639-19724,19759-19775`); pending launches
+before their first child CPU have no modal slot.
+The pseudo self-exit path already fails closed for both modal types.
 
-The modal's captured task/birth owns the store, not the currently selected
-PID or another window at the same HWND. Before any requested exit effect,
-collect the exact terminating CPU's modal store and the Kernel's frozen-birth
-GWE stores, and validate **all** of them against one held destination format,
-dimensions, stride and pixel extent. A missing/incompatible destination
-returns `HostExitRecoveryRequired` with process, window and modal/wait state,
-CPU owner, framebuffer bytes and dirty rectangles unchanged; the monitor
-retains its recovery hold. Do not consume the modal, destroy GWE windows,
-retire Task/VM or publish a successful exit first. A prepared compatible
-modal rectangle may apply only after the whole preflight succeeds and under
-the same destination lease. No rollback is promised for a later unexpected
-commit failure; that is terminal and cannot be reported as completed exit.
-Independent checkpoint clones retain their own modal and pixel copies;
-restoring a prior checkpoint is the existing recovery path.
+The first connected safety cut is **fail-closed**, not invented restoration:
+before calling Kernel's exit finalizer or changing framebuffer/window/wait/CPU
+state, every stopped active, parked or just-returned child CPU completion path
+(requested or natural, child or boot) checks that CPU's blocked MessageBox and popup modal
+slots. Either present slot yields typed
+`HostExitRecoveryRequired`; preserve the stopped CPU, modal/wait/queue and
+process, framebuffer bytes and dirty regions, and leave the monitor in its
+recovery hold. This is conservative even if a MessageBox rectangle might be
+restorable. It does not infer authority from selected PID or numeric HWND;
+the unchanged-state promise applies to the refused exact-birth target, not
+to earlier children already completed in one parked-prune batch. The caller
+must still retain all unprocessed parked CPUs after that refusal. Future
+restoration needs the captured modal wait/thread birth to match the
+terminating process birth. `BlockedModalMessageBox` currently stores numeric
+thread ID/handle/wait ID, not a birth; the existing exact-wait verifier
+(`unicorn.rs:22830`) is the starting point. An unowned or stale modal must
+never authorize teardown.
 
-Stage expected-red active and parked requested-termination controls with a
-synthetically blocked, rendered RGB565 modal and incompatible BGRA destination;
-assert typed refusal and unchanged process/window/wait/CPU/pixels/dirty state.
-Add compatible retry and a two-backing late-failure control to prove neither
-store was consumed or copied early. Existing GWE-only D-011 controls must
-remain green in release and no-default configurations. This gate does not
-claim normal modal parking, CE6 visual parity, whole-exit atomicity after
-preflight or app/map readiness.
+The later checked-restoration cut must collect the exact modal state and
+Kernel's frozen-birth GWE stores and preflight **all** against one held
+destination before any exit effect. Persist the source pixel format with a
+MessageBox capture: equal bytes per pixel or row stride alone cannot prove
+format identity. Validate format, dimensions, stride, unclipped rectangle and
+pixel extents; `rendered && backing_store.is_none()` is un-restorable. Popup
+rendering needs an owned backing/restore plan or a defined redraw contract,
+not a silent dismissal. A compatible prepared restore may apply only after
+whole-display preflight under the same destination lease. No rollback is
+promised after an unexpected commit failure; it is terminal, not a completed
+exit. Independent checkpoint clones must keep modal and pixels independent;
+restoring an earlier checkpoint remains the recovery path.
+
+Stage expected-red active and parked completion controls first: a blocked
+rendered MessageBox (synthetic) and a blocked popup (production-reachable)
+must both refuse before process/window/wait/CPU/pixel/dirty mutation. Include
+a GWE-plus-modal late-target control to prove no early GWE restore. Then keep
+existing GWE-only D-011 controls green in release and no-default builds.
+Pending launches with no CPU/modal still use the GWE-only preflight. Include
+the initial-child `ChildProcessRunOutcome::Exited` finalizer in the guarded
+source/test review before claiming every child path is covered.
+Compatible modal retry and whole-display restoration are a separate later
+gate. Neither cut alone proves CE6 visual parity, whole-exit atomicity after
+preflight or iNavi map readiness.
 
 ## Telemetry and visual evidence
 
