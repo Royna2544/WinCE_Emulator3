@@ -44,8 +44,11 @@ function New-Baseline {
         'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
         'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
         'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
+        'scripts/backup_rw_mounts_inventory_core.ps1',
+        'scripts/test_backup_rw_mounts_inventory.ps1',
         'scripts/inavi_summary_observer_core.ps1',
-        'scripts/test_inavi_summary_observer.ps1'
+        'scripts/test_inavi_summary_observer.ps1',
+        'scripts/test_inavi_runner_guard.ps1'
     )) { $sourceFiles[$relative] = New-SyntheticHash "source $relative" }
     $hash = @{
         sd = (New-SyntheticHash 'SD archive')

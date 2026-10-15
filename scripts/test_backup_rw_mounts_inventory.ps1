@@ -29,10 +29,13 @@ function New-Inventory {
 function Assert-Rejects([string]$Label, [scriptblock]$Mutation) {
     $first = New-Inventory
     $last = New-Inventory
-    & $Mutation $last
+    try { & $Mutation $last } catch { throw "Invalid synthetic mutation '$Label': $_" }
     try {
         Assert-BackupInventoryMatch -Initial $first -Final $last -SourceRoot 'X:\offline'
     } catch {
+        if ($_.Exception.Message -notmatch '^(Post-backup|Initial|Invalid or duplicate)') {
+            throw "Unexpected failure for '$Label': $_"
+        }
         Write-Output "PASS reject: $Label"
         return
     }

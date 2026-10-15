@@ -44,7 +44,11 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
     )
     try {
         Write-Json $temporary $Value
-        [System.IO.File]::Move($temporary, $Path, $true)
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $Path, $null)
+        } else {
+            [System.IO.File]::Move($temporary, $Path)
+        }
     } finally {
         if (Test-Path -LiteralPath $temporary -PathType Leaf) {
             Remove-Item -LiteralPath $temporary -Force
@@ -360,18 +364,42 @@ try {
     }
     $manifestState.complete = $true
     Publish-Manifest
-    Write-Output "All three adjacent ZIP backups and final source inventories verified. Manifest: $manifestPath"
 } catch {
-    $message = $_.Exception.Message
+    $primaryError = $_.Exception
+    $message = $primaryError.Message
+    $recoveryErrors = [System.Collections.Generic.List[string]]::new()
+    $removedPartial = $null
     $manifestState.complete = $false
-    Publish-Manifest
+    try {
+        Publish-Manifest
+    } catch {
+        $recoveryErrors.Add("Incomplete-manifest publication failed: $($_.Exception.Message)")
+    }
     if ($null -ne $activePartial -and (Test-Path -LiteralPath $activePartial -PathType Leaf)) {
-        Remove-Item -LiteralPath $activePartial -Force -ErrorAction Stop
+        try {
+            Remove-Item -LiteralPath $activePartial -Force -ErrorAction Stop
+            $removedPartial = $activePartial
+        } catch {
+            $recoveryErrors.Add("Own partial cleanup failed: $($_.Exception.Message)")
+        }
     }
-    Write-Json (Join-Path $evidence 'failure.json') @{
-        failedUtc = [DateTime]::UtcNow.ToString('O')
-        error = $message; completed = $completed.ToArray()
-        removedOwnIncompletePartial = $activePartial
+    try {
+        Write-Json (Join-Path $evidence 'failure.json') @{
+            failedUtc = [DateTime]::UtcNow.ToString('O')
+            error = $message
+            recoveryErrors = $recoveryErrors.ToArray()
+            completed = $completed.ToArray()
+            removedOwnIncompletePartial = $removedPartial
+        }
+    } catch {
+        $recoveryErrors.Add("Failure receipt write failed: $($_.Exception.Message)")
     }
-    throw
+    if ($recoveryErrors.Count -gt 0) {
+        throw [System.InvalidOperationException]::new(
+            "Backup failed: $message; recovery also failed: $($recoveryErrors -join '; ')",
+            $primaryError
+        )
+    }
+    throw $primaryError
 }
+Write-Output "All three adjacent ZIP backups and final source inventories verified. Manifest: $manifestPath"

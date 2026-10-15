@@ -40,6 +40,16 @@ function Write-AtomicJsonFile([string]$Path, [object]$Value) {
     [System.IO.File]::Move($temporary, $Path)
 }
 
+function Write-ReplacingJsonFile([string]$Path, [object]$Value) {
+    $temporary = "$Path.tmp"
+    Write-JsonFile $temporary $Value
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        [System.IO.File]::Replace($temporary, $Path, $null)
+    } else {
+        [System.IO.File]::Move($temporary, $Path)
+    }
+}
+
 function Add-JsonLine([string]$Path, [object]$Value) {
     $json = $Value | ConvertTo-Json -Compress -Depth 12
     [System.IO.File]::AppendAllText($Path, $json + "`n", $utf8)
@@ -252,6 +262,264 @@ function Assert-InaviBackupComplete([hashtable]$Manifest, [hashtable]$BackupMani
     }
 }
 
+function Assert-InaviCheapMountInventory([hashtable]$BackupManifest) {
+    for ($index = 0; $index -lt 3; $index++) {
+        $row = $BackupManifest.completed[$index]
+        $root = [System.IO.Path]::GetFullPath([string]$row.sourceRoot).TrimEnd('\')
+        $snapshot = Read-InaviJson ([string]$row.postBackupSourceManifest)
+        if ([string]$snapshot.sourceRoot -ne [string]$row.sourceRoot -or
+            $snapshot.files -isnot [array] -or $snapshot.directories -isnot [array]) {
+            throw "Invalid post-backup mount inventory: $($row.postBackupSourceManifest)"
+        }
+        $expected = [System.Collections.Generic.Dictionary[string,object]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        foreach ($group in @(@{ kind = 'file'; rows = $snapshot.files },
+                @{ kind = 'directory'; rows = $snapshot.directories })) {
+            foreach ($item in $group.rows) {
+                $relative = [string]$item.relative
+                if ([string]::IsNullOrWhiteSpace($relative) -or
+                    [System.IO.Path]::IsPathRooted($relative) -or
+                    $relative -match '(^|[\\/])\.\.([\\/]|$)') {
+                    throw "Unsafe relative path in post-backup mount inventory: $relative"
+                }
+                $candidate = [System.IO.Path]::GetFullPath((Join-Path $root $relative))
+                if (-not $candidate.StartsWith($root + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                    -not $expected.TryAdd($relative, @{ kind = $group.kind; item = $item })) {
+                    throw "Duplicate or escaping post-backup mount path: $relative"
+                }
+            }
+        }
+        $actual = [System.Collections.Generic.Dictionary[string,object]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        $pending = [System.Collections.Generic.Stack[string]]::new()
+        $pending.Push($root)
+        $entryCount = 0
+        while ($pending.Count -gt 0) {
+            $directory = $pending.Pop()
+            foreach ($child in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+                $entryCount++
+                if ($entryCount -gt 100000) { throw 'Mounted cheap inventory exceeded 100,000 entries.' }
+                if ($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    throw "Writable mount contains a reparse point: $($child.FullName)"
+                }
+                $relative = [System.IO.Path]::GetRelativePath($root, $child.FullName).Replace('\', '/')
+                $kind = if ($child.PSIsContainer) { 'directory' } else { 'file' }
+                if (-not $actual.TryAdd($relative, @{
+                            kind = $kind; length = if ($kind -eq 'file') { [long]$child.Length } else { $null }
+                            lastWriteUtc = $child.LastWriteTimeUtc.ToString('O')
+                            attributes = [int]$child.Attributes
+                        })) {
+                    throw "Duplicate current mount entry: $relative"
+                }
+                if ($kind -eq 'directory') { $pending.Push($child.FullName) }
+            }
+        }
+        if ($actual.Count -ne $expected.Count) {
+            throw "Mount size/mtime inventory count changed since backup: $root"
+        }
+        foreach ($pair in $expected.GetEnumerator()) {
+            if (-not $actual.ContainsKey($pair.Key)) {
+                throw "Mount entry disappeared since backup: $root\$($pair.Key)"
+            }
+            $current = $actual[$pair.Key]
+            $old = $pair.Value.item
+            if ($current.kind -ne $pair.Value.kind -or
+                $current.length -ne $old.length -or
+                $current.lastWriteUtc -ne [string]$old.lastWriteUtc -or
+                $current.attributes -ne [int]$old.attributes) {
+                throw "Mount size/mtime changed since backup: $root\$($pair.Key)"
+            }
+        }
+    }
+}
+
+function Get-InaviRunObservation(
+    [hashtable]$Manifest,
+    [string]$ManifestPath,
+    [string]$ManifestHash,
+    [string]$Repository
+) {
+    Test-ExpectedHash $ManifestPath $ManifestHash
+    $sealPath = [string]$Manifest.sourceSealFile.path
+    $receiptPath = [string]$Manifest.buildReceipt.path
+    $backupPath = [string]$Manifest.backupManifest.path
+    $seal = Read-InaviJson $sealPath
+    $receipt = Read-InaviJson $receiptPath
+    $backupManifest = Read-InaviJson $backupPath
+    Assert-InaviBackupComplete $Manifest $backupManifest
+    $sourceFiles = @{}
+    foreach ($relative in @(
+            'src/main.rs', 'src/remote_server.rs', 'src/ce/coredll.rs',
+            'src/ce/kernel.rs', 'src/ce/remote.rs', 'src/ce/gwe.rs',
+            'tests/basic_subsystems.rs', 'src/ce/memory.rs',
+            'src/emulator/unicorn.rs', 'Cargo.toml', 'Cargo.lock',
+            'scripts/inavi_bounded_e22.ps1', 'scripts/inavi_run_preflight_core.ps1',
+            'scripts/backup_rw_mounts.ps1', 'scripts/test_inavi_run_preflight.ps1',
+            'scripts/backup_rw_mounts_inventory_core.ps1',
+            'scripts/test_backup_rw_mounts_inventory.ps1',
+            'scripts/inavi_summary_observer_core.ps1',
+            'scripts/test_inavi_summary_observer.ps1',
+            'scripts/test_inavi_runner_guard.ps1')) {
+        $sourceFiles[$relative] = Get-Sha256 (Join-Path $Repository $relative)
+    }
+    $fileHashes = @{}
+    foreach ($record in @($Manifest.sourceSealFile, $Manifest.buildReceipt,
+            $Manifest.executable, $Manifest.pdb, $Manifest.backupManifest,
+            $Manifest.config.registry, $Manifest.config.devices,
+            $Manifest.config.mounts, $Manifest.config.app)) {
+        $fileHashes[[string]$record.path] = Get-Sha256 ([string]$record.path)
+    }
+    foreach ($row in $Manifest.backups) {
+        $fileHashes[[string]$row.archivePath] = Get-Sha256 ([string]$row.archivePath)
+    }
+    $roots = @(Get-InaviWritableMountRoots ([string]$Manifest.config.mounts.path))
+    $verified = $backupManifest.Clone()
+    $verified.sha256 = $fileHashes[[string]$Manifest.backupManifest.path]
+    return @{
+        observation = @{
+            currentSourceSeal = $seal; parsedSourceSeal = $seal
+            currentSourceRoot = $Repository; sourceFileSha256 = $sourceFiles
+            currentManifestSha256 = Get-Sha256 $ManifestPath
+            parsedBuildReceipt = $receipt; fileSha256 = $fileHashes
+            executableRsds = Get-InaviExecutableRsds ([string]$Manifest.executable.path)
+            pdbRsds = Get-InaviPdbRsds ([string]$Manifest.pdb.path)
+            writableMountRoots = $roots; verifiedBackupManifest = $verified
+            existingEvidenceTags = @()
+        }
+        backupManifest = $backupManifest
+        backups = @($Manifest.backups | ForEach-Object {
+                @{ Source = [string]$_.sourceRoot; Archive = [string]$_.archivePath
+                    Hash = [string]$_.archiveSha256 }
+            })
+    }
+}
+
+function Read-InaviUseLedgers([string]$Repository) {
+    $localPath = Join-Path $Repository 'evidence\live-run-use.jsonl'
+    $trackedPath = Join-Path $Repository 'docs\evidence\live-run-use.jsonl'
+    if (-not (Test-Path -LiteralPath $localPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $trackedPath -PathType Leaf)) {
+        throw 'Both local and tracked append-only use ledgers must exist before a run.'
+    }
+    $localBytes = [System.IO.File]::ReadAllBytes($localPath)
+    $trackedBytes = [System.IO.File]::ReadAllBytes($trackedPath)
+    if ($localBytes.Length -gt 16MB -or $trackedBytes.Length -gt 16MB -or
+        -not [System.Linq.Enumerable]::SequenceEqual($localBytes, $trackedBytes)) {
+        throw 'Local and tracked use ledger histories differ or exceed their bound.'
+    }
+    $entries = [System.Collections.Generic.List[object]]::new()
+    $text = [System.Text.UTF8Encoding]::new($false, $true).GetString($localBytes)
+    foreach ($line in ($text -split "`n")) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $entries.Add(($line | ConvertFrom-Json -AsHashtable -DateKind String -ErrorAction Stop))
+    }
+    return @{ repository = $Repository; localPath = $localPath; trackedPath = $trackedPath
+        byteSha256 = Get-ByteSha256 $localBytes
+        local = $entries.ToArray(); tracked = $entries.ToArray() }
+}
+
+function Add-InaviDualLedgerEntry([hashtable]$Ledgers, [hashtable]$Entry) {
+    # The monitor owns an exclusive evidence/live-run-use.lock while this runs.
+    # Each append is flushed before the next; interruption leaves an explicit
+    # divergence or unresolved reservation, never permission for another run.
+    $before = Read-InaviUseLedgers ([string]$Ledgers.repository)
+    if ($before.byteSha256 -ne $Ledgers.byteSha256) {
+        throw 'Use ledger changed after its locked preflight; refusing append.'
+    }
+    $line = ($Entry | ConvertTo-Json -Compress -Depth 12) + "`n"
+    $bytes = $utf8.GetBytes($line)
+    foreach ($path in @($Ledgers.localPath, $Ledgers.trackedPath)) {
+        $stream = [System.IO.FileStream]::new($path, [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+        try {
+            [void]$stream.Seek(0, [System.IO.SeekOrigin]::End)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        } finally { $stream.Dispose() }
+    }
+    $after = Read-InaviUseLedgers ([string]$Ledgers.repository)
+    $Ledgers.byteSha256 = $after.byteSha256
+}
+
+function New-InaviUseEvent(
+    [string]$AttemptId,
+    [string]$ManifestHash,
+    [hashtable]$Manifest,
+    [string]$State,
+    [AllowNull()][object]$App
+) {
+    $entry = @{
+        eventId = [Guid]::NewGuid().ToString('D')
+        attemptId = $AttemptId; manifestSha256 = $ManifestHash
+        approvalReference = [string]$Manifest.approvalReference
+        zipSha256 = @($Manifest.backups | ForEach-Object { [string]$_.archiveSha256 })
+        state = $State; utc = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ')
+    }
+    if ($State -eq 'spent') {
+        if ($null -eq $App) { throw 'A spent entry requires the exact spawned process.' }
+        $entry.pid = [int]$App.Id
+        $entry.processStartUtc = $App.StartTime.ToUniversalTime().ToString(
+            'yyyy-MM-ddTHH:mm:ss.fffffffZ')
+    }
+    return $entry
+}
+
+function Assert-InaviManifestPreflight(
+    [string]$Path,
+    [string]$ExpectedHash,
+    [string]$ExpectedApproval,
+    [string]$Repository
+) {
+    if ($ExpectedHash -cnotmatch '^[0-9A-Fa-f]{64}$' -or
+        $ExpectedApproval -cnotmatch '^[A-Za-z0-9._:-]{1,256}$') {
+        throw 'A fresh manifest SHA-256 and explicit approval reference are required.'
+    }
+    Test-ExpectedHash $Path $ExpectedHash
+    $manifest = Read-InaviJson $Path
+    if ($manifest -isnot [hashtable] -or
+        [string]$manifest.approvalReference -cne $ExpectedApproval) {
+        throw 'Manifest approval reference differs from the explicit run request.'
+    }
+    foreach ($pair in @(
+            @([string]$manifest.config.registry.path, (Join-Path $Repository 'registry.reg')),
+            @([string]$manifest.config.devices.path, (Join-Path $Repository 'serial_devices.json')),
+            @([string]$manifest.config.mounts.path, (Join-Path $Repository 'mounts.toml')))) {
+        if (-not (Test-InaviCoreSamePath $pair[0] $pair[1])) {
+            throw "Manifest config path is not this checkout's active file: $($pair[0])"
+        }
+    }
+    $evidencePrefix = [System.IO.Path]::GetFullPath(
+        (Join-Path $Repository 'evidence')) + '\'
+    foreach ($record in @($manifest.sourceSealFile, $manifest.buildReceipt,
+            $manifest.executable, $manifest.pdb, $manifest.backupManifest)) {
+        if (-not [System.IO.Path]::GetFullPath([string]$record.path).StartsWith(
+                $evidencePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Manifest seal/build/binary/backup artifacts must be preserved under this checkout evidence directory.'
+        }
+    }
+    $observed = Get-InaviRunObservation $manifest $Path $ExpectedHash $Repository
+    $expectedApp = Join-Path ([string]$observed.observation.writableMountRoots[0]) 'INavi\iNavi.exe'
+    if (-not (Test-InaviCoreSamePath ([string]$manifest.config.app.path) $expectedApp)) {
+        throw 'Manifest target app is not the active mounted iNavi image.'
+    }
+    $ledgers = Read-InaviUseLedgers $Repository
+    if (@($ledgers.local | Where-Object {
+                [string]$_.attemptId -ceq [string]$manifest.runTag
+            }).Count -gt 0) {
+        throw 'Evidence run tag already appears in the durable use ledger.'
+    }
+    $result = Test-InaviRunManifestCore -Manifest $manifest -Observed $observed.observation `
+        -LocalLedger $ledgers.local -TrackedLedger $ledgers.tracked
+    if (-not $result.accepted) {
+        throw "Fresh-run manifest preflight rejected: $($result.codes -join ', ')"
+    }
+    Assert-NoReparseMounts $observed.backups
+    Assert-SlowBootMarkers ([string]$observed.backups[0].Source)
+    Assert-InaviCheapMountInventory $observed.backupManifest
+    Assert-RemoteEndpointAvailable
+    return @{ manifest = $manifest; observed = $observed; ledgers = $ledgers }
+}
+
 function Write-MountedInventory([object[]]$Backups, [string]$OutputPath) {
     # Enumerate only the three named mount roots, never following reparse points.
     $entryCount = 0
@@ -314,10 +582,10 @@ function Compare-MountedInventories([string]$BeforePath, [string]$AfterPath, [st
 }
 
 function Assert-WorkerDirectory([string]$Directory) {
-    $prefix = 'D:\GitHub\Wince_emulation_v3\evidence\e37-live-'
+    $prefix = 'D:\GitHub\Wince_emulation_v3\evidence\live-'
     $resolved = [System.IO.Path]::GetFullPath($Directory)
     if (-not $resolved.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Worker evidence directory is outside E-37: $resolved"
+        throw "Worker evidence directory is outside the new live-run namespace: $resolved"
     }
     if (-not (Test-Path -LiteralPath $resolved -PathType Container)) {
         throw "Worker evidence directory is missing: $resolved"
@@ -326,9 +594,10 @@ function Assert-WorkerDirectory([string]$Directory) {
 
 function Assert-RemoteEndpointAvailable {
     # A stale emulator must not supply the observer's t0 or receive these POSTs.
-    $other = @(Get-Process -Name 'wince_emulation_v3', 'wince_emulation_v3-op4', 'wince_emulation_v3-e37' -ErrorAction SilentlyContinue)
+    # CIM failure is not evidence of absence; it rejects the launch.
+    $other = @(Get-CimInstance -ClassName Win32_Process -Filter "Name LIKE 'wince_emulation_v3%'" -ErrorAction Stop)
     if ($other.Count -ne 0) {
-        throw "Another wince_emulation_v3 process is running (PID(s): $($other.Id -join ', '))."
+        throw "Another wince_emulation_v3 process is running (PID(s): $($other.ProcessId -join ', '))."
     }
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('192.168.0.39'), 8765)
     try { $listener.Start() } finally { $listener.Stop() }
@@ -503,11 +772,16 @@ function Invoke-Observer([string]$Directory) {
     [void][System.IO.Directory]::CreateDirectory($capture)
     $log = Join-Path $Directory 'observer-get.jsonl'
     $readyPath = Join-Path $Directory 'observer-worker-ready.json'
+    $heartbeatPath = Join-Path $Directory 'observer-worker-heartbeat.json'
+    $descriptorPath = Join-Path $Directory 'process.json'
     $inputReadyPath = Join-Path $Directory 'input-ready.json'
     $stopRequestPath = Join-Path $Directory 'observer-stop-request.json'
     $client = New-HttpClient
-    $startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    Write-AtomicJsonFile $readyPath @{ startedUtc = [DateTime]::UtcNow.ToString('O'); startedTicks = $startedTicks; horizonSeconds = 420 }
+    $readyTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    Write-AtomicJsonFile $readyPath @{
+        readyUtc = [DateTime]::UtcNow.ToString('O'); readyTicks = $readyTicks
+        maxPrelaunchSeconds = 900; launchRelativeHorizonSeconds = 420
+    }
     $base = 'http://192.168.0.39:8765'
     $nextSlot = 0
     $frameHash = $null
@@ -516,10 +790,44 @@ function Invoke-Observer([string]$Directory) {
     $summaryBodiesSaved = 0
     $lastSummarySequence = $null
     $stoppedEarly = $false
+    $launchTicks = $null
     try {
-        while (([System.Diagnostics.Stopwatch]::GetTimestamp() - $startedTicks) -lt (420L * $frequency)) {
+        # Be ready before launch, but consume no capture slots until the exact
+        # monitor-owned process descriptor exists. The heartbeat lets the
+        # monitor reject an observer that dies during a long ZIP rehash.
+        while (-not (Test-Path -LiteralPath $descriptorPath -PathType Leaf)) {
             if (Test-Path -LiteralPath $stopRequestPath) { $stoppedEarly = $true; break }
-            $elapsedMs = 1000.0 * ([System.Diagnostics.Stopwatch]::GetTimestamp() - $startedTicks) / $frequency
+            $now = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            if (($now - $readyTicks) -ge (900L * $frequency)) {
+                throw 'Observer prelaunch wait exceeded 900 seconds.'
+            }
+            Write-ReplacingJsonFile $heartbeatPath @{
+                utc = [DateTime]::UtcNow.ToString('O'); ticks = $now
+                phase = 'prelaunch'
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $stoppedEarly) {
+            $descriptor = Read-InaviJson $descriptorPath
+            $launchTicks = [long]$descriptor.launchTicks
+            if ($launchTicks -le 0 -or
+                [string]$descriptor.manifestSha256 -cne [string](Read-InaviJson (Join-Path $Directory 'run-claim.json')).manifestSha256) {
+                throw 'Observer received a mismatched process descriptor.'
+            }
+            Write-AtomicJsonFile (Join-Path $Directory 'observer-launch.json') @{
+                launchTicks = $launchTicks; observedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+                observedUtc = [DateTime]::UtcNow.ToString('O')
+            }
+        }
+        while (-not $stoppedEarly -and
+            ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -lt (420L * $frequency)) {
+            if (Test-Path -LiteralPath $stopRequestPath) { $stoppedEarly = $true; break }
+            $now = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            Write-ReplacingJsonFile $heartbeatPath @{
+                utc = [DateTime]::UtcNow.ToString('O'); ticks = $now
+                phase = 'capture'
+            }
+            $elapsedMs = 1000.0 * ($now - $launchTicks) / $frequency
             $slot = [int][Math]::Floor($elapsedMs / 2000.0)
             if ($slot -lt $nextSlot) {
                 Start-Sleep -Milliseconds 100
@@ -569,8 +877,10 @@ function Invoke-Observer([string]$Directory) {
     } finally {
         $client.Dispose()
         Write-JsonFile (Join-Path $Directory 'observer-result.json') @{
-            startedTicks = $startedTicks; endedUtc = [DateTime]::UtcNow.ToString('O')
-            completedHorizon = (([System.Diagnostics.Stopwatch]::GetTimestamp() - $startedTicks) -ge (420L * $frequency))
+            readyTicks = $readyTicks; launchTicks = $launchTicks
+            endedUtc = [DateTime]::UtcNow.ToString('O')
+            completedHorizon = ($null -ne $launchTicks -and
+                ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -ge (420L * $frequency))
             stoppedOnEarlyAppEnd = $stoppedEarly
             changedFramesSaved = $savedFrames
             summarySamples = $summarySamples; summaryBodiesSaved = $summaryBodiesSaved
@@ -598,6 +908,56 @@ function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
     }
 }
 
+function Assert-InaviWorkerClaim(
+    [hashtable]$Claim,
+    [hashtable]$Request,
+    [string]$Directory,
+    [string]$Path,
+    [string]$Hash,
+    [string]$Approval,
+    [string]$Nonce
+) {
+    if ($Nonce -cnotmatch '^[0-9A-Fa-f]{32}$' -or
+        $Hash -cnotmatch '^[0-9A-Fa-f]{64}$' -or
+        $Claim -isnot [hashtable] -or $Request -isnot [hashtable]) {
+        throw 'Detached monitor is missing its fresh launch claim.'
+    }
+    foreach ($item in @($Claim, $Request)) {
+        if ([string]$item.launchNonce -cne $Nonce -or
+            [string]$item.manifestPath -cne $Path -or
+            [string]$item.manifestSha256 -cne $Hash -or
+            [string]$item.approvalReference -cne $Approval -or
+            [string]::IsNullOrWhiteSpace([string]$item.runTag)) {
+            throw 'Detached monitor launch claim does not match the request.'
+        }
+    }
+    if ([string]$Claim.runTag -cne [string]$Request.runTag -or
+        -not [System.IO.Path]::GetFullPath($Directory).Equals(
+            [System.IO.Path]::GetFullPath((Join-Path 'D:\GitHub\Wince_emulation_v3\evidence' "live-$($Claim.runTag)")),
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Detached monitor run tag does not own this evidence directory.'
+    }
+}
+
+function Assert-InaviObserverLive([string]$Directory) {
+    if (Test-Path -LiteralPath (Join-Path $Directory 'abort-request.json')) {
+        throw 'Driver cancelled before monitor-owned launch.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $Directory 'process.json')) {
+        throw 'A process descriptor already exists before launch.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $Directory 'observer-result.json')) {
+        throw 'Observer ended before monitor-owned launch.'
+    }
+    $heartbeat = Read-InaviJson (Join-Path $Directory 'observer-worker-heartbeat.json')
+    $now = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $age = $now - [long]$heartbeat.ticks
+    if ([string]$heartbeat.phase -cne 'prelaunch' -or
+        $age -lt 0 -or $age -gt (5L * $frequency)) {
+        throw 'Observer prelaunch heartbeat is missing or stale.'
+    }
+}
+
 function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
     Assert-WorkerDirectory $Directory
     $requestPath = Join-Path $Directory 'launch-request.json'
@@ -622,33 +982,71 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
         }
         Start-Sleep -Milliseconds 100
     }
-    $request = Get-Content -LiteralPath $requestPath -Raw | ConvertFrom-Json
+    $request = Read-InaviJson $requestPath
+    $claim = Read-InaviJson (Join-Path $Directory 'run-claim.json')
+    Assert-InaviWorkerClaim $claim $request $Directory $ManifestPath $ManifestSha256 `
+        $ApprovalReference $LaunchNonce
     if (-not (Test-Path -LiteralPath (Join-Path $Directory 'observer-worker-ready.json'))) {
         throw 'Observer was not ready at monitor-owned launch.'
     }
-    if ((Get-Sha256 ([string]$request.executable)) -ne [string]$request.executableSha256) {
-        throw 'Executable hash changed between build and monitor-owned launch.'
-    }
-    if ([string]$request.repository -ne 'D:\GitHub\Wince_emulation_v3') {
-        throw 'Monitor launch request has the wrong checkout.'
-    }
-    $arguments = @($request.arguments | ForEach-Object { [string]$_ })
-    $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $repository = 'D:\GitHub\Wince_emulation_v3'
+    $launchTicks = $null
     $app = $null
-    $nextSample = $launchTicks
+    $nextSample = $null
     $reason = 'launch-failure'
     $fired = $false
     $monitorError = $null
     $appExitCode = $null
     $terminationConfirmed = $false
     try {
-        $app = Start-Process -FilePath ([string]$request.executable) -ArgumentList $arguments `
-            -WorkingDirectory ([string]$request.repository) -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+        # Only this monitor process may spend the approval. Hold the exclusive
+        # lock across independent rehash/reparse, both flushed reservation
+        # appends, Start-Process, and both flushed spent appends.
+        $ledgerLockPath = Join-Path $repository 'evidence\live-run-use.lock'
+        $ledgerLock = [System.IO.FileStream]::new($ledgerLockPath,
+            [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None)
+        try {
+            $checked = Assert-InaviManifestPreflight $ManifestPath $ManifestSha256 `
+                $ApprovalReference $repository
+            $manifest = $checked.manifest
+            if ([string]$manifest.runTag -cne [string]$claim.runTag -or
+                $LimitMiB -ne [int]$manifest.caps.rssMiB) {
+                throw 'Detached monitor manifest tag or cap differs from its claim.'
+            }
+            $configuration = $manifest.config
+            $arguments = @(
+                '--registry', [string]$configuration.registry.path,
+                '--devices', [string]$configuration.devices.path,
+                '--mount-config', [string]$configuration.mounts.path,
+                '--image', [string]$configuration.app.path,
+                '--dll-search-dir', 'D:\INAVI_Emulator\DUMPPLZ\Windows',
+                '--desktop', 'virtual', '--run-cpu',
+                '--remote-server', '192.168.0.39:8765',
+                '--cpu-wall-clock-limit-ms', '330000',
+                '--cpu-instruction-limit', '1000000',
+                '--framebuffer-dump', $ppmPath
+            )
+            Assert-InaviObserverLive $Directory
+            $reservation = New-InaviUseEvent ([string]$manifest.runTag) `
+                $ManifestSha256 $manifest 'reserved' $null
+            Add-InaviDualLedgerEntry $checked.ledgers $reservation
+            $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+            $app = Start-Process -FilePath ([string]$manifest.executable.path) `
+                -ArgumentList $arguments -WorkingDirectory $repository `
+                -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath `
+                -RedirectStandardError $stderrPath
+            $spent = New-InaviUseEvent ([string]$manifest.runTag) `
+                $ManifestSha256 $manifest 'spent' $app
+            Add-InaviDualLedgerEntry $checked.ledgers $spent
+        } finally {
+            $ledgerLock.Dispose()
+        }
         Write-AtomicJsonFile $descriptorPath @{
             processId = $app.Id; startUtcTicks = $app.StartTime.ToUniversalTime().Ticks
             launchTicks = $launchTicks; launchedUtc = [DateTime]::UtcNow.ToString('O')
-            executableSha256 = [string]$request.executableSha256
+            executableSha256 = [string]$manifest.executable.sha256
+            manifestSha256 = $ManifestSha256; approvalReference = $ApprovalReference
         }
         $reason = 'normal-exit'
         while ($true) {
@@ -705,7 +1103,7 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
         $endedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
         Write-JsonFile $resultPath @{
             endedUtc = [DateTime]::UtcNow.ToString('O'); endedTicks = $endedTicks
-            appElapsedSeconds = ($endedTicks - $launchTicks) / [double]$frequency
+            appElapsedSeconds = if ($null -ne $launchTicks) { ($endedTicks - $launchTicks) / [double]$frequency } else { $null }
             processId = if ($null -ne $app) { $app.Id } else { $null }
             fired = $fired; reason = $reason; rssLimitMiB = $LimitMiB
             appExitCode = $appExitCode; terminationConfirmed = $terminationConfirmed
@@ -764,57 +1162,69 @@ if ($MonitorWorker) { Invoke-Monitor $RunDirectory $MaxWorkingSetMiB; return }
 
 $repository = Split-Path -Parent $PSScriptRoot
 if ($repository -ne 'D:\GitHub\Wince_emulation_v3') { throw "Unexpected checkout: $repository" }
-$backups = Test-OriginalMountPreflight $repository
+if ([string]::IsNullOrWhiteSpace($ManifestPath) -or
+    [string]::IsNullOrWhiteSpace($ManifestSha256) -or
+    [string]::IsNullOrWhiteSpace($ApprovalReference) -or
+    -not [string]::IsNullOrWhiteSpace($RunDirectory) -or
+    -not [string]::IsNullOrWhiteSpace($LaunchNonce) -or
+    $MaxWorkingSetMiB -ne 2048) {
+    throw 'A new run requires -ManifestPath, -ManifestSha256 and -ApprovalReference; worker arguments and cap overrides are not accepted.'
+}
+$ManifestPath = [System.IO.Path]::GetFullPath($ManifestPath)
+$checked = Assert-InaviManifestPreflight $ManifestPath $ManifestSha256 `
+    $ApprovalReference $repository
+$manifest = $checked.manifest
+$backups = $checked.observed.backups
+$tag = [string]$manifest.runTag
+$runDirectory = Join-Path $repository "evidence\live-$tag"
+if (Test-Path -LiteralPath $runDirectory) { throw "Evidence tag already exists: $runDirectory" }
 $experiments = @(Get-ChildItem Env:WINCE_EMU_* -ErrorAction SilentlyContinue)
 if ($experiments.Count -gt 0) { throw "Unset WINCE_EMU_* experiment variables before a matched run: $($experiments.Name -join ', ')" }
 # Capture the fresh-owner slice cost and guest MIPS for this one-run comparison.
 $env:RUST_LOG = 'warn,ce.slice_profile=debug'
 
-$tag = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
-$runDirectory = Join-Path $repository "evidence\e37-live-$tag"
-if (Test-Path -LiteralPath $runDirectory) { throw "Evidence path already exists: $runDirectory" }
-[void][System.IO.Directory]::CreateDirectory($runDirectory)
+[void](New-Item -Path $runDirectory -ItemType Directory -ErrorAction Stop)
+$launchNonce = [Guid]::NewGuid().ToString('N').ToUpperInvariant()
+Write-AtomicJsonFile (Join-Path $runDirectory 'run-claim.json') @{
+    runTag = $tag; launchNonce = $launchNonce
+    manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
+    approvalReference = $ApprovalReference
+    claimedUtc = [DateTime]::UtcNow.ToString('O')
+}
 $previousDirectory = Get-Location
 $observerJob = $null; $monitorProcess = $null; $appDescriptor = $null; $client = $null
 $endedByScript = $null; $driveError = $null; $exitCode = $null; $exitStatus = 1
 try {
     Set-Location -LiteralPath $repository
-    $exe = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\wince_emulation_v3-e37.exe'
-    $pdb = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\wince_emulation_v3-e37.pdb'
-    Test-ExpectedHash $exe '7A55C049D2BBD0110D30D587BBB1877BA80C50CEE1D33E453434C0366A871A1A'
-    Test-ExpectedHash $pdb '959D508F8694E3DD232281B79A7A46610EA87BDFB08542D916ABDF36ED06BEB4'
-    $manifest = @{
-        runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O'); repository = $repository
-        executable = $exe; executableSha256 = Get-Sha256 $exe
-        pdb = $pdb; pdbSha256 = Get-Sha256 $pdb
-        executableProvenanceReceipt = Join-Path $repository 'evidence\op4-fresh-view-readback-20261014\validation.receipt.md'
-        backupProvenanceManifest = Join-Path $repository 'evidence\pre-live-mount-backup-20261014T050927Z\manifest.json'
-        approvalQuestionId = 'call_93cb71e3f4dc432c84262f0a340f3091'
-        approvalAnswer = 'Yes—back up and run once'
-        earlierConsumedApprovalQuestionId = 'call_bf29d00a922d453992feac6a62e5e56e'
-        app = 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'; appSha256 = Get-Sha256 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe'
-        scriptSha256 = Get-Sha256 $PSCommandPath
-        registrySha256 = Get-Sha256 (Join-Path $repository 'registry.reg')
-        devicesSha256 = Get-Sha256 (Join-Path $repository 'serial_devices.json')
-        mountsSha256 = Get-Sha256 (Join-Path $repository 'mounts.toml')
-        backups = $backups; originalWritableMounts = $true
-        logFilter = $env:RUST_LOG
-        runSeconds = 330; instructionLimit = 1000000; remoteUrl = 'http://192.168.0.39:8765'
+    Write-JsonFile (Join-Path $runDirectory 'run-metadata.json') @{
+        runTag = $tag; createdUtc = [DateTime]::UtcNow.ToString('O')
+        manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
+        approvalReference = $ApprovalReference
+        executable = $manifest.executable; pdb = $manifest.pdb
+        backupManifest = $manifest.backupManifest; backups = $manifest.backups
+        originalWritableMounts = $true; logFilter = $env:RUST_LOG
+        runSeconds = 330; instructionLimit = 1000000
+        remoteUrl = 'http://192.168.0.39:8765'
         observerSeconds = 420; watchdogSeconds = 390; memorySampleSeconds = 2
         nmeaAssumption = 'NEW, not matched: 16 1-Hz RMC/GGA/VTG bursts at 37.5N 127.25E, altitude 42m, zero speed, from input-ready+93s'
         tapAssumption = 'input-ready+153s; x=400,y=240'
     }
-    Write-JsonFile (Join-Path $runDirectory 'manifest.json') $manifest
     $beforeCount = Write-MountedInventory $backups (Join-Path $runDirectory 'mounted-before.jsonl')
     Assert-RemoteEndpointAvailable
     # The observer is GET-only. The detached monitor, not this driver, owns
     # the app launch and enforces the 390-second/2-GiB bounds if this driver dies.
-    $observerJob = Start-Job -Name "e37-observer-$tag" -ScriptBlock {
+    $observerJob = Start-Job -Name "live-observer-$tag" -ScriptBlock {
         param($scriptPath, $directory)
         & $scriptPath -ObserverWorker -RunDirectory $directory
     } -ArgumentList $PSCommandPath, $runDirectory
     $monitorProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') `
-        -ArgumentList @('-NoProfile', '-File', $PSCommandPath, '-MonitorWorker', '-RunDirectory', $runDirectory, '-MaxWorkingSetMiB', [string]$MaxWorkingSetMiB) `
+        -ArgumentList @('-NoProfile', '-File', ('"' + $PSCommandPath + '"'),
+            '-MonitorWorker', '-RunDirectory', ('"' + $runDirectory + '"'),
+            '-ManifestPath', ('"' + $ManifestPath + '"'),
+            '-ManifestSha256', $ManifestSha256,
+            '-ApprovalReference', ('"' + $ApprovalReference + '"'),
+            '-LaunchNonce', $launchNonce,
+            '-MaxWorkingSetMiB', [string]$MaxWorkingSetMiB) `
         -WorkingDirectory $repository -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $runDirectory 'monitor-worker.stdout.raw.txt') `
         -RedirectStandardError (Join-Path $runDirectory 'monitor-worker.stderr.raw.txt')
@@ -832,32 +1242,29 @@ try {
     $stdout = Join-Path $runDirectory 'app.stdout.raw.txt'
     $stderr = Join-Path $runDirectory 'app.stderr.raw.txt'
     $ppm = Join-Path $runDirectory 'terminal-frame.ppm'
-    $arguments = @(
-        '--registry', 'registry.reg', '--devices', 'serial_devices.json', '--mount-config', 'mounts.toml',
-        '--image', 'D:\INAVI_Emulator\INAVI\INavi\iNavi.exe',
-        '--dll-search-dir', 'D:\INAVI_Emulator\DUMPPLZ\Windows',
-        '--desktop', 'virtual', '--run-cpu', '--remote-server', '192.168.0.39:8765',
-        '--cpu-wall-clock-limit-ms', '330000', '--cpu-instruction-limit', '1000000',
-        '--framebuffer-dump', $ppm
-    )
-    # The full archive/config/hash preflight ran before setup. Recheck junctions
-    # immediately before launch without consuming the observer's 420 s window
-    # rehashing multi-GB ZIPs. This cannot prevent a concurrent later change.
-    Assert-NoReparseMounts $backups
+    # The monitor owns the authoritative rehash, mount/preflight checks,
+    # exclusive dual-ledger reservation and launch. This request carries no
+    # executable path or caller-controlled emulator argument list.
     Write-AtomicJsonFile (Join-Path $runDirectory 'launch-request.json') @{
-        executable = $exe; executableSha256 = $manifest.executableSha256
-        repository = $repository; arguments = $arguments
+        runTag = $tag; launchNonce = $launchNonce
+        manifestPath = $ManifestPath; manifestSha256 = $ManifestSha256
+        approvalReference = $ApprovalReference
     }
     $launchWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
     while (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'process.json'))) {
         if ($monitorProcess.HasExited) { throw 'Detached monitor exited without an app process descriptor.' }
-        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchWait) -ge (20L * $frequency)) {
-            throw 'Detached monitor did not publish the app descriptor within 20 seconds.'
+        if ($observerJob.State -ne 'Running') {
+            throw 'Observer ended before the app process descriptor was published.'
+        }
+        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchWait) -ge (895L * $frequency)) {
+            throw 'Detached monitor did not publish the app descriptor within the bounded prelaunch horizon.'
         }
         Start-Sleep -Milliseconds 100
     }
     $appDescriptor = Get-Content -LiteralPath (Join-Path $runDirectory 'process.json') -Raw | ConvertFrom-Json
-    if ([string]$appDescriptor.executableSha256 -ne [string]$manifest.executableSha256) {
+    if ([string]$appDescriptor.executableSha256 -ne [string]$manifest.executable.sha256 -or
+        [string]$appDescriptor.manifestSha256 -ne $ManifestSha256 -or
+        [string]$appDescriptor.approvalReference -ne $ApprovalReference) {
         throw 'Launched app descriptor does not match the built executable.'
     }
     $launchTicks = [long]$appDescriptor.launchTicks
@@ -941,11 +1348,10 @@ try {
         Write-JsonFile (Join-Path $runDirectory 'mounted-inventory-error.json') @{ utc = [DateTime]::UtcNow.ToString('O'); error = $inventoryError }
     }
     # Only a normal full run keeps the observer to its fixed 420 s horizon.
-    $observerReady = Get-Content -LiteralPath (Join-Path $runDirectory 'observer-worker-ready.json') -Raw | ConvertFrom-Json
     $observerDeadline = if ($earlyFailure) {
         [System.Diagnostics.Stopwatch]::GetTimestamp() + (10L * $frequency)
     } else {
-        [long]$observerReady.startedTicks + (435L * $frequency)
+        [long]$appDescriptor.launchTicks + (435L * $frequency)
     }
     while ($observerJob.State -in @('NotStarted', 'Running') -and [System.Diagnostics.Stopwatch]::GetTimestamp() -lt $observerDeadline) {
         [void](Wait-Job -Job $observerJob -Timeout 2)
@@ -988,6 +1394,11 @@ try {
     $exitStatus = if ($earlyFailure) { 1 } else { 0 }
 } catch {
     $driveError = $_.Exception.Message
+    if (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'abort-request.json'))) {
+        Write-AtomicJsonFile (Join-Path $runDirectory 'abort-request.json') @{
+            utc = [DateTime]::UtcNow.ToString('O'); reason = 'driver-exception'
+        }
+    }
     Write-JsonFile (Join-Path $runDirectory 'harness-error.json') @{ utc = [DateTime]::UtcNow.ToString('O'); error = $driveError }
     throw
 } finally {
