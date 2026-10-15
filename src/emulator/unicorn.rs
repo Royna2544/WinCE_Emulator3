@@ -173,6 +173,12 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     main_image_generation: Option<u64>,
     #[cfg(feature = "unicorn")]
+    main_image_final_runs: Vec<(u32, u32)>,
+    /// Adoption is allowed only after exactly one PE load attempt. A failed
+    /// later attempt may leave partial legacy CPU mappings behind.
+    #[cfg(feature = "unicorn")]
+    pe_load_attempts: u64,
+    #[cfg(feature = "unicorn")]
     writable_main_image: Option<WritableMainImageAdoption>,
     stack_top: Option<u32>,
     initial_thread_id: u32,
@@ -2219,6 +2225,10 @@ impl UnicornMips {
             entry_image_base: None,
             #[cfg(feature = "unicorn")]
             main_image_generation: None,
+            #[cfg(feature = "unicorn")]
+            main_image_final_runs: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pe_load_attempts: 0,
             #[cfg(feature = "unicorn")]
             writable_main_image: None,
             stack_top: None,
@@ -7868,6 +7878,8 @@ impl UnicornMips {
                 entry: self.entry.take(),
                 entry_image_base: self.entry_image_base.take(),
                 main_image_generation: self.main_image_generation.take(),
+                main_image_final_runs: std::mem::take(&mut self.main_image_final_runs),
+                pe_load_attempts: std::mem::take(&mut self.pe_load_attempts),
                 writable_main_image: self.writable_main_image.take(),
                 stack_top: self.stack_top.take(),
                 initial_thread_id: self.initial_thread_id,
@@ -8153,10 +8165,16 @@ impl UnicornMips {
 
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
         #[cfg(feature = "unicorn")]
-        if self.writable_main_image.is_some() {
-            return Err(Error::Backend(
-                "writable main image remains owned by its exact VM load".to_owned(),
-            ));
+        {
+            if self.writable_main_image.is_some() {
+                return Err(Error::Backend(
+                    "writable main image remains owned by its exact VM load".to_owned(),
+                ));
+            }
+            self.pe_load_attempts = self
+                .pe_load_attempts
+                .checked_add(1)
+                .ok_or_else(|| Error::Backend("PE load-attempt generation exhausted".to_owned()))?;
         }
         let result = super::pe_loader::load_pe_image_with_dlls(image, dlls)?;
         self.apply_pe_load_result(result)
@@ -8174,6 +8192,7 @@ impl UnicornMips {
     ) -> Result<()> {
         if self.writable_main_image.is_some()
             || self.run_slice_generation != 0
+            || self.pe_load_attempts != 1
             || kernel.current_process_birth_key() != Some(owner)
             || !kernel.handles.process_birth_can_create_threads(owner)
         {
@@ -8184,9 +8203,38 @@ impl UnicornMips {
         let module_base = self.entry_image_base.ok_or_else(|| {
             Error::Backend("writable main-image adoption has no loaded EXE".to_owned())
         })?;
-        let generation = self.main_image_generation.filter(|generation| *generation != 0).ok_or_else(
-            || Error::Backend("writable main-image load generation is missing".to_owned()),
-        )?;
+        let generation = self
+            .main_image_generation
+            .filter(|generation| *generation != 0)
+            .ok_or_else(|| {
+                Error::Backend("writable main-image load generation is missing".to_owned())
+            })?;
+        let expected: BTreeSet<_> = self.main_image_final_runs.iter().copied().collect();
+        if expected.is_empty() || expected.len() != self.main_image_final_runs.len() {
+            return Err(Error::Backend(
+                "writable main-image final-run membership is absent or ambiguous".to_owned(),
+            ));
+        }
+        let mut observed = BTreeSet::new();
+        for blob in self
+            .mapped_blobs
+            .iter()
+            .filter(|blob| blob.name.starts_with("image:"))
+        {
+            let len = u32::try_from(blob.bytes.len()).map_err(|_| {
+                Error::Backend("main-image blob exceeds guest address width".to_owned())
+            })?;
+            if !observed.insert((blob.base, len)) {
+                return Err(Error::Backend(
+                    "duplicate main-image blob in CPU state".to_owned(),
+                ));
+            }
+        }
+        if observed != expected {
+            return Err(Error::Backend(
+                "CPU image blobs do not match the last loader's final runs".to_owned(),
+            ));
+        }
         let mut selected = Vec::new();
         for (index, blob) in self.mapped_blobs.iter().enumerate() {
             if !blob.name.starts_with("image:") {
@@ -8206,7 +8254,9 @@ impl UnicornMips {
             })?;
             if !self.memory.contains_range(blob.base, len)
                 || region.name != "pe-image"
-                || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+                || !region
+                    .perms
+                    .contains(MemoryPerms::READ | MemoryPerms::WRITE)
                 || len == 0
                 || len & 0xfff != 0
             {
@@ -8215,13 +8265,8 @@ impl UnicornMips {
                     blob.base
                 )));
             }
-            let identity = WritableImageRunIdentity::new(
-                owner,
-                module_base,
-                generation,
-                blob.base,
-            )
-            .ok_or_else(|| Error::Backend("invalid writable main-image identity".to_owned()))?;
+            let identity = WritableImageRunIdentity::new(owner, module_base, generation, blob.base)
+                .ok_or_else(|| Error::Backend("invalid writable main-image identity".to_owned()))?;
             selected.push((index, identity));
         }
         if selected.is_empty() {
@@ -8250,10 +8295,8 @@ impl UnicornMips {
             committed.push(*identity);
         }
         let adopted_bases: BTreeSet<_> = committed.iter().map(|key| key.run_base()).collect();
-        self.mapped_blobs.retain(|blob| {
-            !adopted_bases.contains(&blob.base)
-                || !blob.name.starts_with("image:")
-        });
+        self.mapped_blobs
+            .retain(|blob| !adopted_bases.contains(&blob.base) || !blob.name.starts_with("image:"));
         self.writable_main_image = Some(WritableMainImageAdoption {
             owner,
             module_base,
@@ -8275,8 +8318,12 @@ impl UnicornMips {
         })?;
         if !adoption.valid
             || kernel.current_process_birth_key() != Some(adoption.owner)
-            || !kernel.handles.process_birth_can_create_threads(adoption.owner)
-            || !kernel.memory.contains_writable_image_lineage(&adoption.vm_lineage)
+            || !kernel
+                .handles
+                .process_birth_can_create_threads(adoption.owner)
+            || !kernel
+                .memory
+                .contains_writable_image_lineage(&adoption.vm_lineage)
             || self.entry_image_base != Some(adoption.module_base)
             || self.main_image_generation != Some(adoption.load_generation)
         {
@@ -8302,6 +8349,7 @@ impl UnicornMips {
         #[cfg(feature = "unicorn")]
         {
             self.main_image_generation = Some(result.main_image_generation);
+            self.main_image_final_runs = result.main_image_final_runs.clone();
         }
         self.stack_top = Some(result.stack_top);
         self.import_traps.merge(result.import_traps);
@@ -8388,8 +8436,7 @@ impl UnicornMips {
             return AttemptExecution {
                 report,
                 result: Err(Error::Backend(
-                    "opt-in writable main image cannot enter the ordinary CPU run path"
-                        .to_owned(),
+                    "opt-in writable main image cannot enter the ordinary CPU run path".to_owned(),
                 )),
             };
         }
@@ -15255,6 +15302,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             entry: None,
             entry_image_base: None,
             main_image_generation: None,
+            main_image_final_runs: Vec::new(),
+            pe_load_attempts: 0,
             writable_main_image: None,
             stack_top: None,
             initial_thread_id: MAIN_GUEST_THREAD_ID,
@@ -17646,9 +17695,12 @@ fn reconcile_native_memory_for_adopted_main<D>(
     let adoption = cpu.checked_writable_main_image(kernel)?;
     let mut copy_regions = memory.clone();
     for identity in &adoption.runs {
-        let pin = kernel.memory.writable_image_run_pin(*identity).ok_or_else(|| {
-            Error::Backend("writable main-image run is no longer active in VM".to_owned())
-        })?;
+        let pin = kernel
+            .memory
+            .writable_image_run_pin(*identity)
+            .ok_or_else(|| {
+                Error::Backend("writable main-image run is no longer active in VM".to_owned())
+            })?;
         if !kernel.memory.contains_writable_image_run_pin(&pin) {
             return Err(Error::Backend(
                 "writable main-image run has a foreign VM pin".to_owned(),
@@ -17656,13 +17708,15 @@ fn reconcile_native_memory_for_adopted_main<D>(
         }
         let len = u32::try_from(pin.len())
             .map_err(|_| Error::Backend("writable image run is too large".to_owned()))?;
-        let region = copy_regions.region_containing(identity.run_base()).ok_or_else(|| {
-            Error::Backend("adopted image run has no ordinary region".to_owned())
-        })?;
+        let region = copy_regions
+            .region_containing(identity.run_base())
+            .ok_or_else(|| Error::Backend("adopted image run has no ordinary region".to_owned()))?;
         if region.base != identity.run_base()
             || region.size != len
             || region.name != "pe-image"
-            || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+            || !region
+                .perms
+                .contains(MemoryPerms::READ | MemoryPerms::WRITE)
             || copy_regions.unmap_exact(identity.run_base(), len).is_none()
         {
             return Err(Error::Backend(
@@ -17710,9 +17764,12 @@ fn map_adopted_writable_main_image_runs<D>(
                 "writable main-image run differs from adopted module".to_owned(),
             ));
         }
-        let pin = kernel.memory.writable_image_run_pin(*identity).ok_or_else(|| {
-            Error::Backend("writable main-image run is no longer active in VM".to_owned())
-        })?;
+        let pin = kernel
+            .memory
+            .writable_image_run_pin(*identity)
+            .ok_or_else(|| {
+                Error::Backend("writable main-image run is no longer active in VM".to_owned())
+            })?;
         if !kernel.memory.contains_writable_image_run_pin(&pin) {
             return Err(Error::Backend(
                 "writable main-image run has a foreign VM pin".to_owned(),
@@ -17720,13 +17777,18 @@ fn map_adopted_writable_main_image_runs<D>(
         }
         let len = u32::try_from(pin.len())
             .map_err(|_| Error::Backend("writable image run is too large".to_owned()))?;
-        let region = cpu.memory.region_containing(identity.run_base()).ok_or_else(|| {
-            Error::Backend("writable image run has no CPU memory region".to_owned())
-        })?;
+        let region = cpu
+            .memory
+            .region_containing(identity.run_base())
+            .ok_or_else(|| {
+                Error::Backend("writable image run has no CPU memory region".to_owned())
+            })?;
         if region.base != identity.run_base()
             || region.size != len
             || region.name != "pe-image"
-            || !region.perms.contains(MemoryPerms::READ | MemoryPerms::WRITE)
+            || !region
+                .perms
+                .contains(MemoryPerms::READ | MemoryPerms::WRITE)
         {
             return Err(Error::Backend(
                 "writable image run lost its exact CPU extent or protection".to_owned(),
@@ -17772,11 +17834,7 @@ fn map_adopted_writable_main_image_runs<D>(
                 "writable image native pin identity already exists".to_owned(),
             ));
         }
-        if !native_pins.has_writable_image(
-            record.identity,
-            record.host_address,
-            record.len,
-        ) {
+        if !native_pins.has_writable_image(record.identity, record.host_address, record.len) {
             return Err(Error::Backend(
                 "writable image native pin changed before map".to_owned(),
             ));
@@ -17797,9 +17855,7 @@ fn map_adopted_writable_main_image_runs<D>(
                 record.identity.run_base()
             ))
         })?;
-        mapped
-            .writable_image_runs
-            .insert(record.identity, record);
+        mapped.writable_image_runs.insert(record.identity, record);
         mapped.ranges.push((record.identity.run_base(), record.len));
     }
     Ok(())
@@ -70871,15 +70927,22 @@ mod unicorn_tests {
 
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let map_len = (blob.bytes.len() + 0xfff) & !0xfff;
-        uc.mem_map(u64::from(blob.base), u64::try_from(map_len).unwrap(), Prot::ALL)
-            .unwrap();
+        uc.mem_map(
+            u64::from(blob.base),
+            u64::try_from(map_len).unwrap(),
+            Prot::ALL,
+        )
+        .unwrap();
         uc.mem_write(u64::from(blob.base), &blob.bytes).unwrap();
         uc.reg_write(RegisterMIPS::V0, u64::from(ENTRY)).unwrap();
         uc.reg_write(RegisterMIPS::T1, u64::from(WRITTEN_INSTRUCTION))
             .unwrap();
         uc.emu_start(u64::from(ENTRY), u64::from(TARGET), 0, 1)
             .unwrap();
-        assert_eq!(super::read_unicorn_u32(&uc, TARGET), Some(WRITTEN_INSTRUCTION));
+        assert_eq!(
+            super::read_unicorn_u32(&uc, TARGET),
+            Some(WRITTEN_INSTRUCTION)
+        );
         assert_eq!(
             super::read_unicorn_code_u32(&uc, &mapped_code, TARGET),
             Some(WRITTEN_INSTRUCTION),
@@ -92154,9 +92217,55 @@ mod unicorn_tests {
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
         let mut kernel = phase1_kernel("writable-image-red.exe")?;
-        let owner = kernel.current_process_birth_key().expect("boot process birth");
+        let owner = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let mut ambiguous = cpu.clone();
+        ambiguous
+            .mapped_blobs
+            .push(crate::emulator::pe_loader::MappedBlob {
+                name: "image:prior-load.exe".to_owned(),
+                base: 0x0030_0000,
+                bytes: vec![0; 0x1000].into(),
+            });
+        assert!(
+            ambiguous
+                .adopt_writable_main_image_for_birth(&mut kernel, owner)
+                .is_err()
+        );
+        assert!(!kernel.memory.has_stable_writable_image_runs());
+        let original_blobs: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .map(|blob| (blob.base, blob.name.clone(), blob.bytes.to_vec()))
+            .collect();
+        let mut twice = cpu.clone();
+        let mut second_bytes = bytes.clone();
+        write_vec_u32(&mut second_bytes, 0x98 + 28, 0x0050_0000);
+        let second = crate::pe::PeImage::parse_bytes("second-image.exe", &second_bytes)?;
+        assert!(twice.load_pe_image(&second).is_err());
+        assert_eq!(twice.pe_load_attempts, 2);
+        assert_eq!(twice.entry_image_base, cpu.entry_image_base);
+        assert_eq!(twice.main_image_generation, cpu.main_image_generation);
+        assert_eq!(
+            twice
+                .mapped_blobs
+                .iter()
+                .map(|blob| (blob.base, blob.name.clone(), blob.bytes.to_vec()))
+                .collect::<Vec<_>>(),
+            original_blobs,
+        );
+        assert!(
+            twice
+                .adopt_writable_main_image_for_birth(&mut kernel, owner)
+                .is_err()
+        );
+        assert!(!kernel.memory.has_stable_writable_image_runs());
         cpu.adopt_writable_main_image_for_birth(&mut kernel, owner)?;
-        let adoption = cpu.writable_main_image.as_ref().expect("adopted main image");
+        let adoption = cpu
+            .writable_main_image
+            .as_ref()
+            .expect("adopted main image");
         let identity = adoption
             .runs
             .iter()
@@ -92199,23 +92308,27 @@ mod unicorn_tests {
         let mut clone_probe = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let mut clone_mapped = super::KernelMemoryMappings::new(&image_blobs);
         let clone_pins = super::NativeMappingPins::default();
-        assert!(super::map_adopted_writable_main_image_runs(
-            &mut clone_probe,
-            &clone_cpu,
-            &kernel,
-            &mut clone_mapped,
-            &clone_pins,
-        )
-        .is_err());
+        assert!(
+            super::map_adopted_writable_main_image_runs(
+                &mut clone_probe,
+                &clone_cpu,
+                &kernel,
+                &mut clone_mapped,
+                &clone_pins,
+            )
+            .is_err()
+        );
         let cloned_kernel = kernel.clone();
-        assert!(super::map_adopted_writable_main_image_runs(
-            &mut clone_probe,
-            &cpu,
-            &cloned_kernel,
-            &mut clone_mapped,
-            &clone_pins,
-        )
-        .is_err());
+        assert!(
+            super::map_adopted_writable_main_image_runs(
+                &mut clone_probe,
+                &cpu,
+                &cloned_kernel,
+                &mut clone_mapped,
+                &clone_pins,
+            )
+            .is_err()
+        );
         assert_eq!(clone_pins.writable_image_len(), 0);
         drop(clone_probe);
 
@@ -92250,9 +92363,13 @@ mod unicorn_tests {
             super::sync_persisted_blobs_to_native(&mut first, &image_blobs, false, &guard)?;
         assert_eq!(first_mapped.writable_image_runs.len(), 1);
         assert_eq!(first_pins.writable_image_len(), 1);
-        first.reg_write(RegisterMIPS::V0, u64::from(TARGET)).unwrap();
+        first
+            .reg_write(RegisterMIPS::V0, u64::from(TARGET))
+            .unwrap();
         first.reg_write(RegisterMIPS::T1, u64::from(VALUE)).unwrap();
-        first.emu_start(u64::from(ENTRY), u64::from(ENTRY + 4), 0, 1).unwrap();
+        first
+            .emu_start(u64::from(ENTRY), u64::from(ENTRY + 4), 0, 1)
+            .unwrap();
         assert_eq!(super::read_unicorn_u32(&first, TARGET), Some(VALUE));
         let offset = (TARGET - identity.run_base()) as usize;
         let mut canonical = [0; 4];
@@ -92290,7 +92407,9 @@ mod unicorn_tests {
         )?;
         let fresh_copy_bytes =
             super::sync_persisted_blobs_to_native(&mut fresh, &image_blobs, false, &guard)?;
-        fresh.reg_write(RegisterMIPS::V0, u64::from(TARGET)).unwrap();
+        fresh
+            .reg_write(RegisterMIPS::V0, u64::from(TARGET))
+            .unwrap();
         fresh.reg_write(RegisterMIPS::T2, 0).unwrap();
         fresh
             .emu_start(u64::from(ENTRY + 4), u64::from(ENTRY + 8), 0, 1)
@@ -92309,7 +92428,10 @@ mod unicorn_tests {
             canonical_after_store, VALUE,
             "real MIPS store must update the birth-owned backing without blob readback"
         );
-        assert_eq!(fresh_load, VALUE, "fresh native owner must read that backing");
+        assert_eq!(
+            fresh_load, VALUE,
+            "fresh native owner must read that backing"
+        );
         assert_eq!(
             first_copy_bytes, 0,
             "writable target run must not take initial per-slice copy-in"
@@ -92317,6 +92439,86 @@ mod unicorn_tests {
         assert_eq!(
             fresh_copy_bytes, 0,
             "fresh owner must pointer-map the same backing, not copy its bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn writable_main_image_later_vm_run_refusal_retires_partial_publication() -> crate::Result<()> {
+        const BASE: u32 = 0x0040_0000;
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x1400, 0);
+        write_vec_u16(&mut bytes, 0x84 + 2, 2); // Two sections.
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000); // SizeOfImage.
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x1000); // Full RX .text page.
+        write_vec_u32(&mut bytes, 0x178 + 16, 0x1000);
+        let data_section = 0x1a0;
+        bytes[data_section..data_section + 8].copy_from_slice(b".data\0\0\0");
+        write_vec_u32(&mut bytes, data_section + 8, 0x1000);
+        write_vec_u32(&mut bytes, data_section + 12, 0x2000);
+        write_vec_u32(&mut bytes, data_section + 16, 0x200);
+        write_vec_u32(&mut bytes, data_section + 20, 0x1200);
+        write_vec_u32(&mut bytes, data_section + 36, 0xc000_0040);
+        bytes[0x1200..0x1400].fill(0x7b);
+        let image = crate::pe::PeImage::parse_bytes("two-writable-runs.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let owned: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .filter(|blob| blob.name.starts_with("image:") && blob.bytes.sealed_pin().is_some())
+            .map(|blob| blob.base)
+            .collect();
+        assert_eq!(owned, vec![BASE + 0x1000], "middle RX run is sealed");
+        let owned: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .filter(|blob| {
+                blob.name.starts_with("image:")
+                    && matches!(&blob.bytes, crate::emulator::pe_loader::BlobBytes::Owned(_))
+            })
+            .map(|blob| (blob.base, blob.bytes.len()))
+            .collect();
+        assert_eq!(owned, vec![(BASE, 0x1000), (BASE + 0x2000, 0x1000)]);
+        let original_blobs: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .map(|blob| (blob.base, blob.name.clone(), blob.bytes.to_vec()))
+            .collect();
+        let mut kernel = phase1_kernel("two-writable-runs.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let conflict =
+            crate::ce::memory::WritableImageRunIdentity::new(owner, 0x003f_0000, 1, BASE + 0x2000)
+                .expect("separate module identity at same VA");
+        let conflict_prepared = kernel
+            .memory
+            .prepare_writable_image_run(conflict, &vec![0x7b; 0x1000])
+            .expect("preplant second-run collision");
+        let conflict_pin = kernel
+            .memory
+            .commit_prepared_writable_image_run(conflict_prepared)
+            .expect("commit preexisting VM run");
+        let generation = cpu.main_image_generation.expect("loader generation");
+        let first = crate::ce::memory::WritableImageRunIdentity::new(owner, BASE, generation, BASE)
+            .expect("first run identity");
+        assert!(
+            cpu.adopt_writable_main_image_for_birth(&mut kernel, owner)
+                .is_err()
+        );
+        assert!(kernel.memory.writable_image_run_pin(first).is_none());
+        assert!(kernel.memory.contains_writable_image_run_pin(&conflict_pin));
+        let mut conflict_byte = [0];
+        conflict_pin
+            .read_bytes(0, &mut conflict_byte)
+            .expect("preexisting VM run remains readable");
+        assert_eq!(conflict_byte, [0x7b]);
+        assert!(cpu.writable_main_image.is_none());
+        assert_eq!(
+            cpu.mapped_blobs
+                .iter()
+                .map(|blob| (blob.base, blob.name.clone(), blob.bytes.to_vec()))
+                .collect::<Vec<_>>(),
+            original_blobs,
         );
         Ok(())
     }

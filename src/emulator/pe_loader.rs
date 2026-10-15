@@ -204,6 +204,8 @@ pub(crate) struct PeLoadResult {
     pub(crate) entry_image_base: u32,
     /// One generation for every final run of this main-image load.
     pub(crate) main_image_generation: u64,
+    /// Exact final run membership before DLL/trap blobs are appended.
+    pub(crate) main_image_final_runs: Vec<(u32, u32)>,
     pub(crate) stack_top: u32,
     /// Memory regions that must be mapped (PE image, DLLs, trampolines, stack).
     pub(crate) memory_regions: Vec<(u32, u32, MemoryPerms, String)>,
@@ -228,6 +230,7 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
         entry: 0,
         entry_image_base: 0,
         main_image_generation: 0,
+        main_image_final_runs: Vec::new(),
         stack_top: 0,
         memory_regions: Vec::new(),
         shared_memory_regions: Vec::new(),
@@ -383,6 +386,17 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     // and runtime import/trap pages remain copy-backed.
     let (main_image_runs, main_image_generation) = final_main_image_runs(image, mapped)?;
     result.main_image_generation = main_image_generation;
+    result.main_image_final_runs = main_image_runs
+        .iter()
+        .map(|(blob, _)| {
+            Ok((
+                blob.base,
+                u32::try_from(blob.bytes.len()).map_err(|_| {
+                    Error::InvalidArgument("main image run exceeds guest address width".to_owned())
+                })?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     // Memory regions: main image runs, DLLs, trampolines (same address order).
     for (blob, perms) in &main_image_runs {
