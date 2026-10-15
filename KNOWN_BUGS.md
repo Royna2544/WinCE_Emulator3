@@ -95,9 +95,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
     prevents foreign parent/owner links from expanding host-exit targets and
     wakes a sender whose receiver HWND retires (release **2,072/0/9 ignored**,
-    no-default **1,500/0/3 ignored**, 18 blocks each). Full host teardown
-    remains open: the pseudo-exit lacks captured caller authority; whole-exit
-    preflight/recovery, CE6 foreign-link topology, direct WndProc,
+    no-default **1,500/0/3 ignored**, 18 blocks each). The bounded
+    [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+    now checks captured guest caller birth and native owner lease, with
+    release **2,081/0/9 ignored** and no-default **1,502/0/3 ignored**.
+    Full host teardown remains open: D-011 whole-exit framebuffer
+    preflight/recovery is unimplemented, and immediate pseudo-exit native CPU
+    stop/Task retirement, CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin
     device broadcasts are not established. No live-app or CE6 parity follows.
   - W-B1c does not establish physical arrival order across HTTP and desktop

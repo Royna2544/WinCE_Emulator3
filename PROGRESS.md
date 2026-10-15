@@ -48,6 +48,17 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded guest pseudo-exit caller-birth source/test gate
+  ([receipt](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)):
+  native COREDLL and decoded self-exit now require the captured live caller
+  birth and exact process lease before guest-ingress effects. Decoded self-PID
+  is classified before public-handle lookup. Preserved behavioral reds turned
+  green; focused positive/negative controls passed on the final sealed source.
+  The 18-block suites passed release **2,081/0/9 ignored** and no-default **1,502/0/3
+  ignored**, with two alternate native feature checks green. The tiny-MIPS
+  negative missing-birth case is refused before guest entry; immediate CPU
+  stop, Task retirement, root return-stub caller authority and whole-exit
+  D-011 framebuffer recovery remain open. No live iNavi run was made.
 - Bounded host-exit exact-window-set source/test gate
   ([receipt](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)):
   GWES now retires only live windows selected by frozen process birth on
@@ -59,8 +70,9 @@ result. The per-slice text before this condense is at
   suites passed release **2,072/0/9 ignored** and no-default **1,500/0/3
   ignored**; two alternate native feature checks passed. Guest
   `DestroyWindow` recursion is unchanged. The synthetic foreign links do
-  not establish CE6 topology; pseudo-exit caller authority, whole-exit
-  atomicity, full Stage 3 and live iNavi remain open.
+  not establish CE6 topology; pseudo-exit caller authority was bounded by
+  the later gate above, while whole-exit atomicity, full Stage 3 and live
+  iNavi remain open.
 - Bounded sender-ownership source/test gate
   ([receipt](evidence/stage3-sender-birth-20261015/validation.receipt.md)):
   authenticated sender birth now owns the tested queued Send/Timeout through

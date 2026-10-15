@@ -33,9 +33,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    are in `KNOWN_BUGS.md`. Next, in order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
-     [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md):
-     capture the pseudo-exit's guest caller authority, preflight or recover
-     fallible whole-exit effects, and settle foreign-link topology under O-G4.
+     [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
+     and [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md):
+     implement D-011's strict stopped-exit framebuffer preflight and recovery
+     before any mutation, prove native self-exit CPU/Task retirement, and
+     settle foreign-link topology under O-G4.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their
