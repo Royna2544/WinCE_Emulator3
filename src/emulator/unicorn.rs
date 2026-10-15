@@ -93211,6 +93211,192 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn stopped_exact_process_exit_retires_native_writable_image_after_owner_close()
+    -> crate::Result<()> {
+        const ENTRY: u32 = 0x0040_2000;
+        const TARGET: u32 = 0x0040_2100;
+        const VALUE: u32 = 0x51a7_c0de;
+
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x1400, 0);
+        write_vec_u32(&mut bytes, 0x98 + 16, 0x2000);
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000);
+        write_vec_u32(&mut bytes, 0x178 + 8, 0x2000);
+        write_vec_u32(&mut bytes, 0x178 + 16, 0x1200);
+        write_vec_u32(&mut bytes, 0x178 + 36, 0xe000_0020);
+        write_vec_u32(&mut bytes, 0x1200, 0xac49_0000); // sw t1,0(v0)
+        let image = crate::pe::PeImage::parse_bytes("exit-writable-image.exe", &bytes)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut kernel = phase1_kernel("exit-writable-image.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let primary = kernel
+            .handles
+            .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
+            .expect("boot primary birth");
+        cpu.adopt_writable_main_image_for_birth(&mut kernel, owner)?;
+        let identity = cpu
+            .writable_main_image
+            .as_ref()
+            .expect("opt-in adopted main image")
+            .runs
+            .iter()
+            .copied()
+            .find(|run| {
+                kernel
+                    .memory
+                    .writable_image_run_pin(*run)
+                    .is_some_and(|pin| {
+                        ENTRY >= run.run_base()
+                            && (TARGET - run.run_base()) as usize + 4 <= pin.len()
+                    })
+            })
+            .expect("writable MIPS entry and target run");
+        let pin = kernel
+            .memory
+            .writable_image_run_pin(identity)
+            .expect("canonical image backing");
+        let image_len = pin.len() as u32;
+        let target_offset = (TARGET - identity.run_base()) as usize;
+        let mut image_memory = MemoryMap::default();
+        image_memory.map(
+            identity.run_base(),
+            image_len,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "pe-image",
+        )?;
+        let image_blobs: Vec<_> = cpu
+            .mapped_blobs
+            .iter()
+            .filter(|blob| blob.name.starts_with("image:"))
+            .cloned()
+            .collect();
+        assert!(
+            image_blobs.is_empty(),
+            "adoption consumed the owned image blob"
+        );
+
+        let slot: super::ProcessNativeEngine<u32, super::KernelMemoryMappings> =
+            super::ProcessNativeEngine::with_lifetime(
+                Arch::MIPS,
+                Mode::MIPS32 | Mode::LITTLE_ENDIAN,
+                crate::emulator::native_engine::NativeEngineLifetime::FreshPerSlice,
+            );
+        let mut attempt = slot.lease().expect("fresh image owner");
+        let native_pins = attempt.mapping_pins();
+        let mut mapped = super::KernelMemoryMappings::new(&image_blobs);
+        mapped.ranges = super::reconcile_native_memory_for_adopted_main(
+            &mut attempt,
+            &cpu,
+            &kernel,
+            &image_memory,
+            &image_blobs,
+            &BTreeMap::new(),
+        )?;
+        super::map_adopted_writable_main_image_runs(
+            &mut attempt,
+            &cpu,
+            &kernel,
+            &mut mapped,
+            &native_pins,
+            None,
+        )?;
+        assert_eq!(native_pins.writable_image_len(), 1);
+        attempt
+            .reg_write(RegisterMIPS::V0, u64::from(TARGET))
+            .unwrap();
+        attempt
+            .reg_write(RegisterMIPS::T1, u64::from(VALUE))
+            .unwrap();
+        attempt
+            .emu_start(u64::from(ENTRY), u64::from(ENTRY + 4), 0, 1)
+            .unwrap();
+        assert_eq!(super::read_unicorn_u32(&attempt, TARGET), Some(VALUE));
+        attempt.capture(0x51a7).expect("stage exact native context");
+        attempt.set_metadata(mapped);
+        let retained_pins = native_pins.clone();
+        drop(native_pins);
+        attempt.finish().expect("checked fresh owner close");
+        assert_eq!(
+            slot.identity(),
+            None,
+            "native owner closed before Task exit"
+        );
+        let mut blocked = [0; 4];
+        assert!(pin.read_bytes(target_offset, &mut blocked).is_err());
+
+        // The existing stopped-root finalizer authenticates this primary
+        // birth, completes Task/VM exit, and seals the CPU continuation.
+        cpu.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        cpu.current_thread_id = MAIN_GUEST_THREAD_ID;
+        cpu.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        cpu.saved_context_thread_birth = Some(primary);
+        cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x42,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        assert!(cpu.try_complete_active_process_thread_exit(&mut kernel, None)?);
+        assert!(!kernel.handles.process_execution_live_by_birth(owner));
+        assert!(cpu.active_process_execution_completed());
+        assert!(!cpu.has_saved_context());
+        assert!(kernel.memory.writable_image_run_pin(identity).is_none());
+        assert!(!kernel.memory.contains_writable_image_run_pin(&pin));
+        assert!(
+            kernel
+                .memory
+                .overlaps_writable_image_guest_range(identity.run_base(), image_len),
+            "retired pin still fences its guest VA"
+        );
+        assert!(pin.read_bytes(target_offset, &mut blocked).is_err());
+
+        // A copied native continuation has no image ledger, and the retired
+        // process/VM authority refuses remapping even while that pin is held.
+        let mut stale = slot.lease().expect("fresh owner after stopped exit");
+        assert!(!stale.reused());
+        assert!(stale.take_metadata().is_none());
+        let stale_pins = stale.mapping_pins();
+        let mut stale_mapped = super::KernelMemoryMappings::new(&image_blobs);
+        assert!(
+            super::map_adopted_writable_main_image_runs(
+                &mut stale,
+                &cpu,
+                &kernel,
+                &mut stale_mapped,
+                &stale_pins,
+                None,
+            )
+            .is_err()
+        );
+        assert_eq!(stale_pins.writable_image_len(), 0);
+        assert!(stale_mapped.writable_image_runs.is_empty());
+        stale.abort_close().expect("close refused stale owner");
+        drop(stale_pins);
+        assert_eq!(slot.identity(), None);
+
+        drop(retained_pins);
+        pin.read_bytes(target_offset, &mut blocked)
+            .expect("checked close and last native pin release restore copied access");
+        assert_eq!(u32::from_le_bytes(blocked), VALUE);
+        assert!(
+            pin.begin_native_access().is_err(),
+            "retired run cannot be remapped"
+        );
+        drop(pin);
+        assert!(
+            !kernel
+                .memory
+                .overlaps_writable_image_guest_range(identity.run_base(), image_len),
+            "last native pin release removes the retired VA fence"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn patched_branch_likely_final_bytes_are_sealed_and_execute_in_fresh_owners()
     -> crate::Result<()> {
         const ORIGIN: u32 = 0x0040_1000;
