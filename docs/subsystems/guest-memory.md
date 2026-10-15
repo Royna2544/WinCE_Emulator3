@@ -277,42 +277,53 @@ final release profile passed 2/0 on matching source hashes
 Neither these synthetic measurements nor the E-43 debug copied-image receipt
 establishes iNavi lag, host RSS, frame readiness or live-run acceptance.
 
-### Next Stage 2 cut: writable image ownership (design, not implemented)
+### Writable image ownership: opt-in source gate, production migration open
 
-The main image's nonsealed pages and preloaded/runtime DLL images are still
-`BlobBytes::Owned` copy-backed runs. Native setup copies them into Unicorn and
-slice completion reads them back; cloning an Owned run copies its `Vec`.
-They are not yet AddressSpace-owned private image pages, and their host byte
-capacity is not a guest physical-memory charge. A sealed R/RX run is a
-different, already source-gated immutable family; do not turn it writable to
-solve an IAT or DLL update.
+The normal production main-image path and preloaded/runtime DLL images are
+still `BlobBytes::Owned` copy-backed runs. Native setup copies them into
+Unicorn and slice completion reads them back; cloning an Owned run copies its
+`Vec`. The [VM foundation gate](../../evidence/stage2-writable-image-vm-20261016/validation.receipt.md)
+adds exact `(process birth, module base, load generation, run base)` stable
+writable-image runs, native-access pins, checked retirement and independent
+VM-clone bytes. The [opt-in synthetic loader gate](../../evidence/stage2-writable-image-green-20261016/validation.receipt.md)
+consumes only final patched mutable main-image runs into that VM backing after
+live-birth/final-run checks; its real-MIPS store persists across fresh owners
+without image copy-in/readback. The ordinary SD app path does not call this
+adoption seam. A sealed R/RX run is a different immutable family; do not turn
+it writable to solve an IAT or DLL update. The new backing has
+`Unclassified` physical status and no guest-budget charge.
 
-The connected migration order is **writable main-image runs, then preloaded
-DLLs, then dynamic DLL load/unload/reload**. For each migrated page, the
-machine's canonical process birth and module load generation identify one
+The remaining connected migration order is **production writable main-image
+runs, then preloaded DLLs, then dynamic DLL load/unload/reload**. For each
+migrated page, the machine's canonical process birth and module load
+generation identify one
 private byte authority and its reservation, protection and page provenance.
 The VM owns that backing; the loader prepares final patched bytes and module
 metadata, and the native lease only observes/pins the exact page and mapping
 generation. On successful publication the old Owned bytes for that page must
 be consumed or dropped, not kept as another writable truth. Unmigrated runs
 retain their existing checked copy-in/readback boundary until their own cut.
-The existing sealed-image pin table uses only a run base as its key; migrated
-writable pages need a separate birth/module-generation/backing identity in
-the native ledger and pin table, not a base-only reuse check.
+The opt-in writable-image native pins now use the exact
+birth/module-generation/run key, separate from sealed-image run-base pins;
+production integration must preserve that distinction.
 Adding an `Rc`-backed writable `BlobBytes` variant only to `UnicornMips` would
 not meet this contract: `UnicornMips` currently owns and derives `Clone` over
-its blob vector. The canonical page directory must live in the machine's
-birth-owned AddressSpace; the CPU may hold checked references, not an
-independently cloned mutable store. Until a full machine checkpoint can
-relineage that directory and every native/parked reference, checkpoint of a
-migrated writable image must fail explicitly rather than share writable bytes.
+its blob vector. The implemented opt-in path instead stores bytes in
+`MemorySystem` and keeps checked CPU references; CPU clone invalidates
+adoption. The canonical directory ultimately belongs to the machine's
+birth-owned AddressSpace, not an independently cloned CPU store. Until a full
+machine checkpoint can relineage that directory and every native/parked
+reference, checkpoint of a migrated writable image must fail explicitly
+rather than share writable bytes. The [focused monitor guard](../../evidence/stage2-writable-image-vm-20261016/test-main-checkpoint.validation.receipt.md)
+does refuse save and restore when either side has writable-image backing.
 Native or hook-time writes, host restore, process parking and DLL rebinding
-must go through that same checked authority. An independent machine clone
-relineages owner/module keys and copies private bytes; a CPU Context alone
+must go through that same checked authority. A future independent machine
+clone must relineage owner/module keys and copy private bytes; a CPU Context alone
 does not clone RAM. A stale birth, unloaded generation or mismatched pin
-refuses the operation before byte or metadata publication. Failed native
-map/protect/unmap keeps pins until checked owner close; already-live guest
-writes are not promised rollback.
+must refuse the operation before byte or metadata publication. A failed native
+map/protect/unmap must keep pins until checked owner close; the dedicated
+native-failure control is still open. Already-live guest writes are not
+promised rollback.
 
 Guest physical accounting is a separate **unresolved policy gate**. The
 device reports 195,350,528 B total and 164,368,384 B available at boot in
@@ -350,13 +361,13 @@ An SD file origin likewise does not establish which image pages are resident,
 shared or already included in the boot-reserved amount. Record the actual
 loader/pager provenance and page events before assigning a physical charge.
 
-Freeze expected-red tests before changing the production path: real MIPS
-store/load on a writable main-image page across fresh owners; A/B same-VA
+The historical real-MIPS writable main-image and mapped-code reds now have
+bounded opt-in synthetic greens. Before changing the production path, retain
+their store/load across fresh owners and zero image copy-in/readback
+assertions, and add a native `mem_map_ptr` failure/abort control, A/B same-VA
 isolation, IAT patch, stale birth/generation and native-write-guard refusal.
-Assert the stable backing pointer/pin and **zero image copy-in/readback** as
-well as byte persistence, because the present copy path can already pass a
-store/load roundtrip. Reconciliation must exclude the migrated page from
-anonymous native `mem_map` in the same cut that changes its sync path.
+The current synthetic map helper excludes adopted pages from ordinary blob
+copy mapping; the production map/sync cut must preserve that exclusion.
 Then test the corresponding preloaded/dynamic DLL store, park,
 unload/reload and failure cases. Synthetic fixtures explicitly tagged with
 modeled RAM and ROM/XIP provenance must check `GlobalMemoryStatus` at boot,

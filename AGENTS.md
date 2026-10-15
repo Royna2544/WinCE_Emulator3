@@ -218,8 +218,11 @@ source passed 18-block release-feature **2,107/0/9 ignored** and no-default
 ([receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)).
 Raw direct pseudo compatibility remains fixture-only and fail-closed; this is
 not full Task/VM authority or live-app proof. No app or mount run was made.
-Writable main-image/DLL ownership and `PrivatePageBudget` treatment are the
-immediate Stage 2 design and source-test priority ahead of the next MsgWait
+Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
+pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
+but normal SD-app loading remains copy-backed. Native failure controls,
+preloaded/runtime DLL ownership and O-M3 `PrivatePageBudget` treatment are
+the immediate Stage 2 priority ahead of any live acceptance or next MsgWait
 gate.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured

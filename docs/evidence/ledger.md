@@ -1926,6 +1926,51 @@ bounded controls. This does not prove canonical Task/VM retirement after a
 root pseudo signal or whole-exit atomicity after successful preflight. No
 live iNavi run, writable-mount operation or LAN session occurred.
 
+## Stage 2 writable main-image VM and mutable-code source gates (2026-10-16, executed offline)
+
+The historical [writable-image expected red](../../evidence/stage2-writable-image-red-20261016/validation.receipt.md)
+showed a real MIPS store visible to one native owner but absent from the
+loader blob and a fresh owner when blob readback was deliberately omitted.
+The separate [mapped-code R02 red](../../evidence/stage2-mutable-code-read-20261016/validation.receipt.md)
+showed a same-slice live instruction overwritten by guest MIPS but decoded
+from stale mutable blob bytes; R01 was compile-only. These are bounded
+source-fixture failures, not live iNavi observations.
+
+The [VM foundation](../../evidence/stage2-writable-image-vm-20261016/validation.receipt.md)
+passed 3/3 focused no-default tests: stable aligned backing keyed by process
+birth, module base, load generation and run base; exact native pins and
+retirement/reuse fences; independent VM clone bytes. The
+[monitor guard](../../evidence/stage2-writable-image-vm-20261016/test-main-checkpoint.validation.receipt.md)
+passed 1/1 focused no-default test and refuses checkpoint save/restore when
+either machine has writable-image backing. An
+[opt-in main-image adoption gate](../../evidence/stage2-writable-image-green-20261016/validation.receipt.md)
+passed 3/3 focused release controls. Its real-MIPS `0x51a7c0de` store persists
+through canonical VM bytes to a fresh native owner with zero image
+copy-in/readback in that synthetic path; other controls reject mismatched
+final image runs/second load attempt and retire a partially published later
+run without dropping the original CPU blobs. Attempts 01–04 in that focused
+directory lacked native Cargo output and are explicitly uncredited; attempt
+05 is the captured test proof.
+
+The later [mapped-code fallback gate](../../evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)
+passed 5/5 focused release controls: mutable instructions come from live
+native bytes and a failed native read no longer falls through to stale blob
+bytes. Its [final broad receipt](../../evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
+seals HEAD `18c6c9268fcedc050a2a53778b4ad720b56e98ba` plus five stable
+source-file hashes and complete captured raw output. Across all 18 result
+blocks per profile, release passed **2,116/0/9 ignored** and no-default
+**1,515/0/3 ignored**. Earlier 8/2 ignored subtotals excluded one ignored
+test in a zero-passed block of each suite; the receipt was corrected without
+altering the raw logs.
+
+The ordinary production SD main-image loader remains copy-backed and DLL
+families are not migrated. The synthetic backing reports physical status
+`Unclassified` and charges zero guest-budget bytes; it cannot close O-M3 or
+authorize production image physical-memory accounting. Native `mem_map_ptr`
+failure/abort coverage, full host-write inventory, machine checkpoint
+relineage and production activation remain separate gates. No app, mount,
+LAN, RSS, throughput, map-readiness or full Stage 2 result follows.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

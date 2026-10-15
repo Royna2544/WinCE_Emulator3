@@ -159,26 +159,32 @@ E-39 separately validated real native public-private and injected-file-view
 cross-process same-VA isolation. D008's public shared-view, same-slice alias
 and DIB migration controls passed focused and final frozen-source broad gates
 ([receipt](../evidence/d008-shared-view-20261014/validation.receipt.md)).
-Unmigrated writable image/DLL bytes, safe heap address reuse, full machine
+Unmigrated production writable-image/DLL bytes, safe heap address reuse, full machine
 checkpoint relineage, guest `CreateProcessW` handoff, and live footprint/map
 readiness retain separate
 gates; Stage 2 is not complete. Stage 3 extends, rather than recreates, the
 process-birth authority.
 
-### Remaining Stage 2 slices after the O-M2 source gate
+### Remaining Stage 2 slices after the O-M2 and opt-in image source gates
 
 Sparse migration was dropped: Microsoft's [CE `CreateFileMapping` reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29)
 documents default `SEC_COMMIT` for the whole section. E-43 sealed immutable
 main-EXE pages, E-44 migrated the initial heap/stack slabs and O-M2 replaced
-copied heap spillover with sparse per-birth fixed pages. Writable image/DLL
-backing, full clone lineage, safe heap reuse and Stage 3 Task authority remain
+copied heap spillover with sparse per-birth fixed pages. Production writable
+image/DLL backing, full clone lineage, safe heap reuse and Stage 3 Task authority remain
 separate gates.
-The next connected Stage 2 source sequence is writable main-image pages,
+The bounded [VM backing](../evidence/stage2-writable-image-vm-20261016/validation.receipt.md),
+[opt-in main-image adoption](../evidence/stage2-writable-image-green-20261016/validation.receipt.md),
+and [mutable-code fallback](../evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
+source/test gates pass, but normal SD-app loading remains copy-backed. The
+next connected sequence is production writable main-image integration,
 preloaded DLLs, then dynamic DLL load/unload/reload; do not treat byte
 persistence through the old copy path as the ownership proof. Each cut needs
 real-MIPS bytes, exact birth/module-generation pins, native copy/readback
-exclusion and failure controls. The [memory](subsystems/guest-memory.md) and
-[loader](subsystems/pe-loader.md) plans detail those gates. [O-M3](DECISIONS.md)
+exclusion and failure controls, including a native `mem_map_ptr` failure and
+checked abort/close before production activation. The
+[memory](subsystems/guest-memory.md) and [loader](subsystems/pe-loader.md)
+plans detail those gates. [O-M3](DECISIONS.md)
 keeps ROM/XIP versus RAM page provenance and `GlobalMemoryStatus` charge timing
 open before guest-budget or live acceptance. A writable-mount run still needs
 a distinct approval and fresh verified adjacent backups.

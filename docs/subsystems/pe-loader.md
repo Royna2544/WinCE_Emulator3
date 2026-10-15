@@ -134,17 +134,22 @@ setup-time, or frame-rate improvement is claimed from this load-only result.
 
 ROM/XIP physical-budget treatment and `GlobalMemoryStatus` accounting are
 undecided. A guest protection fault is still a native error, not a CE access
-violation. Dynamic DLLs, writable image and heap-spillover pages, CE exception
-translation,
-the exhaustive direct native-write inventory and matched iNavi boot/frame
+violation. Dynamic DLLs, production writable-image integration, CE exception
+translation, the exhaustive direct native-write inventory and matched iNavi boot/frame
 timing remain open; another writable-mount iNavi run requires fresh approval
 and adjacent backups.
 
-## Writable image and DLL source-cut plan (not yet implemented)
+## Writable image and DLL source-cut plan (opt-in main-image gate only)
 
-The current nonsealed main-image run is a mutable RWX `Owned` blob; preloaded
-and runtime DLLs likewise publish whole-image `Owned` blobs. The fresh native
-owner copies these bytes in and reads them back. The migration must preserve
+The normal production nonsealed main-image run is a mutable RWX `Owned` blob;
+preloaded and runtime DLLs likewise publish whole-image `Owned` blobs. The
+fresh native owner copies these bytes in and reads them back. A separate
+[opt-in synthetic source gate](../../evidence/stage2-writable-image-green-20261016/validation.receipt.md)
+now exposes final main-image run identity/load generation and consumes the
+matched mutable runs into stable VM backing after checked live-birth/lineage
+validation; its real-MIPS write survives a fresh native owner without image
+copy-in/readback. The ordinary SD app loader does not invoke that seam.
+Production migration must preserve
 the finalized relocation/import/trampoline bytes while replacing **one**
 copy-backed family at a time with AddressSpace-owned, stable private pages.
 The sealed main-image R/RX runs and their generation/pin checks remain intact.
@@ -154,17 +159,18 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    page provenance, budget decision and native-write destinations before
    publishing any module pointer or IAT binding. Keep the old live module
    untouched on a failed candidate; do not reuse a same-VA generation.
-2. Make writable **main-image** pages the first connected source/test cut.
+2. Complete writable **main-image** production integration as the first
+   connected source/test cut.
    The VM must own bytes before execution; native owners pin/reconcile that
    backing, and neither a parked blob nor outbound readback may overwrite it.
    Preserve IAT writes through a checked VM/loader transaction. Validate
    actual MIPS store/load across fresh owners and A/B same-VA isolation, plus
-   stale-key and partial-map failures, before removing the Owned copy. The
-   current `MappedCodeIndex` marks every `image:`/`dll:` blob static by name
-   and can prefer stale Owned bytes over live native code after a same-slice
-   guest write. Static-code classification must follow proven immutable
-   backing, not the module-name prefix; test a real MIPS self-modifying
-   writable page before accepting hook/decoder behavior.
+   stale-key and partial-map failures, before removing the Owned copy from
+   the production path. The bounded [mapped-code gate](../../evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)
+   now reads mutable code from live native memory and refuses a stale mutable
+   blob fallback if native reading fails; the real-MIPS same-slice control
+   passed. Keep static classification tied to proven immutable backing and
+   retain a native-map-failure/abort control before production activation.
 3. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
    Dynamic mapping, import refresh, attach/detach, unload/reload and parked
    process restoration must reconcile exact generation/pins before returning
@@ -191,9 +197,10 @@ The app-directory DLL preload path also means one loader invocation can mix
 module origins. Each module/page needs its own provenance rather than one
 blanket DLL budget rule.
 
-This is a design sequence, not a claim that `AddressSpace` already owns these
-pages. The shared [memory plan](guest-memory.md) defines byte/pin lifetime and
-the unresolved physical accounting boundary.
+This is a production/DLL design sequence with one opt-in main-image source
+gate, not a claim that the normal app path uses VM image backing or that
+`AddressSpace` already owns every image page. The shared [memory plan](guest-memory.md)
+defines byte/pin lifetime and the unresolved physical accounting boundary.
 
 ## Target transaction and owner
 
