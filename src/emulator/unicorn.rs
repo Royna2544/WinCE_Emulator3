@@ -488,6 +488,28 @@ fn native_no_wait_effect_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_process_exit_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && ordinal == Some(crate::ce::coredll_ordinals::ORD_TERMINATE_PROCESS)
+}
+
+#[cfg(feature = "unicorn")]
+fn native_process_exit_import_caller_matches_owner(
+    kernel: &CeKernel,
+    caller_birth: Option<crate::ce::object::ThreadBirthKey>,
+    native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+) -> bool {
+    caller_birth
+        .zip(native_owner_birth)
+        .is_some_and(|(birth, owner)| {
+            kernel.checked_guest_process_caller_for_birth(birth) == Some(owner)
+        })
+}
+
+#[cfg(feature = "unicorn")]
 fn native_import_requires_verified_thread_birth(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -497,6 +519,7 @@ fn native_import_requires_verified_thread_birth(
         || native_window_creation_import_requires_verified_birth(module_kind, ordinal)
         || native_send_import_requires_verified_birth(module_kind, ordinal)
         || native_no_wait_effect_import_requires_verified_birth(module_kind, ordinal)
+        || native_process_exit_import_requires_verified_birth(module_kind, ordinal)
         || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
             && first_arg == 0
             && matches!(
@@ -11337,6 +11360,24 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    native_process_exit_import_requires_verified_birth(
+                        trap.module_kind,
+                        trap.ordinal,
+                    )
+                }) && !native_process_exit_import_caller_matches_owner(
+                    unsafe { &*kernel_ptr },
+                    caller_birth,
+                    native_owner_birth,
+                ) {
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
+                        format!(
+                            "native TerminateProcess has stale or mismatched process birth for TID {active_thread_id}"
+                        ),
+                    ));
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     complete_escaped_get_message_sent_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -13905,7 +13946,12 @@ impl UnicornMips {
                             "finish owner-bound process exit: {err:?}"
                         )));
                     }
-                    if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                    if !Self::terminate_decoded_kernel_process(
+                        kernel,
+                        &exit,
+                        staged_context_thread_birth,
+                        native_owner_birth,
+                    ) {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -13956,7 +14002,12 @@ impl UnicornMips {
                         "finish decoded CE process exit: {err:?}"
                     )));
                 }
-                if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                if !Self::terminate_decoded_kernel_process(
+                    kernel,
+                    &exit,
+                    staged_context_thread_birth,
+                    native_owner_birth,
+                ) {
                     report.failure_operation = Some("terminate decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
@@ -14090,7 +14141,12 @@ impl UnicornMips {
                             "finish owner-bound process exit: {err:?}"
                         )));
                     }
-                    if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                    if !Self::terminate_decoded_kernel_process(
+                        kernel,
+                        &exit,
+                        staged_context_thread_birth,
+                        native_owner_birth,
+                    ) {
                         self.private_slab_attempt_poisoned = true;
                         self.saved_context = None;
                         self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
@@ -14141,7 +14197,12 @@ impl UnicornMips {
                         "finish decoded CE process exit: {err:?}"
                     )));
                 }
-                if !Self::terminate_decoded_kernel_process(kernel, &exit) {
+                if !Self::terminate_decoded_kernel_process(
+                    kernel,
+                    &exit,
+                    staged_context_thread_birth,
+                    native_owner_birth,
+                ) {
                     report.failure_operation = Some("terminate decoded process exit");
                     self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
                     self.persist_run_state(&run_state, kernel);
@@ -14516,13 +14577,28 @@ impl UnicornMips {
         Ok(())
     }
 
-    fn terminate_decoded_kernel_process(kernel: &mut CeKernel, exit: &EncodedKernelExit) -> bool {
-        kernel.terminate_process(exit.process, exit.exit_code)
-            || (exit.process == kernel.current_process_id()
-                && kernel.terminate_process(
-                    crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-                    exit.exit_code,
-                ))
+    fn terminate_decoded_kernel_process(
+        kernel: &mut CeKernel,
+        exit: &EncodedKernelExit,
+        caller_birth: Option<crate::ce::object::ThreadBirthKey>,
+        native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+    ) -> bool {
+        let (Some(caller_birth), Some(native_owner_birth)) = (caller_birth, native_owner_birth)
+        else {
+            return false;
+        };
+        if kernel.checked_guest_process_caller_for_birth(caller_birth) != Some(native_owner_birth) {
+            return false;
+        }
+        // A decoded self-PID is a process identity, not a public handle
+        // number. Classify it before handle lookup so a numeric collision
+        // cannot turn self-exit into a request against another process.
+        if exit.process != crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE
+            && exit.process != native_owner_birth.process_id()
+        {
+            return false;
+        }
+        kernel.terminate_current_process_for_caller_birth(caller_birth, exit.exit_code)
     }
 
     #[cfg(feature = "unicorn")]
@@ -78842,7 +78918,18 @@ mod unicorn_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         // A selected numeric PID alone is not an exit authority. Mirror the
         // registered process birth that a real child launch publishes.
-        let _process_handle = kernel.handles.create_process(67);
+        let process_handle = kernel.handles.create_process(67);
+        let process_birth = kernel
+            .handles
+            .process_birth_key_for_handle(process_handle)
+            .expect("selected process birth");
+        kernel
+            .handles
+            .register_boot_thread(67, process_birth)
+            .expect("selected process caller");
+        let caller_birth = kernel
+            .live_thread_birth_key_by_id(67)
+            .expect("live selected caller birth");
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: 67,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -78859,7 +78946,9 @@ mod unicorn_tests {
 
         assert!(super::UnicornMips::terminate_decoded_kernel_process(
             &mut kernel,
-            &exit
+            &exit,
+            Some(caller_birth),
+            Some(process_birth),
         ));
         assert_eq!(kernel.current_process_state().exit_code, 3);
         assert!(kernel.current_process_state().signaled);
@@ -78874,7 +78963,12 @@ mod unicorn_tests {
             .handles
             .process_birth_key_for_handle(process_handle)
             .expect("selected process birth");
-        assert!(kernel.handles.live_thread_births_for_owner(selected_birth).is_empty());
+        assert!(
+            kernel
+                .handles
+                .live_thread_births_for_owner(selected_birth)
+                .is_empty()
+        );
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: 67,
             exit_code: crate::ce::kernel::STILL_ACTIVE,
@@ -78892,7 +78986,9 @@ mod unicorn_tests {
 
         assert!(!super::UnicornMips::terminate_decoded_kernel_process(
             &mut kernel,
-            &exit
+            &exit,
+            None,
+            Some(selected_birth),
         ));
         assert_eq!(kernel.current_process_state(), state_before);
         assert_eq!(
@@ -82813,10 +82909,7 @@ mod unicorn_tests {
         use crate::ce::coredll_ordinals::ORD_TERMINATE_PROCESS;
         use crate::emulator::imports::ImportModuleKind;
 
-        for process_handle in [
-            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-            0x1234,
-        ] {
+        for process_handle in [crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x1234] {
             assert!(super::native_import_requires_verified_thread_birth(
                 ImportModuleKind::Coredll,
                 Some(ORD_TERMINATE_PROCESS),
@@ -82828,6 +82921,45 @@ mod unicorn_tests {
                 process_handle,
             ));
         }
+    }
+
+    #[test]
+    fn native_terminate_process_import_requires_matching_process_lease() {
+        let mut kernel = crate::ce::kernel::CeKernel::boot(
+            crate::config::RuntimeConfig::load_default().unwrap(),
+        );
+        let process_a = kernel.current_process_birth_key().expect("boot owner");
+        let caller_a = kernel.live_thread_birth_key_by_id(1).expect("boot caller");
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = launch_b.process_birth.expect("B owner");
+        let caller_b = launch_b.primary_thread_birth.expect("B caller");
+
+        assert!(super::native_process_exit_import_caller_matches_owner(
+            &kernel,
+            Some(caller_a),
+            Some(process_a),
+        ));
+        assert!(!super::native_process_exit_import_caller_matches_owner(
+            &kernel,
+            Some(caller_a),
+            Some(process_b),
+        ));
+        kernel.set_current_process_id(launch_b.process_id);
+        assert!(!super::native_process_exit_import_caller_matches_owner(
+            &kernel,
+            Some(caller_a),
+            Some(process_a),
+        ));
+        assert!(!super::native_process_exit_import_caller_matches_owner(
+            &kernel,
+            None,
+            Some(process_b),
+        ));
+        assert!(super::native_process_exit_import_caller_matches_owner(
+            &kernel,
+            Some(caller_b),
+            Some(process_b),
+        ));
     }
 
     #[test]
