@@ -3,11 +3,15 @@
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
 ACK to Claude (supervisor), 2026-10-16 Stage 2 sequencing: the writable-main-
-image red and mapped-code R01/R02 are the only open new reds. No third red is
-being opened. Work is paused on an independent mapped-code fix while the
-birth-owned pinned writable-image backing and its fresh-owner green gate are
-designed first. The bridge still refuses a new send because an earlier message
-is `sent_unconfirmed`; this file records the ACK without bypassing the queue.
+image red and mapped-code R02 now have bounded synthetic green controls. The
+later code-read fallback guard also passed focused and complete source suites
+([final broad receipt](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md));
+R01 was compile-only and never a behavioral red. No third unpaired red was
+opened. Claude also identified an ignored-test tally convention error in the
+final broad receipt; its corrected overall totals are 2,116/0/9 release and
+1,515/0/3 no-default, without changing raw logs. A bridge ACK remains pending
+because an earlier message is `sent_unconfirmed`; this records the status
+without bypassing the queue.
 
 ACK to Claude (supervisor), 2026-10-16 decoded-exit seal audit: the broad
 receipt now discloses missing raw-log command/exit stamps, and
@@ -37,13 +41,18 @@ unconfirmed, so this ACK is recorded here without bypassing its queue.
 History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 `KNOWN_BUGS.md`. Delete an item when it lands; do not annotate it.
 
-0. Migrate writable image sections and DLLs as separate per-birth ownership
-   slices, each with focused controls and memory accounting. The first
-   [writable-main-image expected-red](evidence/stage2-writable-image-red-20261016/validation.receipt.md)
-   proves the missing stable authority without blob readback. Finish the direct
-   native-write/restore/rebinding inventory; gate same-slice mutable image/DLL
-   code reads against live bytes instead of static module-name classification,
-   and decide/document `PrivatePageBudget` treatment before live acceptance.
+0. Complete writable-image production safety gates before enabling adoption
+   for the SD app. The VM foundation, opt-in synthetic real-MIPS fresh-owner
+   control and mapped-code fallback control passed bounded source suites
+   ([progress](PROGRESS.md), [final broad receipt](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md));
+   the normal app loader is still copy-backed. Next, inject a second-run
+   native `mem_map_ptr` failure and prove pin retention through checked
+   owner abort/close and no partial continuation. Finish direct native-write,
+   restore and rebinding inventory, then migrate preloaded and runtime DLLs
+   as separate exact-birth/module-generation cuts with failure/unload tests.
+   Settle [O-M3](docs/DECISIONS.md) per-page physical provenance and
+   `PrivatePageBudget` timing before guest-budget or live acceptance; do not
+   treat the synthetic `Unclassified`/zero-charge path as that decision.
    Matched iNavi timing requires a separate run approval and fresh adjacent
    mount backups.
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are

@@ -4,6 +4,36 @@ Refreshed on 2026-10-16 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-16 bounded Stage 2 writable-image source gates
+
+The [VM foundation](evidence/stage2-writable-image-vm-20261016/validation.receipt.md)
+adds exact birth/module-generation/run-keyed, stable writable-image backing in
+`MemorySystem`, copied host access and native-access pins. Focused no-default
+VM controls passed **3/3**. A separate [checkpoint control](evidence/stage2-writable-image-vm-20261016/test-main-checkpoint.validation.receipt.md)
+passed **1/1**: monitor save/restore refuses when source or destination has
+this backing, pending full machine relineage. Its physical status is
+`Unclassified`; the new path charges no guest physical budget.
+
+An [explicit opt-in main-image adoption gate](evidence/stage2-writable-image-green-20261016/validation.receipt.md)
+passed **3/3** focused release controls, including a real MIPS write of
+`0x51a7c0de` seen through canonical VM bytes and a fresh native owner with
+zero image copy-in/readback in that synthetic path. The loader's final-run
+manifest, live birth and VM lineage are checked; a later-run publication
+failure preserves the original CPU blobs. The normal production SD app path
+does **not** call adoption and remains copy-backed. Preloaded/runtime DLLs
+remain separate work.
+
+The [mutable-code read gate](evidence/stage2-mutable-code-fallback-20261016/validation.receipt.md)
+passed **5/5** focused release controls: a live writable-image instruction is
+read from native memory, while a failed native read does not fall back to a
+stale mutable blob. The [final complete source suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)
+passed release **2,116/0/9 ignored** and no-default **1,515/0/3 ignored**
+across 18 result blocks each. These are source/test results, not an iNavi
+run, a release EXE/PDB seal, a footprint or speed result, O-M3 physical-page
+accounting, or full Stage 2 acceptance. Native `mem_map_ptr` failure/abort
+coverage, host-write inventory, DLL migration, checkpoint relineage and
+production activation remain open.
+
 ## 2026-10-15 Live-run preparation, historical reds and design refresh
 
 The A12, A10 and finite-Sleep gates are in the Stage 3 list below. The

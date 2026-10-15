@@ -21,12 +21,17 @@ remote-control HTTP/WebSocket surface.
   outcome, remaining writable-image/DLL backing, Stage 2 and
   Stage 3 task migration remain open. After E-42's historical selector-only
   gate, the main EXE loader now seals final patched R/RX bytes and retains
-  mutable runs copy-backed. Its E-43 source-bound gate passes. E-44 separately
-  source-gated the initial heap/stack fixed slabs; O-M2 then made the fixed
-  process heap birth-qualified and removed copied spillover. Full Stage 2/live
-  acceptance remains open. Writable image/DLL ownership and its guest-memory
-  budget are the immediate design and test priority. Persistent-owner
-  architecture is deferred to Stage 8.
+  mutable runs copy-backed in the normal app path. Its E-43 source-bound gate
+  passes. E-44 separately source-gated the initial heap/stack fixed slabs;
+  O-M2 then made the fixed process heap birth-qualified and removed copied
+  spillover. An opt-in synthetic writable-main-image VM/pin path, monitor
+  checkpoint refusal and live-native mutable-code reads now pass bounded
+  source controls and complete suites
+  ([receipt](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md)).
+  Production SD activation, DLL ownership, native failure controls and O-M3
+  guest-memory accounting remain open; no new iNavi run, performance result
+  or full Stage 2/live acceptance follows. Persistent-owner architecture is
+  deferred to Stage 8.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,
