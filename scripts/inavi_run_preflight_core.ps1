@@ -593,6 +593,14 @@ function Test-InaviRunManifestCore {
         [System.StringComparer]::Ordinal)
     $reconciledIdentities = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal)
+    $usedApprovals = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $usedAttempts = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $withdrawnApprovals = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $withdrawnAttempts = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
     $sourceRootForProof = if (Test-InaviCoreField $Observed 'currentSourceRoot') {
         $Observed.currentSourceRoot
     } else { $null }
@@ -600,23 +608,31 @@ function Test-InaviRunManifestCore {
         if (-not (Test-InaviCoreMap $entry) -or
             -not (Test-InaviCoreField $entry 'eventId') -or
             -not (Test-InaviCoreField $entry 'attemptId') -or
-            -not (Test-InaviCoreField $entry 'manifestSha256') -or
             -not (Test-InaviCoreField $entry 'zipSha256') -or
             -not (Test-InaviCoreField $entry 'state') -or
             -not (Test-InaviCoreField $entry 'utc') -or
-            $entry.zipSha256 -isnot [array] -or
-            $entry.zipSha256.Count -ne 3) {
+            $entry.zipSha256 -isnot [array]) {
             Add-InaviCoreCode $codes 'LEDGER_INVALID'
             continue
         }
+        $isWithdrawn = $entry.state -eq 'withdrawn'
+        if (($isWithdrawn -and $entry.zipSha256.Count -gt 3) -or
+            (-not $isWithdrawn -and
+                ($entry.zipSha256.Count -ne 3 -or
+                    -not (Test-InaviCoreField $entry 'manifestSha256')))) {
+            Add-InaviCoreCode $codes 'LEDGER_INVALID'
+            continue
+        }
+        $hasManifestDigest = $entry.Contains('manifestSha256')
         if ($entry.eventId -isnot [string] -or
             [string]::IsNullOrWhiteSpace($entry.eventId) -or
             -not $seenEventIds.Add($entry.eventId) -or
             $entry.attemptId -isnot [string] -or
             $entry.attemptId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$' -or
-            -not (Test-InaviCoreHash $entry.manifestSha256) -or
+            (($hasManifestDigest -or -not $isWithdrawn) -and
+                -not (Test-InaviCoreHash $entry.manifestSha256)) -or
             $entry.state -isnot [string] -or
-            $entry.state -notin @('reserved', 'spent', 'reconciled', 'legacy-deny', 'historical-spent') -or
+            $entry.state -notin @('reserved', 'spent', 'reconciled', 'legacy-deny', 'historical-spent', 'withdrawn') -or
             $entry.utc -isnot [string] -or
             $entry.utc -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$') {
             Add-InaviCoreCode $codes 'LEDGER_INVALID'
@@ -679,7 +695,60 @@ function Test-InaviRunManifestCore {
             }
         }
         if (-not $validZipHashes) { continue }
-        if ($entry.state -eq 'historical-spent') {
+        if ($entry.state -in @('reserved', 'spent', 'historical-spent', 'legacy-deny')) {
+            if ($withdrawnAttempts.Contains($entry.attemptId) -or
+                ($entry.state -ne 'legacy-deny' -and
+                    $withdrawnApprovals.Contains($entry.approvalReference))) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+            }
+            [void]$usedAttempts.Add($entry.attemptId)
+            if ($entry.state -ne 'legacy-deny') {
+                [void]$usedApprovals.Add($entry.approvalReference)
+            }
+        }
+        if ($isWithdrawn) {
+            # This terminal deny is for an approval abandoned before a run
+            # manifest or process existed. It cannot close a reservation, and
+            # its evidence bytes must be independently hashed by the caller.
+            $allowedFields = @(
+                'eventId', 'attemptId', 'approvalReference', 'state', 'utc',
+                'zipSha256', 'reason', 'withdrawalEvidence', 'manifestSha256')
+            if (@($entry.Keys | Where-Object { $_ -notin $allowedFields }).Count -gt 0 -or
+                -not (Test-InaviCoreField $entry 'reason') -or
+                $entry.reason -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.reason) -or
+                $entry.reason.Length -gt 2048 -or
+                $entry.reason -match '[\x00-\x1F]' -or
+                $null -eq (ConvertTo-InaviCoreUtc $entry.utc) -or
+                -not (Test-InaviCoreField $entry 'withdrawalEvidence') -or
+                -not (Test-InaviCoreMap $entry.withdrawalEvidence) -or
+                -not (Test-InaviCoreField $entry.withdrawalEvidence 'path') -or
+                -not (Test-InaviCoreField $entry.withdrawalEvidence 'sha256') -or
+                -not (Test-InaviCoreEvidencePath $entry.withdrawalEvidence.path $sourceRootForProof) -or
+                -not (Test-InaviCoreHash $entry.withdrawalEvidence.sha256)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
+            }
+            $withdrawalHashes = if (Test-InaviCoreField $Observed 'verifiedWithdrawalEvidenceSha256') {
+                $Observed.verifiedWithdrawalEvidenceSha256
+            } else { $null }
+            if (-not (Test-InaviCoreMap $withdrawalHashes) -or
+                -not $withdrawalHashes.Contains($entry.withdrawalEvidence.path) -or
+                -not (Test-InaviCoreHash $withdrawalHashes[$entry.withdrawalEvidence.path]) -or
+                $withdrawalHashes[$entry.withdrawalEvidence.path] -ne
+                    $entry.withdrawalEvidence.sha256) {
+                Add-InaviCoreCode $codes 'LEDGER_WITHDRAWAL_UNVERIFIED'
+                continue
+            }
+            if ($usedApprovals.Contains($entry.approvalReference) -or
+                $usedAttempts.Contains($entry.attemptId) -or
+                $withdrawnApprovals.Contains($entry.approvalReference) -or
+                $withdrawnAttempts.Contains($entry.attemptId)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+            }
+            [void]$withdrawnApprovals.Add($entry.approvalReference)
+            [void]$withdrawnAttempts.Add($entry.attemptId)
+        } elseif ($entry.state -eq 'historical-spent') {
             # These launches predate the ledger. Their observed process and
             # approval provenance is recorded honestly as a terminal deny,
             # never as an invented reservation/spent transition.

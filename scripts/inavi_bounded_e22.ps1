@@ -507,6 +507,11 @@ function Get-InaviHistoricalRunEvidenceHashes([object[]]$LedgerEntries, [string]
         'historical-spent' 'runEvidence' 'Historical run evidence'
 }
 
+function Get-InaviWithdrawalEvidenceHashes([object[]]$LedgerEntries, [string]$Repository) {
+    return Get-InaviLedgerEvidenceHashes $LedgerEntries $Repository `
+        'withdrawn' 'withdrawalEvidence' 'Withdrawal evidence'
+}
+
 function Add-InaviDualLedgerEntry([hashtable]$Ledgers, [hashtable]$Entry) {
     # The monitor owns an exclusive evidence/live-run-use.lock while this runs.
     # Each append is flushed before the next; interruption leaves an explicit
@@ -605,6 +610,8 @@ function Assert-InaviManifestPreflight(
         Get-InaviReconciliationProofHashes $ledgers.local $Repository
     $observed.observation.verifiedHistoricalRunEvidenceSha256 =
         Get-InaviHistoricalRunEvidenceHashes $ledgers.local $Repository
+    $observed.observation.verifiedWithdrawalEvidenceSha256 =
+        Get-InaviWithdrawalEvidenceHashes $ledgers.local $Repository
     if (@($ledgers.local | Where-Object {
                 [string]$_.attemptId -ceq [string]$manifest.runTag
             }).Count -gt 0) {
