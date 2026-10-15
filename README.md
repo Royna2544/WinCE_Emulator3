@@ -38,11 +38,22 @@ remote-control HTTP/WebSocket surface.
   Reciprocal cross-Send and post-wake MsgWait remain untested. The user skipped
   the a04 live run; no new mount backup or iNavi run follows from this source
   gate, and full Stage 3 remains open.
-- Three later [ignored real-MIPS cross-thread Send controls](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
-  reproduce an unverified native-context stop, including at a real count-stop
-  inside B's WNDPROC and with two blocked receivers. These are source-test
-  reds, not iNavi failures. Receiver stack and completion assertions remain
-  behind that stop; no production fix or current-source broad reseal followed.
+- The three [real-MIPS cross-thread Send expected reds](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
+  are historical pre-repair source controls, not current iNavi failures. The
+  connected A→B Send/GetMessage cut now has an exact
+  [A10 source seal](evidence/scheduler-source-cut-a10/source-seal.md) and
+  [validation receipt](evidence/scheduler-source-cut-a10/validation.receipt.md):
+  18-group release-feature **2,045/0/9 ignored** and no-default **1,482/0/3
+  ignored**, with unchanged pre/post source hashes, two alternate checks and a
+  release build passing; EXE/PDB copies were SHA-preserved, not run. A09's four
+  same-process Send failures remain historical. A10 checks exact blocked-
+  GetMessage/native wait and birth before recovering B, then resumes A on the
+  next bounded lease. Only the runnable-receiver fixture proves a subsequent
+  no-replay slice; the three finite-Sleep fixtures stop at A's continuation.
+  This is a bounded source/test gate, not full Stage 3 or live-iNavi proof.
+  Reciprocal sends, cross-process parked-sender restore, legacy numeric-only
+  HWNDs, post-wake MsgWait, `SMF_TIMEOUT` semantics and same-birth orphaned
+  GetMessage payloads with a missing scheduler wait remain separate.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

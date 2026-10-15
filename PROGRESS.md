@@ -4,6 +4,38 @@ Refreshed on 2026-10-15 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-15 Connected A→B Send/GetMessage bounded source gate (no app run)
+
+The ordinary same-process A→B `SendMessageW` into B's birth-verified blocked
+`GetMessageW` now has a bounded A10 source/test gate. The exact
+[source seal](evidence/scheduler-source-cut-a10/source-seal.md) pins HEAD
+`d6013e7996271be811a95eb6215299089a8f7414` plus a two-file source/test
+patch SHA-256 `AF497AE8FB4B9A0F19D76715FA94FA9E747FD8B21A8848832AAB80D0DB7F8C49`.
+Both 18-group broad suites passed on that source: release-feature **2,045
+passed, 0 failed, 9 ignored** and no-default **1,482 passed, 0 failed,
+3 ignored**. HEAD, patch, Rust source and pinned toolchain hashes matched before
+and after both suites and additional checks. Unicorn-only and desktop/no-trace
+checks and the release build exited 0; selected EXE/PDB copies are SHA-preserved
+in A10 evidence ([validation receipt](evidence/scheduler-source-cut-a10/validation.receipt.md)).
+
+The original A→B expected reds and ordinary queued-send receiver-exit/TID-reuse
+red are historical. A07 broad suites passed on prior source; A08 exposed
+sender-restore corruption and its repair passed focused Send **30/30** and
+Kernel **1/1** on the prior A09 source. The sealed A09 release-feature run
+failed four existing same-process Send controls (**1,048 passed, 4 failed,
+6 ignored**); no-default was not run
+([A09 receipt](evidence/scheduler-source-cut-a09/validation.receipt.md)).
+Strict extra-lease controls then showed that saved-context recovery could
+revive B despite its separate blocked-GetMessage slot. A10 checks the exact
+GetMessage/native wait and saved/live birth before recovery, rejects a known
+stale saved birth before native restore, and resumes A on the next bounded
+lease with its exact reply/wait. Only the runnable-receiver control checks a
+later no-replay slice; the three finite-Sleep controls stop at A's continuation.
+This is not full Stage 3 or live-iNavi acceptance. Reciprocal cross-Send,
+cross-process parked-sender restore, legacy numeric-only HWND ownership,
+post-wake MsgWait, `SMF_TIMEOUT` last-error semantics and same-birth orphaned
+GetMessage payloads with a missing scheduler wait remain separate boundaries.
+
 ## 2026-10-15 TaskFrame finite-Sleep scheduler source cut (no app run)
 
 The first machine-owned finite-Sleep `TaskFrameRef` source cut is resealed at
@@ -30,12 +62,13 @@ cross-Send after receiver wake and post-wake MsgWait remain untested; neither
 is a reproduced failure. The user skipped the a04 run; no new adjacent mount
 backup or iNavi launch followed this scheduler cut.
 
-## 2026-10-15 Receiver-context cross-thread Send expected reds (no app run)
+## 2026-10-15 Historical receiver-context Send expected reds (no app run)
 
-Three ignored real-MIPS controls now reach same-process cross-thread send:
-ordinary A→B after B blocks in verified-birth `GetMessageW`; a 64-instruction
-slice stop *inside* B's WNDPROC; and A→displaced C after C and B both block in
-GetMessage. Each fails at the native slice-end guard with
+Before the connected cut, three ignored real-MIPS controls reached same-process
+cross-thread send: ordinary A→B after B blocks in verified-birth
+`GetMessageW`; a 64-instruction slice stop *inside* B's WNDPROC; and
+A→displaced C after C and B both block in GetMessage. Each failed at the
+native slice-end guard with
 `Backend("native staged context has stale or unverified thread birth")` before
 receiver-stack/return assertions. The [test-only receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)
 preserves distinct a02–a04 source patches, hashes and complete targeted raw
@@ -51,15 +84,15 @@ callback SP from A's live registers, but no red directly measured B's SP or
 proved a reciprocal deadlock.
 
 Plan-first review selected queue→birth-verified GetMessage resume at a slice
-boundary instead of an in-hook TID/register relabel. The connected repair must
-also freeze ordinary sent-message receiver birth, retire old-birth sends on
-exit, complete by exact send ID, and make GetMessage/sender context restore
-checked before consuming waits/results. An ignored
+boundary instead of an in-hook TID/register relabel. At that pre-repair point,
+the connected cut still needed frozen ordinary receiver birth, old-birth exit
+retirement, exact send-ID completion and checked receiver/sender restoration.
+An ignored
 [receiver-exit/TID-reuse Kernel control](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)
-now fails as expected: B-prime takes B's queued send while A has no failure
-result. Those production changes, plus one-return and failure controls,
-remain open. No production fix, reciprocal
-fixture, full-suite reseal, mount backup or iNavi launch occurred.
+failed as expected: B-prime took B's queued send while A had no failure
+result. These receipts preserve historical expected-red evidence, not the
+current candidate's test status. No reciprocal fixture or iNavi launch was
+established by them.
 
 ## 2026-10-15 Architecture and measurement design refresh (no source/run)
 
@@ -149,6 +182,11 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show d4263dde:PROGRESS.md`.
+- Connected A→B Send/GetMessage bounded source/test gate
+  ([receipt](evidence/scheduler-source-cut-a10/validation.receipt.md)):
+  A10 passed release **2,045/0/9 ignored** and no-default **1,482/0/3 ignored**
+  across 18 groups each. A09's four-failure seal is historical, not a pass;
+  neither result establishes full Stage 3 or live-app behavior.
 
 - TaskFrame finite-Sleep scheduler source cut
   ([receipt](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)):

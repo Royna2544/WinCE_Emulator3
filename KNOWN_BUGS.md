@@ -101,28 +101,25 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     queue/socket and serial (including overlapped) paths have no birth guard.
   - The guest return-stub hook has no end-to-end control, and pending-return
     KData PID follows mutable process selection, not the captured lease.
-  - SendMessageTimeout global expiry can read as ready/success; receiver-side
-    `DestroyWindow` result writes, delivery and the broader GWE send lifecycle
-    are ungated. Ordinary queued `SentMessage` records only receiver TID;
-    unlike finite-Sleep-deferred sends, it has no frozen receiver birth.
-    Receiver exit currently retires deferred sends to that birth, not ordinary
-    queued sends to it. An ignored Kernel control reproduced the consequence:
-    after B exits and B-prime reuses its numeric TID, B-prime's `GetMessage`
-    receives B's queued send and A has no failure result
+  - `SendMessageTimeout` global expiry can read as ready/success; the overloaded
+    `SMF_TIMEOUT` flag still needs a separate semantic gate. Receiver-side
+    `DestroyWindow` result writes, cross-process callback transfer, legacy
+    numeric-only HWND ownership and the broader GWE send lifecycle remain
+    ungated. The former ordinary queued-send receiver-TID/exit defect is a
+    historical pre-repair source red: after B exited and B-prime reused its
+    TID, B-prime took B's send without A's failure result
     ([receipt](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md)).
-    This is a source-control failure, not a reproduced live-app failure.
-  - **Reproduced source-control failure, not a live-app result:** ignored
-    real-MIPS tests put B in a verified-birth `GetMessageW` wait, then A's
-    cross-thread `SendMessageW` fails before B's WNDPROC assertions with
-    `native staged context has stale or unverified thread birth`
-    ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md)).
-    The shortcut's use of A's live SP for B's WNDPROC is source-inferred;
-    callback stack and eventual return are not yet measured by this red.
-    A separate test **reproduces** a real count stop inside B's WNDPROC and
-    then the same terminal `Backend`; this establishes the native slice-end
-    failure in a small source control. E-38 predates the guard, and no iNavi
-    run has reproduced it. The two-blocked-receiver control also reaches the
-    guard, without proving that the ready-ID bridge chooses the wrong task.
+  - A same-birth orphaned blocked-`GetMessageW` saved payload with a missing
+    scheduler wait remains a separate recovery boundary. A10's exact-wait and
+    saved/live-birth guard does not prove this absent-wait case. The bounded
+    [A10 source/test gate](evidence/scheduler-source-cut-a10/validation.receipt.md)
+    passed both broad suites (release **2,045/0/9 ignored**, no-default
+    **1,482/0/3 ignored**) and preserves the sender reply/wait across a safe
+    next-lease handoff. A09's four same-process Send failures and the earlier
+    blocked-GetMessage A→B reds are historical source controls, not current
+    failures or live-iNavi results. Only the runnable-receiver fixture checks
+    a later no-replay slice; the three finite-Sleep controls stop at A's
+    continuation. Full scheduler/Stage 3 and live-app behavior remain open.
   - **UNTESTED / inferred risk (not a reproduced bug):** after a finite-Sleep
     receiver T wakes, it could call `SendMessage` to sender S while S remains
     blocked in its outgoing `SendMessage` to T. No reciprocal cross-Send native

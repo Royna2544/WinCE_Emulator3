@@ -16,18 +16,17 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Repair the three ignored real-MIPS cross-thread `SendMessageW` entry reds
-     ([receipt](evidence/stage3-getmessage-blocked-send-context-20261015/validation.receipt.md))
-     with the planned exact-birth queue→GetMessage bridge, not an in-hook
-     receiver relabel. Before unignoring: test ordinary queued-send receiver
-     exit/TID reuse, two-sender exact completion, checked restore failure,
-     receiver stack/provenance and one-return/send-wait retirement. The
-     ignored ordinary receiver-exit/TID-reuse control is now red with a
-     [receipt](evidence/2026-10-15-ordinary-queued-send-receiver-exit-reuse-red.md);
-     turn it green as part of this cut. Then test
-     reciprocal T→S after finite Sleep while S remains blocked sending to T.
-     Keep post-wake MsgWait/sent processing separate; neither later path is a
-     reproduced failure.
+   - Isolate the same-birth orphaned blocked-GetMessage payload whose scheduler
+     wait is missing. The bounded
+     [A10 Send/GetMessage gate](evidence/scheduler-source-cut-a10/validation.receipt.md)
+     checks an exact parked wait and saved/live birth; it does not establish
+     recovery behavior when that wait is absent. Preserve sender reply/wait
+     ownership and fail closed rather than reviving an orphaned B from saved
+     context. Stage a focused expected red before a separate production cut.
+     Then test reciprocal T→S after finite Sleep while S remains blocked
+     sending to T. Cross-process parked-sender restore, legacy numeric-only
+     HWNDs, post-wake MsgWait/sent processing and `SMF_TIMEOUT` last-error
+     semantics remain separate gates, not reproduced live-app failures.
    - Owner-filtered host teardown, full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
