@@ -915,9 +915,16 @@ struct SendMessageRestoreContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResumeImportAfterWndProc {
     thread_id: u32,
+    thread_birth: crate::ce::object::ThreadBirthKey,
     running_thread: Option<(u32, u32)>,
     regs: MipsGuestContext,
     import_pc: u32,
+}
+
+#[cfg(feature = "unicorn")]
+fn resume_import_has_live_birth(kernel: &CeKernel, resume: &ResumeImportAfterWndProc) -> bool {
+    resume.thread_birth.thread_id() == resume.thread_id
+        && kernel.is_live_thread_birth(resume.thread_birth)
 }
 
 #[cfg(feature = "unicorn")]
@@ -2365,7 +2372,12 @@ impl UnicornMips {
                     && callout
                         .resume_import
                         .as_ref()
-                        .is_none_or(|resume| resume.import_pc == *pc)
+                        .is_some_and(|resume| {
+                            resume.import_pc == *pc
+                                && resume.thread_id == self.current_thread_id
+                                && self.saved_context_thread_birth == Some(resume.thread_birth)
+                                && resume_import_has_live_birth(kernel, resume)
+                        })
             })
         }) else {
             return false;
@@ -2858,6 +2870,11 @@ impl UnicornMips {
         if !Self::saved_cpu_context_is_resumable(&active_saved) {
             return false;
         }
+        let Some(active_birth) = self.saved_context_thread_birth.filter(|birth| {
+            birth.thread_id() == active_thread_id && kernel.is_live_thread_birth(*birth)
+        }) else {
+            return false;
+        };
         let tracked_threads = self.tracked_thread_ids();
         let mut candidate_threads = tracked_threads.clone();
         for window in kernel.gwe.windows_snapshot() {
@@ -3003,6 +3020,7 @@ impl UnicornMips {
         );
         let resume = ResumeImportAfterWndProc {
             thread_id: active_thread_id,
+            thread_birth: active_birth,
             running_thread: (resume_thread_handle != 0)
                 .then_some((active_thread_id, resume_thread_handle)),
             regs: active_saved.regs,
@@ -3696,6 +3714,13 @@ impl UnicornMips {
         else {
             return false;
         };
+        if !self.pending_wndproc_returns[index]
+            .resume_import
+            .as_ref()
+            .is_some_and(|resume| resume_import_has_live_birth(kernel, resume))
+        {
+            return false;
+        }
         let callout = self.pending_wndproc_returns.remove(index);
         let Some(resume) = callout.resume_import.clone() else {
             return false;
@@ -3705,7 +3730,7 @@ impl UnicornMips {
             pc: resume.import_pc,
             regs: resume.regs,
         });
-        self.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(resume.thread_id);
+        self.saved_context_thread_birth = Some(resume.thread_birth);
         self.current_thread_id = resume.thread_id;
         self.running_guest_thread = resume.running_thread;
         tracing::warn!(
@@ -6838,6 +6863,14 @@ impl UnicornMips {
         if blocked.import_pc == 0 {
             return false;
         }
+        let Some(blocked_birth) = verified_get_message_wait_birth(
+            kernel,
+            blocked.wait_id,
+            blocked.thread_id,
+            blocked.thread_handle,
+        ) else {
+            return false;
+        };
         let Some(message) = kernel.take_ready_sent_message_w_filtered(
             blocked.thread_id,
             blocked.hwnd,
@@ -6902,6 +6935,7 @@ impl UnicornMips {
             continuation: None,
             resume_import: Some(ResumeImportAfterWndProc {
                 thread_id: blocked.thread_id,
+                thread_birth: blocked_birth,
                 running_thread,
                 regs: original_regs,
                 import_pc: blocked.import_pc,
@@ -6926,7 +6960,7 @@ impl UnicornMips {
             pc: wndproc,
             regs: call_regs,
         });
-        cpu.saved_context_thread_birth = kernel.handles.thread_birth_key_by_id(blocked.thread_id);
+        cpu.saved_context_thread_birth = Some(blocked_birth);
         cpu.current_thread_id = blocked.thread_id;
         cpu.running_guest_thread = running_thread;
         true
@@ -9170,6 +9204,7 @@ impl UnicornMips {
             kernel,
             restoring_saved_context,
             active_thread_id,
+            &blocked_wait_threads.borrow(),
             &mut running_guest_thread.borrow_mut(),
         ) {
             tracing::debug!(
@@ -9988,6 +10023,46 @@ impl UnicornMips {
                         return;
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
+                    if let Some(resume) = callout.resume_import.as_ref() {
+                        let kernel = unsafe { &*kernel_ptr };
+                        let current_birth = current_thread_id_hook.get();
+                        if !resume_import_has_live_birth(kernel, resume)
+                            || (callout.source == "GetMessageW/SentMessage"
+                                && current_birth
+                                    != (resume.thread_id, Some(resume.thread_birth)))
+                        {
+                            current_thread_id_hook.fail_backend(
+                                resume.thread_id,
+                                format!(
+                                    "WNDPROC import return has stale birth: expected {:?}, current {:?}",
+                                    resume.thread_birth, current_birth
+                                ),
+                            );
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                        let restore_result = (|| -> std::result::Result<(), String> {
+                            restore_mips_context_checked(uc, &resume.regs)
+                                .map_err(|error| format!("restore MIPS context: {error:?}"))?;
+                            update_user_kdata_current_ids(
+                                uc,
+                                resume.thread_id,
+                                kernel.current_process_id(),
+                            )
+                            .map_err(|error| format!("restore KData current IDs: {error}"))?;
+                            uc.reg_write(RegisterMIPS::PC, u64::from(resume.import_pc))
+                                .map_err(|error| format!("restore import PC: {error:?}"))?;
+                            Ok(())
+                        })();
+                        if let Err(error) = restore_result {
+                            current_thread_id_hook.fail_backend(
+                                resume.thread_id,
+                                format!("WNDPROC import return failed: {error}"),
+                            );
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                    }
                     tracing::debug!(
                         target: "ce.gwe",
                         source = callout.source,
@@ -10004,7 +10079,9 @@ impl UnicornMips {
                     );
                     let live_fp = read_mips_reg(uc, RegisterMIPS::FP);
                     let caller_fp = callout.caller_regs.as_ref().map(|regs| regs.regs[30]);
-                    let _ = uc.reg_write(RegisterMIPS::SP, u64::from(callout.return_sp));
+                    if callout.resume_import.is_none() {
+                        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(callout.return_sp));
+                    }
                     if let Some(restore) = callout.send_restore.as_ref() {
                         let _ = unsafe { &mut *kernel_ptr }
                             .complete_active_sent_message(restore.receiver_thread_id, result);
@@ -10155,16 +10232,8 @@ impl UnicornMips {
                         unsafe { &mut *kernel_ptr }.clear_focus_and_activation_within(hwnd);
                     }
                     if let Some(resume) = callout.resume_import.clone() {
-                        restore_mips_gprs(uc, &resume.regs);
-                        current_thread_id_hook.set_unverified(resume.thread_id);
-                        let _ = update_user_kdata_current_ids(
-                            uc,
-                            resume.thread_id,
-                            unsafe { &*kernel_ptr }.current_process_id(),
-                        );
+                        current_thread_id_hook.set_verified(resume.thread_birth);
                         *running_guest_thread_hook.borrow_mut() = resume.running_thread;
-                        let _ =
-                            uc.reg_write(RegisterMIPS::PC, u64::from(resume.import_pc));
                         return;
                     }
                     if callout.finalize_destroy && !callout.remaining_destroy_callouts.is_empty() {
@@ -10791,6 +10860,7 @@ impl UnicornMips {
                         trap.ordinal,
                         address,
                         active_thread_id,
+                        current_thread_id_hook.get().1,
                         &pending_wndproc_returns_hook,
                     )
                 }) {
@@ -12717,6 +12787,7 @@ impl UnicornMips {
                 trap.ordinal,
                 snapshot_pc,
                 current_thread_id.get().0,
+                current_thread_id.get().1,
                 &pending_wndproc_returns,
             );
             if completed_sent_callout {
@@ -19603,6 +19674,7 @@ fn complete_escaped_get_message_sent_callout<D>(
     ordinal: Option<u32>,
     import_pc: u32,
     thread_id: u32,
+    current_birth: Option<crate::ce::object::ThreadBirthKey>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
@@ -19625,8 +19697,11 @@ fn complete_escaped_get_message_sent_callout<D>(
             && callout.return_sp == current_sp
             && current_ra == WNDPROC_RETURN_STUB_ADDR
             && callout.send_thread_id.is_some()
-            && callout.resume_import.as_ref().is_none_or(|resume| {
-                resume.import_pc == import_pc
+            && callout.resume_import.as_ref().is_some_and(|resume| {
+                resume_import_has_live_birth(kernel, resume)
+                    && current_birth == Some(resume.thread_birth)
+                    && resume.thread_id == thread_id
+                    && resume.import_pc == import_pc
                     && resume.regs.regs[4] == current_args[0]
                     && resume.regs.regs[5] == current_args[1]
                     && resume.regs.regs[6] == current_args[2]
@@ -19693,9 +19768,18 @@ fn enter_get_message_sent_callout<D>(
     original_regs: MipsGuestContext,
     original_running_thread: Option<(u32, u32)>,
 ) -> bool {
-    let original_birth = verified_native_register_birth(kernel, current_thread_id, thread_id);
+    let Some(original_birth) = verified_native_register_birth(kernel, current_thread_id, thread_id)
+    else {
+        current_thread_id.fail_backend(
+            thread_id,
+            "GetMessage sent-message callout has no verified register birth",
+        );
+        let _ = uc.emu_stop();
+        return true;
+    };
     let resume_import = ResumeImportAfterWndProc {
         thread_id,
+        thread_birth: original_birth,
         running_thread: original_running_thread,
         regs: original_regs.clone(),
         import_pc,
@@ -19708,14 +19792,7 @@ fn enter_get_message_sent_callout<D>(
     else {
         let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
         restore_mips_gprs(uc, &original_regs);
-        if let Some(birth) = original_birth.filter(|birth| {
-            kernel.handles.thread_birth_key_by_id(thread_id) == Some(*birth)
-                && kernel.handles.thread_execution_live_by_id(thread_id)
-        }) {
-            current_thread_id.set_verified(birth);
-        } else {
-            current_thread_id.set_unverified(thread_id);
-        }
+        current_thread_id.set_verified(original_birth);
         let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = original_running_thread;
         let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
@@ -19725,14 +19802,7 @@ fn enter_get_message_sent_callout<D>(
     if !is_guest_wndproc(wndproc) {
         let _ = kernel.dispatch_message_w_for_thread(thread_id, message);
         restore_mips_gprs(uc, &original_regs);
-        if let Some(birth) = original_birth.filter(|birth| {
-            kernel.handles.thread_birth_key_by_id(thread_id) == Some(*birth)
-                && kernel.handles.thread_execution_live_by_id(thread_id)
-        }) {
-            current_thread_id.set_verified(birth);
-        } else {
-            current_thread_id.set_unverified(thread_id);
-        }
+        current_thread_id.set_verified(original_birth);
         let _ = update_user_kdata_current_ids(uc, thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = original_running_thread;
         let _ = uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc));
@@ -24167,22 +24237,38 @@ fn try_block_sleep<D>(
             regs,
             return_pc,
         });
+        // The creator is not the native owner until every part of its CPU
+        // image and KData has been restored. A partial switch is terminal and
+        // cancels only this exact finite-Sleep frame.
+        let restored = (|| -> Result<()> {
+            restore_mips_context_checked(uc, &callout.creator_regs).map_err(|error| {
+                Error::Backend(format!("Sleep creator MIPS restore: {error:?}"))
+            })?;
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle))
+                .map_err(|error| Error::Backend(format!("Sleep creator V0 restore: {error:?}")))?;
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc))
+                .map_err(|error| Error::Backend(format!("Sleep creator PC restore: {error:?}")))?;
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc))
+                .map_err(|error| Error::Backend(format!("Sleep creator RA restore: {error:?}")))?;
+            update_user_kdata_current_ids(
+                uc,
+                callout.creator_thread_id,
+                kernel.current_process_id(),
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = restored {
+            return abort_native_finite_sleep_resume(
+                kernel,
+                uc,
+                current_thread_id,
+                blocked_waits,
+                frame,
+                format!("Sleep creator switch failed: {error}"),
+            );
+        }
         *running_thread.borrow_mut() = None;
         current_thread_id.set_verified(callout.creator_birth);
-        let _ = update_user_kdata_current_ids(
-            uc,
-            callout.creator_thread_id,
-            kernel.current_process_id(),
-        );
-        restore_mips_gprs(uc, &callout.creator_regs);
-        let writes = [
-            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
-            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
-            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
-        ];
-        if writes.into_iter().any(|write| write.is_err()) {
-            let _ = uc.emu_stop();
-        }
         return true;
     }
 
@@ -27773,9 +27859,17 @@ fn recover_running_guest_thread_for_saved_context(
     kernel: &CeKernel,
     restoring_saved_context: bool,
     thread_id: u32,
+    blocked_waits: &[BlockedWaitThread],
     running_thread: &mut Option<(u32, u32)>,
 ) -> bool {
     if !restoring_saved_context || running_thread.is_some() {
+        return false;
+    }
+    // A saved CPU image can be parked at the import that published its wait.
+    // It is not a runnable continuation merely because the image survived a
+    // slice. In particular, resurrecting a blocked SendMessage sender here
+    // prevents the pre-entry selector from choosing a timed-out Sleep frame.
+    if blocked_waits.iter().any(|wait| wait.thread_id == thread_id) {
         return false;
     }
     let thread_handle = guest_thread_handle_for_running_context(kernel, None, thread_id);
@@ -76419,6 +76513,7 @@ mod unicorn_tests {
             &kernel,
             true,
             thread_id,
+            &[],
             &mut running_thread,
         ));
         assert_eq!(running_thread, Some((thread_id, thread_handle)));
@@ -76436,6 +76531,7 @@ mod unicorn_tests {
             &kernel,
             true,
             super::MAIN_GUEST_THREAD_ID,
+            &[],
             &mut running_thread,
         ));
         assert_eq!(
@@ -76610,37 +76706,56 @@ mod unicorn_tests {
 
     #[test]
     fn native_same_process_send_defers_wndproc_during_receiver_sleep() -> crate::Result<()> {
-        use crate::ce::coredll_ordinals::{ORD_SEND_MESSAGE_W, ORD_SLEEP};
+        native_same_process_sleep_send_fixture(false)
+    }
+
+    #[test]
+    #[ignore = "expected red: a blocked same-process sender is replayed before the receiver Sleep timeout is selected"]
+    fn native_same_process_send_delivers_after_receiver_sleep_timeout() -> crate::Result<()> {
+        native_same_process_sleep_send_fixture(true)
+    }
+
+    fn native_same_process_sleep_send_fixture(continue_after_send: bool) -> crate::Result<()> {
+        use crate::ce::coredll_ordinals::{ORD_GET_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 
         let sleep_trap = super::IMPORT_TRAP_BASE + 0x400;
         let send_trap = sleep_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+        let get_message_trap = send_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
         let mut image_bytes = tiny_mips_spinner_pe();
         for (offset, words) in [
             (
                 0x200,
-                [
+                &[
                     0x3c19_0000 | (sleep_trap >> 16),
                     0x3739_0000 | (sleep_trap & 0xffff),
                     0x0320_f809, // T calls Sleep through a real MIPS jalr
                     0,
+                    0x27a4_fc00, // addiu a0, sp, -0x400: writable MSG buffer
+                    0x0000_2821, // move a1, zero: all windows
+                    0x0000_3021, // move a2, zero: no minimum filter
+                    0x0000_3821, // move a3, zero: no maximum filter
+                    0x3c19_0000 | (get_message_trap >> 16),
+                    0x3739_0000 | (get_message_trap & 0xffff),
+                    0x0320_f809, // T retrieves queued send after Sleep returns
+                    0,
                     0x1000_ffff,
                     0,
-                ],
+                ][..],
             ),
             (
                 0x240,
-                [
+                &[
                     0x3c19_0000 | (send_trap >> 16),
                     0x3739_0000 | (send_trap & 0xffff),
                     0x0320_f809, // S calls SendMessageW through a real MIPS jalr
                     0,
                     0x1000_ffff,
                     0,
-                ],
+                ][..],
             ),
         ] {
-            for (index, word) in words.into_iter().enumerate() {
+            for (index, word) in words.iter().copied().enumerate() {
                 write_vec_u32(&mut image_bytes, offset + index * 4, word);
             }
         }
@@ -76660,6 +76775,7 @@ mod unicorn_tests {
         for (address, ordinal, name) in [
             (sleep_trap, ORD_SLEEP, "Sleep"),
             (send_trap, ORD_SEND_MESSAGE_W, "SendMessageW"),
+            (get_message_trap, ORD_GET_MESSAGE_W, "GetMessageW"),
         ] {
             cpu.import_traps.insert(ImportTrap {
                 address,
@@ -76781,6 +76897,33 @@ mod unicorn_tests {
         assert!(kernel.thread_has_pending_sent_message(receiver_thread));
         assert!(cpu.pending_wndproc_returns.is_empty());
         attempt.result?;
+        if !continue_after_send {
+            return Ok(());
+        }
+
+        let sleep_wait_id = sleep.wait_id;
+        let sleep_return_pc = sleep.return_pc;
+        let staged_sender_pc = cpu.saved_context.as_ref().map(|saved| saved.pc);
+        let staged_running_thread = cpu.running_guest_thread;
+        kernel.timers.sleep_ms(10_001);
+        let wake_attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        wake_attempt.result?;
+        assert!(
+            kernel.blocked_waiter(sleep_wait_id).is_none(),
+            "timed-out Sleep did not retire its exact wait: return_pc=0x{sleep_return_pc:08x}, staged_sender_pc={staged_sender_pc:?}, staged_running_thread={staged_running_thread:?}, current={}, sends={:?}, blocked={:?}",
+            cpu.current_thread_id,
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            cpu.blocked_wait_threads,
+        );
         Ok(())
     }
 
