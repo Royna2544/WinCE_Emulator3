@@ -407,6 +407,75 @@ function Read-InaviUseLedgers([string]$Repository) {
         local = $entries.ToArray(); tracked = $entries.ToArray() }
 }
 
+function Get-InaviLedgerEvidenceHashes(
+    [object[]]$LedgerEntries,
+    [string]$Repository,
+    [string]$State,
+    [string]$RecordField,
+    [string]$Description
+) {
+    $evidenceRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $Repository 'evidence')).TrimEnd('\')
+    $hashes = @{}
+    foreach ($entry in $LedgerEntries) {
+        if ($entry -isnot [hashtable] -or [string]$entry.state -cne $State) {
+            continue
+        }
+        $proof = $entry[$RecordField]
+        if ($proof -isnot [hashtable] -or
+            -not (Test-InaviCorePath $proof.path) -or
+            [string]$proof.sha256 -cnotmatch '^[0-9A-Fa-f]{64}$') {
+            throw "$Description ledger event has no valid evidence path and hash."
+        }
+        $path = [string]$proof.path
+        $resolved = [System.IO.Path]::GetFullPath($path)
+        if (-not $resolved.StartsWith($evidenceRoot + '\',
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw "$Description is outside checkout evidence: $path"
+        }
+        $file = [System.IO.FileInfo]::new($resolved)
+        if (-not $file.Exists -or $file.Length -gt 16MB) {
+            throw "$Description is missing or exceeds 16 MiB: $path"
+        }
+        $ancestor = [System.IO.FileSystemInfo]$file
+        $sawEvidenceRoot = $false
+        while ($null -ne $ancestor) {
+            if (-not $ancestor.Exists -or
+                ($ancestor.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                throw "$Description path has a missing or reparse-point component: $path"
+            }
+            if ($ancestor.FullName.Equals($evidenceRoot,
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                $sawEvidenceRoot = $true
+            }
+            if ($ancestor -is [System.IO.FileInfo]) {
+                $ancestor = $ancestor.Directory
+            } else {
+                $ancestor = $ancestor.Parent
+            }
+        }
+        if (-not $sawEvidenceRoot) {
+            throw "$Description did not resolve through checkout evidence: $path"
+        }
+        $actual = Get-Sha256 $resolved
+        if ($actual -ne [string]$proof.sha256) {
+            throw "$Description hash does not match the durable ledger: $path"
+        }
+        $hashes[$path] = $actual
+    }
+    return $hashes
+}
+
+function Get-InaviReconciliationProofHashes([object[]]$LedgerEntries, [string]$Repository) {
+    return Get-InaviLedgerEvidenceHashes $LedgerEntries $Repository `
+        'reconciled' 'noSpawnProof' 'Reconciliation proof'
+}
+
+function Get-InaviHistoricalRunEvidenceHashes([object[]]$LedgerEntries, [string]$Repository) {
+    return Get-InaviLedgerEvidenceHashes $LedgerEntries $Repository `
+        'historical-spent' 'runEvidence' 'Historical run evidence'
+}
+
 function Add-InaviDualLedgerEntry([hashtable]$Ledgers, [hashtable]$Entry) {
     # The monitor owns an exclusive evidence/live-run-use.lock while this runs.
     # Each append is flushed before the next; interruption leaves an explicit
@@ -498,6 +567,13 @@ function Assert-InaviManifestPreflight(
         throw 'Manifest target app is not the active mounted iNavi image.'
     }
     $ledgers = Read-InaviUseLedgers $Repository
+    # The authoritative monitor calls this under its exclusive ledger lock.
+    # A reconciled reservation is not cleared on a ledger claim alone: hash
+    # each named proof receipt independently immediately before core decision.
+    $observed.observation.verifiedReconciliationProofSha256 =
+        Get-InaviReconciliationProofHashes $ledgers.local $Repository
+    $observed.observation.verifiedHistoricalRunEvidenceSha256 =
+        Get-InaviHistoricalRunEvidenceHashes $ledgers.local $Repository
     if (@($ledgers.local | Where-Object {
                 [string]$_.attemptId -ceq [string]$manifest.runTag
             }).Count -gt 0) {
@@ -799,8 +875,11 @@ function Invoke-Observer([string]$Directory) {
     $stoppedEarly = $false
     $launchTicks = $null
     $observedTicks = $null
-    $firstCaptureTicks = $null
+    $firstFrameRequestTicks = $null
+    $firstFrameReceivedTicks = $null
+    $firstFrameStatus = $null
     $coverageIncomplete = $false
+    $coverageIssues = [System.Collections.Generic.List[string]]::new()
     try {
         # Be ready before launch, but consume no capture slots until the exact
         # monitor-owned process descriptor exists. The heartbeat lets the
@@ -827,13 +906,14 @@ function Invoke-Observer([string]$Directory) {
             $observedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
             $coverageIncomplete = (($observedTicks - $launchTicks) -lt 0 -or
                 ($observedTicks - $launchTicks) -gt (2L * $frequency))
+            if ($coverageIncomplete) { $coverageIssues.Add('descriptor-observed-outside-first-two-seconds') }
             Write-AtomicJsonFile (Join-Path $Directory 'observer-launch.json') @{
                 launchTicks = $launchTicks; observedTicks = $observedTicks
                 observedUtc = [DateTime]::UtcNow.ToString('O')
                 launchToObserveMs = 1000.0 * ($observedTicks - $launchTicks) / $frequency
-                coverageIncomplete = $coverageIncomplete
+                descriptorOutsideTwoSeconds = $coverageIncomplete
+                coverageStatus = 'pending-first-frame'
             }
-            if ($coverageIncomplete) { throw 'Observer could not confirm first-two-second launch coverage.' }
         }
         while (-not $stoppedEarly -and
             ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -lt (420L * $frequency)) {
@@ -850,11 +930,45 @@ function Invoke-Observer([string]$Directory) {
                 continue
             }
             $nextSlot = $slot + 1
-            if ($null -eq $firstCaptureTicks) {
-                $firstCaptureTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
-                if (($firstCaptureTicks - $launchTicks) -gt (2L * $frequency)) {
+            $isFirstFrame = $null -eq $firstFrameRequestTicks
+            if ($isFirstFrame) {
+                $firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+                if (($firstFrameRequestTicks - $launchTicks) -lt 0 -or
+                    ($firstFrameRequestTicks - $launchTicks) -gt (2L * $frequency)) {
                     $coverageIncomplete = $true
-                    throw 'Observer first capture started more than two seconds after launch.'
+                    $coverageIssues.Add('first-frame-request-outside-first-two-seconds')
+                }
+            }
+            # Request the frame before status and summary: either GET may take
+            # three seconds, hiding an early splash if it runs first.
+            $frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg" 'frame' $log $capture $slot $false
+            if ($frame.Status -eq 200 -and $frame.Hash -ne $frameHash) {
+                $frameHash = $frame.Hash
+                if ($savedFrames -lt 256 -and $frame.Body.Length -le 1MB) {
+                    $savedFrames++
+                    $path = Join-Path $capture ('changed-frame-{0:D4}.jpg' -f $savedFrames)
+                    [System.IO.File]::WriteAllBytes($path, $frame.Body)
+                    Add-JsonLine $log @{ name = 'changed-frame-saved'; utc = [DateTime]::UtcNow.ToString('O'); sha256 = $frame.Hash; savedPath = $path }
+                }
+            }
+            if ($isFirstFrame) {
+                $firstFrameReceivedTicks = [long]$frame.ReceivedTicks
+                $firstFrameStatus = $frame.Status
+                if ($frame.Status -ne 200 -or $frame.Body.Length -eq 0 -or
+                    $frame.Body.Length -gt 1MB -or
+                    ($firstFrameReceivedTicks - $launchTicks) -lt 0 -or
+                    ($firstFrameReceivedTicks - $launchTicks) -gt (2L * $frequency)) {
+                    $coverageIncomplete = $true
+                    $coverageIssues.Add('first-frame-response-not-retained-within-two-seconds')
+                }
+                Write-AtomicJsonFile (Join-Path $Directory 'observer-first-frame.json') @{
+                    launchTicks = $launchTicks
+                    requestTicks = $firstFrameRequestTicks
+                    receivedTicks = $firstFrameReceivedTicks
+                    status = $firstFrameStatus
+                    bytes = $frame.Body.Length
+                    coverageIncomplete = $coverageIncomplete
+                    coverageIssues = @($coverageIssues.ToArray())
                 }
             }
             $status = Invoke-GetCapture $client "$base/api/v1/status" 'status' $log $capture $slot $false
@@ -877,16 +991,6 @@ function Invoke-Observer([string]$Directory) {
                     Add-JsonLine $log @{ name = 'status-parse-error'; utc = [DateTime]::UtcNow.ToString('O'); error = $_.Exception.Message }
                 }
             }
-            $frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg" 'frame' $log $capture $slot $false
-            if ($frame.Status -eq 200 -and $frame.Hash -ne $frameHash) {
-                $frameHash = $frame.Hash
-                if ($savedFrames -lt 256 -and $frame.Body.Length -le 1MB) {
-                    $savedFrames++
-                    $path = Join-Path $capture ('changed-frame-{0:D4}.jpg' -f $savedFrames)
-                    [System.IO.File]::WriteAllBytes($path, $frame.Body)
-                    Add-JsonLine $log @{ name = 'changed-frame-saved'; utc = [DateTime]::UtcNow.ToString('O'); sha256 = $frame.Hash; savedPath = $path }
-                }
-            }
             # The retained file ring can turn over; sample COM7: reads at the
             # same two-second cadence as the frame/status bracket.
             [void](Invoke-GetCapture $client "$base/api/v1/debug/files-full.txt" 'files-full' $log $capture $slot $true)
@@ -901,8 +1005,12 @@ function Invoke-Observer([string]$Directory) {
         $client.Dispose()
         Write-JsonFile (Join-Path $Directory 'observer-result.json') @{
             readyTicks = $readyTicks; launchTicks = $launchTicks
-            observedTicks = $observedTicks; firstCaptureTicks = $firstCaptureTicks
+            observedTicks = $observedTicks
+            firstFrameRequestTicks = $firstFrameRequestTicks
+            firstFrameReceivedTicks = $firstFrameReceivedTicks
+            firstFrameStatus = $firstFrameStatus
             coverageIncomplete = $coverageIncomplete
+            coverageIssues = @($coverageIssues.ToArray())
             endedUtc = [DateTime]::UtcNow.ToString('O')
             completedHorizon = ($null -ne $launchTicks -and
                 ([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchTicks) -ge (420L * $frequency))

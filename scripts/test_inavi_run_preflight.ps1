@@ -186,6 +186,48 @@ function New-LegacyDenyEntry([string[]]$ZipHashes) {
     return $entry
 }
 
+function New-ReconciledEntry([object]$Reservation) {
+    $entry = New-UseEntry $Reservation.approvalReference 'reconciled' @($Reservation.zipSha256)
+    $entry.attemptId = $Reservation.attemptId
+    $entry.manifestSha256 = $Reservation.manifestSha256
+    $entry.reservationEventId = $Reservation.eventId
+    $entry.resolution = 'confirmed-no-spawn'
+    $entry.reviewReference = 'call_offline_no_spawn_review'
+    $entry.reviewedUtc = '2026-10-15T00:00:02.0000000Z'
+    $entry.utc = '2026-10-15T00:00:03.0000000Z'
+    $entry.noSpawnProof = @{
+        path = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only\no-spawn-investigation.json'
+        sha256 = New-SyntheticHash 'human-reviewed no-spawn investigation receipt'
+    }
+    return $entry
+}
+
+function Set-ObservedReconciliationProof([object]$Sample, [object]$Reconciled) {
+    $Sample.observed.verifiedReconciliationProofSha256 = @{
+        $Reconciled.noSpawnProof.path = $Reconciled.noSpawnProof.sha256
+    }
+}
+
+function New-HistoricalSpentEntry([string]$Approval, [string[]]$ZipHashes) {
+    $entry = New-UseEntry $Approval 'historical-spent' $ZipHashes
+    $entry.pid = [long]24680
+    $entry.processStartUtc = '2026-10-14T00:00:00.0000000Z'
+    $entry.utc = '2026-10-15T03:00:00.0000000Z'
+    $entry.runEvidence = @{
+        path = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only\prior-run-process.json'
+        sha256 = New-SyntheticHash 'preserved prior run process record'
+    }
+    $entry.approvalProvenance = 'direct'
+    $entry.approvalSourceReference = 'evidence\stage3-live-evidence-20261015\offline-only\prior-approval-receipt.md'
+    return $entry
+}
+
+function Set-ObservedHistoricalRunEvidence([object]$Sample, [object]$Historical) {
+    $Sample.observed.verifiedHistoricalRunEvidenceSha256 = @{
+        $Historical.runEvidence.path = $Historical.runEvidence.sha256
+    }
+}
+
 $base = New-Baseline
 $cases = [System.Collections.Generic.List[object]]::new()
 $cases.Add(@{ name = 'fresh_baseline'; data = Copy-Fixture $base; accepted = $true; code = $null })
@@ -243,6 +285,21 @@ $sample.trackedLedger = Copy-Fixture $sample.localLedger
 $cases.Add(@{ name = 'reservation_followed_by_matching_spent'; data = $sample; accepted = $true; code = $null })
 
 $sample = Copy-Fixture $base
+$spent = New-UseEntry 'call_other_offline_approval' 'spent' @((New-SyntheticHash 'unrelated spent archive'))
+$sample.localLedger = @($spent)
+$sample.trackedLedger = @(Copy-Fixture $spent)
+$cases.Add(@{ name = 'spent_without_prior_reservation_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$spent = New-UseEntry 'call_other_offline_approval' 'spent' @($reserved.zipSha256)
+$duplicate = Copy-Fixture $spent
+$duplicate.eventId = 'offline-second-spent-event'
+$sample.localLedger = @($reserved, $spent, $duplicate)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'duplicate_spent_for_one_reservation_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
 $reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
 $spent = New-UseEntry 'call_other_offline_approval' 'spent' @($reserved.zipSha256)
 $spent.attemptId = 'offline-attempt-other-not-matching'
@@ -265,10 +322,208 @@ $sample.trackedLedger = Copy-Fixture $sample.localLedger
 $cases.Add(@{ name = 'reconciled_without_process_identity_does_not_resolve'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
 
 $sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reviewed_no_spawn_reconciles_exact_reservation'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_without_observed_proof_hash'; data = $sample; accepted = $false; code = 'LEDGER_RECONCILIATION_UNVERIFIED' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.observed.verifiedReconciliationProofSha256[$reconciled.noSpawnProof.path] = New-SyntheticHash 'wrong proof receipt bytes'
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_observed_proof_hash_mismatch'; data = $sample; accepted = $false; code = 'LEDGER_RECONCILIATION_UNVERIFIED' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.reservationEventId = 'offline-reserved-other-event'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_wrong_reservation_event_id'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.manifestSha256 = New-SyntheticHash 'wrong manifest for reconciliation'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_wrong_manifest_identity'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.attemptId = 'offline-other-attempt'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_wrong_attempt_identity'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.approvalReference = 'call_other_unrelated_approval'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_wrong_approval_identity'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.zipSha256 = @($reserved.zipSha256[1], $reserved.zipSha256[0], $reserved.zipSha256[2])
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_wrong_zip_order'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$duplicate = Copy-Fixture $reconciled
+$duplicate.eventId = 'offline-second-reconciliation-event'
+$sample.localLedger = @($reserved, $reconciled, $duplicate)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_cannot_close_twice'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.noSpawnProof.Remove('sha256')
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_without_proof_digest'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.reviewReference = $reserved.approvalReference
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_requires_distinct_human_review'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.Remove('reviewReference')
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_without_review_reference'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.resolution = 'unknown-process-state'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_without_no_spawn_finding'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.noSpawnProof.path = 'D:\GitHub\Wince_emulation_v3\target\unpreserved-no-spawn-note.json'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_proof_outside_evidence'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$reconciled.reviewedUtc = '2026-10-14T23:59:59.0000000Z'
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_review_before_reservation'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+$spent = New-UseEntry $reserved.approvalReference 'spent' @($reserved.zipSha256)
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reserved, $reconciled, $spent)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'spent_after_no_spawn_finding_is_contradictory'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.localLedger = @($reconciled, $reserved)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciliation_before_reservation_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$sample.manifest.approvalReference = $reserved.approvalReference
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciled_approval_stays_spent'; data = $sample; accepted = $false; code = 'APPROVAL_REUSED' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_other_offline_approval' 'reserved' @((New-SyntheticHash 'unrelated reserved archive'))
+$reconciled = New-ReconciledEntry $reserved
+Set-ObservedReconciliationProof $sample $reconciled
+$oldZip = $reserved.zipSha256[0]
+$sample.manifest.backups[0].archiveSha256 = $oldZip
+$sample.observed.verifiedBackupManifest.completed[0].archiveSha256 = $oldZip
+$sample.observed.fileSha256[$sample.manifest.backups[0].archivePath] = $oldZip
+$sample.localLedger = @($reserved, $reconciled)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'reconciled_zip_stays_spent'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
+
+$sample = Copy-Fixture $base
 $legacy = New-LegacyDenyEntry @((New-SyntheticHash 'old SD archive'), (New-SyntheticHash 'old ResidentFlash archive'), (New-SyntheticHash 'old EmulatorRoot archive'))
 $sample.localLedger = @($legacy)
 $sample.trackedLedger = @(Copy-Fixture $legacy)
 $cases.Add(@{ name = 'legacy_deny_with_unknown_approval_and_unrelated_zips'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$oldTriplet = @((New-SyntheticHash 'old SD archive'), (New-SyntheticHash 'old ResidentFlash archive'), (New-SyntheticHash 'old EmulatorRoot archive'))
+$firstLegacy = New-LegacyDenyEntry $oldTriplet
+$secondLegacy = New-LegacyDenyEntry $oldTriplet
+$secondLegacy.eventId = 'offline-second-legacy-run'
+$secondLegacy.attemptId = 'offline-second-legacy-attempt'
+$secondLegacy.manifestSha256 = New-SyntheticHash 'second historical run manifest'
+$secondLegacy.provenance = 'evidence\e22-live-20261013T182442Z\manifest.json'
+$sample.localLedger = @($firstLegacy, $secondLegacy)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'two_legacy_runs_may_share_historical_zip_triplet'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$oldTriplet = @((New-SyntheticHash 'old SD archive'), (New-SyntheticHash 'old ResidentFlash archive'), (New-SyntheticHash 'old EmulatorRoot archive'))
+$oldZip = $oldTriplet[0]
+$sample.manifest.backups[0].archiveSha256 = $oldZip
+$sample.observed.verifiedBackupManifest.completed[0].archiveSha256 = $oldZip
+$sample.observed.fileSha256[$sample.manifest.backups[0].archivePath] = $oldZip
+$firstLegacy = New-LegacyDenyEntry $oldTriplet
+$secondLegacy = New-LegacyDenyEntry $oldTriplet
+$secondLegacy.eventId = 'offline-second-legacy-run'
+$secondLegacy.attemptId = 'offline-second-legacy-attempt'
+$secondLegacy.manifestSha256 = New-SyntheticHash 'second historical run manifest'
+$secondLegacy.provenance = 'evidence\e22-live-20261013T182442Z\manifest.json'
+$sample.localLedger = @($firstLegacy, $secondLegacy)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'two_legacy_runs_still_deny_prior_zip'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
 
 $sample = Copy-Fixture $base
 $oldZip = New-SyntheticHash 'old SD archive'
@@ -314,6 +569,127 @@ $entry.approvalReference = $null
 $sample.localLedger = @($entry)
 $sample.trackedLedger = @(Copy-Fixture $entry)
 $cases.Add(@{ name = 'reservation_with_unknown_approval_rejected'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_direct_provenance_valid'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.approvalProvenance = 'inferred'
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_inferred_provenance_valid'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.manifest.approvalReference = $historical.approvalReference
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_approval_reuse_denied'; data = $sample; accepted = $false; code = 'APPROVAL_REUSED' })
+
+$sample = Copy-Fixture $base
+$oldZip = New-SyntheticHash 'historical SD archive'
+$sample.manifest.backups[0].archiveSha256 = $oldZip
+$sample.observed.verifiedBackupManifest.completed[0].archiveSha256 = $oldZip
+$sample.observed.fileSha256[$sample.manifest.backups[0].archivePath] = $oldZip
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @($oldZip)
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_zip_reuse_denied'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_without_observed_evidence_hash'; data = $sample; accepted = $false; code = 'LEDGER_HISTORICAL_UNVERIFIED' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.observed.verifiedHistoricalRunEvidenceSha256[$historical.runEvidence.path] = New-SyntheticHash 'different historical bytes'
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_wrong_observed_evidence_hash'; data = $sample; accepted = $false; code = 'LEDGER_HISTORICAL_UNVERIFIED' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.approvalProvenance = 'fabricated'
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_invalid_approval_provenance'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.Remove('approvalSourceReference')
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_missing_approval_source'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.Remove('pid')
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_without_original_pid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.processStartUtc = 'not-a-utc-time'
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_invalid_process_start'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.utc = '2026-10-13T23:59:59.0000000Z'
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_backfill_before_process'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.runEvidence.path = 'D:\GitHub\Wince_emulation_v3\target\unpreserved-prior-run.json'
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_evidence_outside_evidence_tree'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.runEvidence.Remove('sha256')
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_without_evidence_digest'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_historical_approval' @((New-SyntheticHash 'historical SD archive'))
+$historical.approvalReference = $null
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($historical)
+$sample.trackedLedger = @(Copy-Fixture $historical)
+$cases.Add(@{ name = 'historical_spent_unknown_approval_not_allowed'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$reserved = New-UseEntry 'call_offline_historical_approval' 'reserved' @((New-SyntheticHash 'historical SD archive'))
+$historical = New-HistoricalSpentEntry $reserved.approvalReference @($reserved.zipSha256)
+$historical.attemptId = $reserved.attemptId
+$historical.manifestSha256 = $reserved.manifestSha256
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($reserved, $historical)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'historical_spent_cannot_close_live_reservation'; data = $sample; accepted = $false; code = 'LEDGER_UNRESOLVED_RESERVATION' })
 
 $sample = Copy-Fixture $base
 $entry = New-UseEntry 'call_other_offline_approval' 'spent' @($sample.manifest.backups[0].archiveSha256)
@@ -517,7 +893,7 @@ $sample.observed.fileSha256.Remove($oldPath)
 $sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
 $cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
 
-if ($cases.Count -ne 59) { throw "Unexpected fixture count: $($cases.Count)" }
+if ($cases.Count -ne 97) { throw "Unexpected fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress

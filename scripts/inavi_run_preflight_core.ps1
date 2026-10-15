@@ -138,6 +138,22 @@ function Get-InaviCoreUseIdentity([object]$Entry) {
     ) -Compress -Depth 4
 }
 
+function Test-InaviCoreEvidencePath([object]$Path, [object]$SourceRoot) {
+    if (-not (Test-InaviCorePath $Path) -or
+        -not (Test-InaviCorePath $SourceRoot)) {
+        return $false
+    }
+    try {
+        $evidenceRoot = [System.IO.Path]::GetFullPath(
+            (Join-Path ([string]$SourceRoot) 'evidence')).TrimEnd('\') + '\'
+        $candidate = [System.IO.Path]::GetFullPath([string]$Path)
+        return $candidate.StartsWith(
+            $evidenceRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch {
+        return $false
+    }
+}
+
 function Test-InaviCoreHashRecord(
     [object]$Record,
     [object]$FileHashes,
@@ -570,8 +586,16 @@ function Test-InaviRunManifestCore {
     }
     $seenEventIds = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::Ordinal)
-    $outstandingReservations = [System.Collections.Generic.Dictionary[string, int]]::new(
+    $reservationsById = [System.Collections.Generic.Dictionary[string, object]]::new(
         [System.StringComparer]::Ordinal)
+    $reservationOrder = [System.Collections.Generic.List[object]]::new()
+    $openReservationIds = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    $reconciledIdentities = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    $sourceRootForProof = if (Test-InaviCoreField $Observed 'currentSourceRoot') {
+        $Observed.currentSourceRoot
+    } else { $null }
     foreach ($entry in $LocalLedger) {
         if (-not (Test-InaviCoreMap $entry) -or
             -not (Test-InaviCoreField $entry 'eventId') -or
@@ -592,7 +616,7 @@ function Test-InaviRunManifestCore {
             $entry.attemptId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$' -or
             -not (Test-InaviCoreHash $entry.manifestSha256) -or
             $entry.state -isnot [string] -or
-            $entry.state -notin @('reserved', 'spent', 'reconciled', 'legacy-deny') -or
+            $entry.state -notin @('reserved', 'spent', 'reconciled', 'legacy-deny', 'historical-spent') -or
             $entry.utc -isnot [string] -or
             $entry.utc -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$') {
             Add-InaviCoreCode $codes 'LEDGER_INVALID'
@@ -618,7 +642,7 @@ function Test-InaviRunManifestCore {
             Add-InaviCoreCode $codes 'LEDGER_INVALID'
             continue
         }
-        if ($entry.state -eq 'spent' -and
+        if ($entry.state -in @('spent', 'historical-spent') -and
             (-not (Test-InaviCoreField $entry 'pid') -or
                 -not (Test-InaviCoreField $entry 'processStartUtc') -or
                 -not (Test-InaviCoreInteger $entry.pid) -or
@@ -655,27 +679,123 @@ function Test-InaviRunManifestCore {
             }
         }
         if (-not $validZipHashes) { continue }
-        if ($entry.state -eq 'reserved') {
-            $identity = Get-InaviCoreUseIdentity $entry
-            if (-not $outstandingReservations.ContainsKey($identity)) {
-                $outstandingReservations[$identity] = 0
+        if ($entry.state -eq 'historical-spent') {
+            # These launches predate the ledger. Their observed process and
+            # approval provenance is recorded honestly as a terminal deny,
+            # never as an invented reservation/spent transition.
+            if (-not (Test-InaviCoreField $entry 'runEvidence') -or
+                -not (Test-InaviCoreMap $entry.runEvidence) -or
+                -not (Test-InaviCoreField $entry.runEvidence 'path') -or
+                -not (Test-InaviCoreField $entry.runEvidence 'sha256') -or
+                -not (Test-InaviCoreEvidencePath $entry.runEvidence.path $sourceRootForProof) -or
+                -not (Test-InaviCoreHash $entry.runEvidence.sha256) -or
+                -not (Test-InaviCoreField $entry 'approvalProvenance') -or
+                $entry.approvalProvenance -notin @('direct', 'inferred') -or
+                -not (Test-InaviCoreField $entry 'approvalSourceReference') -or
+                $entry.approvalSourceReference -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.approvalSourceReference) -or
+                $entry.approvalSourceReference.Length -gt 2048 -or
+                $entry.approvalSourceReference -match '[\x00-\x1F]' -or
+                $null -eq (ConvertTo-InaviCoreUtc $entry.processStartUtc) -or
+                $null -eq (ConvertTo-InaviCoreUtc $entry.utc) -or
+                (ConvertTo-InaviCoreUtc $entry.utc) -lt
+                    (ConvertTo-InaviCoreUtc $entry.processStartUtc)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
             }
-            $outstandingReservations[$identity]++
+            $historicalHashes = if (Test-InaviCoreField $Observed 'verifiedHistoricalRunEvidenceSha256') {
+                $Observed.verifiedHistoricalRunEvidenceSha256
+            } else { $null }
+            if (-not (Test-InaviCoreMap $historicalHashes) -or
+                -not $historicalHashes.Contains($entry.runEvidence.path) -or
+                -not (Test-InaviCoreHash $historicalHashes[$entry.runEvidence.path]) -or
+                $historicalHashes[$entry.runEvidence.path] -ne
+                    $entry.runEvidence.sha256) {
+                Add-InaviCoreCode $codes 'LEDGER_HISTORICAL_UNVERIFIED'
+            }
+        } elseif ($entry.state -eq 'reserved') {
+            $identity = Get-InaviCoreUseIdentity $entry
+            $reservationsById.Add($entry.eventId, $entry)
+            $reservationOrder.Add(@{ eventId = $entry.eventId; identity = $identity })
+            [void]$openReservationIds.Add($entry.eventId)
         } elseif ($entry.state -eq 'spent') {
             $identity = Get-InaviCoreUseIdentity $entry
-            if ($outstandingReservations.ContainsKey($identity) -and
-                $outstandingReservations[$identity] -gt 0) {
-                $outstandingReservations[$identity]--
+            if ($reconciledIdentities.Contains($identity)) {
+                # A later spent event contradicts the human no-spawn finding.
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
             }
+            $matchedReservation = $false
+            foreach ($reservation in $reservationOrder) {
+                if ($reservation.identity -ceq $identity -and
+                    $openReservationIds.Contains($reservation.eventId)) {
+                    [void]$openReservationIds.Remove($reservation.eventId)
+                    $matchedReservation = $true
+                    break
+                }
+            }
+            if (-not $matchedReservation) {
+                # Even a well-formed PID/start record cannot claim a launch
+                # that was never reserved in this append-only ledger.
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+            }
+        } elseif ($entry.state -eq 'reconciled') {
+            # A reconciliation is a manually reviewed no-spawn attestation,
+            # not proof inferred from the absence of a process file. The
+            # caller must independently hash its preserved investigation
+            # receipt under the ledger lock and supply that observed digest.
+            if (-not (Test-InaviCoreField $entry 'reservationEventId') -or
+                $entry.reservationEventId -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.reservationEventId) -or
+                -not (Test-InaviCoreField $entry 'resolution') -or
+                $entry.resolution -cne 'confirmed-no-spawn' -or
+                -not (Test-InaviCoreField $entry 'reviewReference') -or
+                $entry.reviewReference -isnot [string] -or
+                [string]::IsNullOrWhiteSpace($entry.reviewReference) -or
+                $entry.reviewReference.Length -gt 256 -or
+                $entry.reviewReference -eq $entry.approvalReference -or
+                -not (Test-InaviCoreField $entry 'reviewedUtc') -or
+                $null -eq (ConvertTo-InaviCoreUtc $entry.reviewedUtc) -or
+                -not (Test-InaviCoreField $entry 'noSpawnProof') -or
+                -not (Test-InaviCoreMap $entry.noSpawnProof) -or
+                -not (Test-InaviCoreField $entry.noSpawnProof 'path') -or
+                -not (Test-InaviCoreField $entry.noSpawnProof 'sha256') -or
+                -not (Test-InaviCoreEvidencePath $entry.noSpawnProof.path $sourceRootForProof) -or
+                -not (Test-InaviCoreHash $entry.noSpawnProof.sha256)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
+            }
+            if (-not $reservationsById.ContainsKey($entry.reservationEventId) -or
+                -not $openReservationIds.Contains($entry.reservationEventId)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
+            }
+            $prior = $reservationsById[$entry.reservationEventId]
+            if ((Get-InaviCoreUseIdentity $prior) -cne
+                    (Get-InaviCoreUseIdentity $entry) -or
+                (ConvertTo-InaviCoreUtc $entry.reviewedUtc) -lt
+                    (ConvertTo-InaviCoreUtc $prior.utc) -or
+                (ConvertTo-InaviCoreUtc $entry.utc) -lt
+                    (ConvertTo-InaviCoreUtc $entry.reviewedUtc)) {
+                Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                continue
+            }
+            $proofHashes = if (Test-InaviCoreField $Observed 'verifiedReconciliationProofSha256') {
+                $Observed.verifiedReconciliationProofSha256
+            } else { $null }
+            if (-not (Test-InaviCoreMap $proofHashes) -or
+                -not $proofHashes.Contains($entry.noSpawnProof.path) -or
+                -not (Test-InaviCoreHash $proofHashes[$entry.noSpawnProof.path]) -or
+                $proofHashes[$entry.noSpawnProof.path] -ne
+                    $entry.noSpawnProof.sha256) {
+                Add-InaviCoreCode $codes 'LEDGER_RECONCILIATION_UNVERIFIED'
+                continue
+            }
+            [void]$openReservationIds.Remove($entry.reservationEventId)
+            [void]$reconciledIdentities.Add((Get-InaviCoreUseIdentity $entry))
         }
-        # A 'reconciled' row alone does not establish the process identity
-        # needed to resolve a reservation; a later matching spent row does.
     }
-    foreach ($count in $outstandingReservations.Values) {
-        if ($count -gt 0) {
-            Add-InaviCoreCode $codes 'LEDGER_UNRESOLVED_RESERVATION'
-            break
-        }
+    if ($openReservationIds.Count -gt 0) {
+        Add-InaviCoreCode $codes 'LEDGER_UNRESOLVED_RESERVATION'
     }
     return New-InaviCoreResult $codes
 }

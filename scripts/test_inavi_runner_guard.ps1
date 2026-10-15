@@ -19,7 +19,10 @@ $definitions = @($ast.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst]
 }, $true))
 foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
-        'Get-InaviPdbRsds', 'Stop-InaviProcessObject',
+        'Get-InaviPdbRsds', 'Get-Sha256',
+        'Get-InaviLedgerEvidenceHashes', 'Get-InaviReconciliationProofHashes',
+        'Get-InaviHistoricalRunEvidenceHashes',
+        'Stop-InaviProcessObject',
         'Complete-InaviSpawnCommit')) {
     $definition = @($definitions | Where-Object Name -eq $name)
     if ($definition.Count -ne 1) { throw "Expected one pure runner function: $name" }
@@ -174,6 +177,32 @@ Assert-Guard ($source.Contains("phase = 'prelaunch'") -and
     $source.Contains('launchRelativeHorizonSeconds = 420') -and
     $source.Contains('observer-worker-heartbeat.json') -and
     $source.Contains('coverageIncomplete = $coverageIncomplete')) 'observer has launch-relative horizon and coverage classification'
+$observerDefinition = @($definitions | Where-Object Name -eq 'Invoke-Observer')
+if ($observerDefinition.Count -ne 1) { throw 'Expected one observer function.' }
+$observerText = $observerDefinition[0].Extent.Text
+$requestAt = $observerText.IndexOf('$firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()', [StringComparison]::Ordinal)
+$frameAt = $observerText.IndexOf('$frame = Invoke-GetCapture $client "$base/api/v1/frame.jpg"', [StringComparison]::Ordinal)
+$statusAt = $observerText.IndexOf('$status = Invoke-GetCapture $client "$base/api/v1/status"', [StringComparison]::Ordinal)
+$summaryAt = $observerText.IndexOf('$summary = Invoke-SummaryCapture', [StringComparison]::Ordinal)
+Assert-Guard ($requestAt -ge 0 -and $frameAt -gt $requestAt -and
+    $statusAt -gt $frameAt -and
+    $summaryAt -gt $statusAt -and
+    $observerText.Contains('$firstFrameRequestTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()') -and
+    $observerText.Contains('($firstFrameRequestTicks - $launchTicks) -gt (2L * $frequency)') -and
+    $observerText.Contains('$firstFrameReceivedTicks = [long]$frame.ReceivedTicks') -and
+    $observerText.Contains('($firstFrameReceivedTicks - $launchTicks) -gt (2L * $frequency)') -and
+    $observerText.Contains('$frame.Status -ne 200') -and
+    $observerText.Contains('firstFrameRequestTicks = $firstFrameRequestTicks') -and
+    $observerText.Contains('firstFrameReceivedTicks = $firstFrameReceivedTicks')) `
+    'first frame GET precedes status/summary and is bounded by launch-relative coverage'
+$firstFrameBlock = $observerText.Substring($frameAt, $statusAt - $frameAt)
+Assert-Guard ($firstFrameBlock.Contains("$" + 'coverageIssues.Add(') -and
+    $firstFrameBlock.Contains('observer-first-frame.json') -and
+    -not $firstFrameBlock.Contains('throw ')) `
+    'first-frame HTTP failure is retained as incomplete evidence without stopping later capture'
+Assert-Guard ($observerText.Contains("coverageStatus = 'pending-first-frame'") -and
+    $observerText.Contains('descriptorOutsideTwoSeconds = $coverageIncomplete')) `
+    'pre-frame launch receipt does not claim completed coverage'
 Assert-Guard ($source.Contains('Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks') -and
     $source.Contains('Stop-InaviSpawnedFallback $runDirectory $monitorProcess $ManifestSha256') -and
     $source.Contains('Stop-InaviUniqueLaunchFallback $runDirectory')) 'driver checks heartbeat and pre-descriptor exact fallback'
@@ -185,16 +214,85 @@ $coreAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $coreSource, [ref]$coreTokens, [ref]$coreErrors)
 $coreFunctions = @($coreAst.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -eq 'Get-InaviRequiredSourceFiles'
+    $node.Name -in @('Get-InaviRequiredSourceFiles', 'Test-InaviCorePath')
 }, $true))
-if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 1) {
+if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 2) {
     throw 'Offline runner guard could not load the shared source-file list.'
 }
-. ([scriptblock]::Create($coreFunctions[0].Extent.Text))
+foreach ($coreFunction in $coreFunctions) {
+    . ([scriptblock]::Create($coreFunction.Extent.Text))
+}
 $requiredFiles = @(Get-InaviRequiredSourceFiles)
 Assert-Guard ($source.Contains('foreach ($relative in (Get-InaviRequiredSourceFiles))') -and
     $coreSource.Contains('$requiredSourceFiles = @(Get-InaviRequiredSourceFiles)') -and
     $requiredFiles.Count -eq 21 -and '.gitattributes' -in $requiredFiles -and
     'scripts/test_inavi_runner_guard.ps1' -in $requiredFiles) 'worker and validator use one 21-file source map'
+
+$repository = 'D:\GitHub\Wince_emulation_v3'
+$emptyProofs = Get-InaviReconciliationProofHashes @(@{ state = 'reserved' }) $repository
+Assert-Guard ($emptyProofs.Count -eq 0) 'unreconciled events require no proof-file read'
+$emptyHistorical = Get-InaviHistoricalRunEvidenceHashes @(@{ state = 'legacy-deny' }) $repository
+Assert-Guard ($emptyHistorical.Count -eq 0) 'legacy-deny does not invent historical run evidence'
+$forgedOutside = @{ state = 'reconciled'; noSpawnProof = @{
+        path = 'C:\Temp\forged-no-spawn-proof.json'; sha256 = 'A' * 64 } }
+Assert-Reject {
+    Get-InaviReconciliationProofHashes @($forgedOutside) $repository
+} 'reconciliation proof outside checkout evidence rejects'
+$historicalOutside = @{ state = 'historical-spent'; runEvidence = @{
+        path = 'C:\Temp\forged-historical-run.json'; sha256 = 'A' * 64 } }
+Assert-Reject {
+    Get-InaviHistoricalRunEvidenceHashes @($historicalOutside) $repository
+} 'historical run evidence outside checkout rejects'
+$missingInside = @{ state = 'reconciled'; noSpawnProof = @{
+        path = (Join-Path $repository ('evidence\missing-offline-' + [Guid]::NewGuid().ToString('N') + '.json'))
+        sha256 = 'A' * 64 } }
+Assert-Reject {
+    Get-InaviReconciliationProofHashes @($missingInside) $repository
+} 'missing reconciliation proof rejects'
+$historicalMissing = @{ state = 'historical-spent'; runEvidence = @{
+        path = $missingInside.noSpawnProof.path; sha256 = 'A' * 64 } }
+Assert-Reject {
+    Get-InaviHistoricalRunEvidenceHashes @($historicalMissing) $repository
+} 'missing historical run evidence rejects'
+
+# A unique proof fixture under this checkout's evidence directory exercises
+# the positive hash path. It is never added to either ledger and is deleted
+# in finally; no mounted tree, archive or emulator is touched.
+$proofFixture = Join-Path $repository ('evidence\runner-proof-offline-' +
+    [Guid]::NewGuid().ToString('N') + '.json')
+try {
+    [System.IO.File]::WriteAllText($proofFixture, '{"offlineFixture":true}')
+    $proofHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $proofFixture).Hash
+    $validProof = @{ state = 'reconciled'; noSpawnProof = @{
+            path = $proofFixture; sha256 = $proofHash } }
+    $verified = Get-InaviReconciliationProofHashes @($validProof) $repository
+    Assert-Guard ($verified.Count -eq 1 -and $verified[$proofFixture] -eq $proofHash) `
+        'reconciliation proof under checkout evidence is independently hashed'
+    $validProof.noSpawnProof.sha256 = 'F' * 64
+    Assert-Reject {
+        Get-InaviReconciliationProofHashes @($validProof) $repository
+    } 'reconciliation proof hash mismatch rejects'
+    $historical = @{ state = 'historical-spent'; runEvidence = @{
+            path = $proofFixture; sha256 = $proofHash } }
+    $historicalHashes = Get-InaviHistoricalRunEvidenceHashes @($historical) $repository
+    Assert-Guard ($historicalHashes.Count -eq 1 -and
+        $historicalHashes[$proofFixture] -eq $proofHash) `
+        'historical run receipt is independently hashed under checkout evidence'
+    $historical.runEvidence.sha256 = 'F' * 64
+    Assert-Reject {
+        Get-InaviHistoricalRunEvidenceHashes @($historical) $repository
+    } 'historical run receipt hash mismatch rejects'
+} finally {
+    if (Test-Path -LiteralPath $proofFixture) {
+        Remove-Item -LiteralPath $proofFixture -Force
+    }
+}
+Assert-Guard ($source.Contains('$observed.observation.verifiedReconciliationProofSha256 =') -and
+    $source.Contains('Get-InaviReconciliationProofHashes $ledgers.local $Repository') -and
+    $source.Contains('[System.IO.FileAttributes]::ReparsePoint')) `
+    'worker independently hashes scoped no-spawn proofs before core decision'
+Assert-Guard ($source.Contains('$observed.observation.verifiedHistoricalRunEvidenceSha256 =') -and
+    $source.Contains('Get-InaviHistoricalRunEvidenceHashes $ledgers.local $Repository')) `
+    'worker independently hashes named historical receipts before core decision'
 
 Write-Output "Offline runner guards: $passed passed, 0 failed."
