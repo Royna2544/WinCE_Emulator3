@@ -10,9 +10,13 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   overflowing its test-thread stack, then exited `0xc0000005`
   ([raw log](evidence/stage2-writable-image-native-failure-20261016/broad-release-attempt02.raw.log)).
   The exact isolated attempt 01, serial broad attempt 03, and default broad
-  retry 04 passed the same test, so neither a deterministic depth nor a
-  cause is established. The test clones a full `CeKernel` for raw Get/Peek
-  comparison and also exercises the shared native callout/payload path;
+  retry 04 passed the same test. A later isolated direct-EXE probe passed
+  at requested 512, 256 and 128 KiB test-thread stacks, then overflowed at
+  64 KiB ([receipt](evidence/stage2-windowpos-stack-20261016/validation.receipt.md));
+  this does not explain the earlier broad-run overflow with the usual 2 MiB
+  stack. Neither its cause nor live risk is established. The test clones a
+  full `CeKernel` for raw Get/Peek comparison and also exercises the shared
+  native callout/payload path;
   which part consumes the stack is unknown. The existing release EXE's PE
   header reserves 1 MiB for its main stack, but source-level stack sizing
   and live-run exposure have not been established. Do not mask the defect by
