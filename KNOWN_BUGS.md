@@ -83,8 +83,15 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     W-B1c preserves mixed touch/key admission order within one `CeRemote`
     ([order receipt](evidence/stage3-mixed-input-order-20261015/validation.receipt.md)).
     Broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other input
-    producers, full exit capture retirement, implicit gesture ownership and
-    host teardown remain outside these gates; their reuse isolation is unproved.
+    producers, full exit capture retirement and implicit gesture ownership
+    remain outside these gates; their reuse isolation is unproved. Independent
+    window/backing selection on verified process exit and the no-birth
+    pseudo-exit fence are source-green under PID reuse (focused controls and
+    no-default full suite **1,485/0/3**;
+    [receipt pending](evidence/stage3-host-teardown-20261015/validation.receipt.md)).
+    Full host teardown remains open: GWE recursive foreign parent/owner links
+    and numeric sent-message sender cleanup lack birth proof. No final release
+    broad pass, live-app result or CE6 parity follows from this bounded gate.
   - W-B1c does not establish physical arrival order across HTTP and desktop
     producers, ordering with NMEA/serial batch dispatch, CE6 focus/activation
     parity, cross-thread guest WNDPROC execution order or O-C5 guest-time

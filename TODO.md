@@ -30,7 +30,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"); open defects
    are in `KNOWN_BUGS.md`. Next, in order:
-   - Owner-filtered host teardown, full exit capture retirement and implicit
+   - Complete host teardown beyond source-green independent-window/backing
+     PID-reuse selection and the no-birth pseudo-exit fence
+     ([receipt pending](evidence/stage3-host-teardown-20261015/validation.receipt.md)):
+     recursive foreign parent/owner links and numeric sent-message sender
+     cleanup still lack birth proof. Full exit capture retirement and implicit
      gesture ownership need separate gates; so do broadcast, HWND-owned
      timers, hotkeys, sent/paint/modal and other numeric GWE producers.
    - Cross-process parked-sender restore, reciprocal shapes beyond A12's exact
