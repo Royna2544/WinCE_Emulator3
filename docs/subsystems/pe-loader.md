@@ -140,6 +140,54 @@ the exhaustive direct native-write inventory and matched iNavi boot/frame
 timing remain open; another writable-mount iNavi run requires fresh approval
 and adjacent backups.
 
+## Writable image and DLL source-cut plan (not yet implemented)
+
+The current nonsealed main-image run is a mutable RWX `Owned` blob; preloaded
+and runtime DLLs likewise publish whole-image `Owned` blobs. The fresh native
+owner copies these bytes in and reads them back. The migration must preserve
+the finalized relocation/import/trampoline bytes while replacing **one**
+copy-backed family at a time with AddressSpace-owned, stable private pages.
+The sealed main-image R/RX runs and their generation/pin checks remain intact.
+
+1. Prepare an exact `(process birth, module identity, load generation, page)`
+   plan after final loader patching. Check region overlap, final protection,
+   page provenance, budget decision and native-write destinations before
+   publishing any module pointer or IAT binding. Keep the old live module
+   untouched on a failed candidate; do not reuse a same-VA generation.
+2. Make writable **main-image** pages the first connected source/test cut.
+   The VM must own bytes before execution; native owners pin/reconcile that
+   backing, and neither a parked blob nor outbound readback may overwrite it.
+   Preserve IAT writes through a checked VM/loader transaction. Validate
+   actual MIPS store/load across fresh owners and A/B same-VA isolation, plus
+   stale-key and partial-map failures, before removing the Owned copy. The
+   current `MappedCodeIndex` marks every `image:`/`dll:` blob static by name
+   and can prefer stale Owned bytes over live native code after a same-slice
+   guest write. Static-code classification must follow proven immutable
+   backing, not the module-name prefix; test a real MIPS self-modifying
+   writable page before accepting hook/decoder behavior.
+3. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
+   Dynamic mapping, import refresh, attach/detach, unload/reload and parked
+   process restoration must reconcile exact generation/pins before returning
+   to guest code. A live return frame prevents premature unmap; a failed
+   attach or native map must not publish executable metadata or lose the old
+   module. The current runtime path records `memory_map` before native map
+   and its cleanup does not prove unmap success, so rollback and retained
+   pins require a targeted failure test before this family migrates. The
+   scoped `FreeLibrary` inventory did not find a matching blob/native unmap;
+   test the actual unload/reload lifetime before claiming reclamation. Check
+   direct `uc.mem_write`, restore and rebind sites explicitly;
+   guest RX permissions alone do not constrain host writes.
+4. Close [O-M3](../DECISIONS.md) with evidence of actual ROM/XIP versus RAM
+   image provenance and charge timing before claiming guest-budget or live
+   acceptance. For each proven case, test boot/load/write/unload
+   `GlobalMemoryStatus` deltas and low-budget rollback. Preserve a separately
+   reported host-RSS/native-map profile; do not call source tests an iNavi
+   memory or speed improvement.
+
+This is a design sequence, not a claim that `AddressSpace` already owns these
+pages. The shared [memory plan](guest-memory.md) defines byte/pin lifetime and
+the unresolved physical accounting boundary.
+
 ## Target transaction and owner
 
 - `CeMachine` sequences load/unload effects. An `AddressSpace` owns module mappings,

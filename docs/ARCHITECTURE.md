@@ -216,15 +216,20 @@ new checkpoint after refusal and permits only an earlier checkpoint restore
 to clear its execution hold. It does not make later teardown effects atomic or complete the
 machine-owned Task/VM lifecycle.
 
-### Stage 3 pseudo self-exit convergence (target)
+### Stage 3 pseudo self-exit convergence (bounded source gate)
 
-Native and decoded guest pseudo self-exit should reach one machine-owned
-stopped-exit finalizer after verified CPU-owner closure. That finalizer must
-prepare D-011 restoration and exact-birth Task/VM effects before mutation;
-decoded synchronous retirement tails should then be removed. The CPU backend
-owns refusal while live modal backing remains. The raw COREDLL pseudo-exit
-shim stays fixture-only and fail-closed for guest callers; no raw executor
-is proposed for this cut. This is not the completed native/decoded behavior.
+The [native source gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
+and [decoded source gate](../evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+now reach the same stopped, birth-checked finalizer after CPU-owner closure.
+The decoded path requires a same-attempt live JALR/delay-slot witness; static
+PC-zero or exit-shaped bytes alone cannot retire a process. D-011 still
+requires saved-image restoration preflight before any exit effect and typed
+recovery refusal on failure. The raw COREDLL pseudo-exit shim remains
+fixture-only and fail-closed for guest callers; there is no raw executor.
+These are bounded source/test gates, not proof of complete machine-owned
+Task/VM retirement, post-preflight failure atomicity, live iNavi behavior or
+a production decoded PC-zero hit. The target remains one machine-owned exit
+transaction with those additional effects and failure gates.
 
 ## A3. Execution and continuation boundary
 

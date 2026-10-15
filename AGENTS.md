@@ -70,16 +70,19 @@ cargo test -j 1          # no-feature stub/raw smoke profile
 
 Run `cargo fmt`/targeted `rustfmt` after Rust edits and `git diff --check`
 before handoff (CRLF warnings on old files are pre-existing noise).
+For each new focused or broad validation attempt, refuse an existing raw-log
+path, stamp `ATTEMPT=`, exact `COMMAND=`, source HEAD/file hash and
+`EXIT_CODE=` into that attempt's own log, then hash the closed log in its
+receipt. Never repair missing stamps by rewriting historical raw output.
 
 Build-environment traps (see also the repo-external notes in your memory):
 
 - `unicorn-engine-sys` (cmake + bindgen) rebuilds from scratch after any
-  toolchain change. bindgen needs `LIBCLANG_PATH` (here:
-  `C:\Program Files\doxygen\bin`). A user-supplied LLVM 23 copy at
-  `D:\GitHub\llvm-proj\build\bin\libclang.dll` existed on 2026-10-15 but
-  disappeared during validation; its first load also needed sibling DLLs on
-  `PATH`. Do not rely on that build-output path without checking it afresh.
-  The Doxygen copy compiled and ran the focused GWE tests in this checkout.
+  toolchain change. bindgen needs `LIBCLANG_PATH=C:\Program Files\LLVM\bin`
+  with that directory on `PATH`; its `libclang.dll` was verified present and
+  used for the 2026-10-16 broad source suites. The user-supplied build copy
+  at `D:\GitHub\llvm-proj\build\bin\libclang.dll` previously failed to load;
+  do not rely on that build-output path without checking it afresh.
   The upstream cmake post-build step uses
   `create_symlink`, which fails without symlink privilege. Do not change system
   settings. Per D-007, the in-repo `vendor/unicorn-engine-sys` patch now copies
@@ -137,7 +140,7 @@ cargo run --release --features unicorn,trace,win32-desktop -- `
 | `tests/` | raw-API and subsystem tests, PE fixtures (`tests/test_progs`) |
 | `host_progs/` | host-side helper programs (not part of the emulator build) |
 
-## Current architecture status (refreshed 2026-10-15)
+## Current architecture status (refreshed 2026-10-16)
 
 The user authorized the scheduler-core rewrite with plan-first/common-anchor
 dependency gates. The reviewed docs describe target contracts and staged
@@ -206,6 +209,18 @@ is historical for A12's one birth-owned, same-process plain S→T→S pair; time
 result-pointer, third-sender, deeper-pending and cross-process cases are not
 supported and can fail closed with terminal `Backend`. No A12 iNavi run or
 writable-mount backup was made. Do not treat these slices as full Stage 3.
+
+The bounded [decoded pseudo self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
+requires an attempt-local executed JALR/delay-slot witness and exact stopped
+caller/owner birth before the shared D-011-preflight finalizer. Its sealed
+source passed 18-block release-feature **2,107/0/9 ignored** and no-default
+**1,511/0/3 ignored**
+([receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)).
+Raw direct pseudo compatibility remains fixture-only and fail-closed; this is
+not full Task/VM authority or live-app proof. No app or mount run was made.
+Writable main-image/DLL ownership and `PrivatePageBudget` treatment are the
+immediate Stage 2 design and source-test priority ahead of the next MsgWait
+gate.
 
 The scheduler, message delivery, and CPU slicing are the weak spine. Measured
 facts an agent must not re-derive or contradict (numbers and run conditions in

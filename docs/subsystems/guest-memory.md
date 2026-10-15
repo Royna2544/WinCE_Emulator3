@@ -277,6 +277,79 @@ final release profile passed 2/0 on matching source hashes
 Neither these synthetic measurements nor the E-43 debug copied-image receipt
 establishes iNavi lag, host RSS, frame readiness or live-run acceptance.
 
+### Next Stage 2 cut: writable image ownership (design, not implemented)
+
+The main image's nonsealed pages and preloaded/runtime DLL images are still
+`BlobBytes::Owned` copy-backed runs. Native setup copies them into Unicorn and
+slice completion reads them back; cloning an Owned run copies its `Vec`.
+They are not yet AddressSpace-owned private image pages, and their host byte
+capacity is not a guest physical-memory charge. A sealed R/RX run is a
+different, already source-gated immutable family; do not turn it writable to
+solve an IAT or DLL update.
+
+The connected migration order is **writable main-image runs, then preloaded
+DLLs, then dynamic DLL load/unload/reload**. For each migrated page, the
+machine's canonical process birth and module load generation identify one
+private byte authority and its reservation, protection and page provenance.
+The VM owns that backing; the loader prepares final patched bytes and module
+metadata, and the native lease only observes/pins the exact page and mapping
+generation. On successful publication the old Owned bytes for that page must
+be consumed or dropped, not kept as another writable truth. Unmigrated runs
+retain their existing checked copy-in/readback boundary until their own cut.
+The existing sealed-image pin table uses only a run base as its key; migrated
+writable pages need a separate birth/module-generation/backing identity in
+the native ledger and pin table, not a base-only reuse check.
+Adding an `Rc`-backed writable `BlobBytes` variant only to `UnicornMips` would
+not meet this contract: `UnicornMips` currently owns and derives `Clone` over
+its blob vector. The canonical page directory must live in the machine's
+birth-owned AddressSpace; the CPU may hold checked references, not an
+independently cloned mutable store. Until a full machine checkpoint can
+relineage that directory and every native/parked reference, checkpoint of a
+migrated writable image must fail explicitly rather than share writable bytes.
+Native or hook-time writes, host restore, process parking and DLL rebinding
+must go through that same checked authority. An independent machine clone
+relineages owner/module keys and copies private bytes; a CPU Context alone
+does not clone RAM. A stale birth, unloaded generation or mismatched pin
+refuses the operation before byte or metadata publication. Failed native
+map/protect/unmap keeps pins until checked owner close; already-live guest
+writes are not promised rollback.
+
+Guest physical accounting is a separate **unresolved policy gate**. The
+device reports 195,350,528 B total and 164,368,384 B available at boot in
+the synced `SYSTEM.TXT`; current `PrivatePageBudget` subtracts boot-reserved
+and committed private/shared pages, and `GlobalMemoryStatus` reports its
+remainder. Local CE6 `NK/KERNEL/vm.c` distinguishes reservation from physical
+commit (856-909), refuses a direct write to a ROM PFN (409-413), and can
+replace a DLL or failed-EXE image page on write (1930-2020). This supports
+provenance-sensitive charging, **not** a rule that all dumped image bytes are
+free, that all are charged at load, or that PE `WRITE` flags imply RAM backing.
+Before a production image page joins the budget, classify its actual source
+and page sharing: committed RAM pages charge once when committed; a proven
+shared ROM/XIP page charges only for a private replacement when one is made.
+These are proposed accounting cases, not a claim that the current loader can
+classify them. Unknown provenance must not be silently treated as either
+free XIP or committed RAM in a new charged path; retain the old explicit
+copy-backed path or refuse the migration until classification and charging
+are defined. Guest charges, host RSS and native TCG reservation remain
+separate measures. See [O-M3](../DECISIONS.md) for the open decision.
+
+Freeze expected-red tests before changing the production path: real MIPS
+store/load on a writable main-image page across fresh owners; A/B same-VA
+isolation, IAT patch, stale birth/generation and native-write-guard refusal.
+Assert the stable backing pointer/pin and **zero image copy-in/readback** as
+well as byte persistence, because the present copy path can already pass a
+store/load roundtrip. Reconciliation must exclude the migrated page from
+anonymous native `mem_map` in the same cut that changes its sync path.
+Then test the corresponding preloaded/dynamic DLL store, park,
+unload/reload and failure cases. Synthetic fixtures explicitly tagged with
+modeled RAM and ROM/XIP provenance must check `GlobalMemoryStatus` at boot,
+load, first write, owner close and
+unload, including shared-page single charge, low-budget failure without
+publication, and pin-held deferred release. Do not infer a physical-budget
+result from a host allocation or a green byte-persistence test. Run the
+source-focused and broad suites before seeking a separately approved,
+freshly backed-up writable-mount iNavi measurement.
+
 ## Target authority and permitted interfaces
 
 - `CeMachine` owns mutation sequencing; each `AddressSpace` owns its process's
