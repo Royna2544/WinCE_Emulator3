@@ -97,8 +97,12 @@ subsequent [sender-ownership gate](../evidence/stage3-sender-birth-20261015/vali
 narrows tested queued/active sender cleanup and identified guest no-wait
 admission. The later [exact-window-set gate](../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
 prevents foreign parent/owner links from expanding host-exit window targets
-and wakes an exact sender waiting on a retired receiver HWND. The complete
-target exit-effect contract below remains open.
+and wakes an exact sender waiting on a retired receiver HWND. The bounded
+[guest pseudo-exit caller gate](../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+then source-tested captured thread/process-lease admission for native COREDLL
+and decoded self-exit; it did not establish immediate CPU stop, Task retirement
+or whole-exit atomicity. The complete target exit-effect contract below,
+including unimplemented D-011 framebuffer preflight, remains open.
 
 ## A1. Machine authority
 

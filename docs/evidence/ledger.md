@@ -1874,6 +1874,26 @@ whole-exit effects, CE6 topology, full Stage 3 and live iNavi remain open.
 There was no emulator run, writable-mount operation, LAN session, footprint
 or input-to-frame latency measurement.
 
+## Guest pseudo-exit caller-birth source gate (2026-10-15, executed offline)
+
+The [final receipt](../../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+seals the tested HEAD, source/test hashes, all numbered raw attempts and
+their results. Behavioral reds established raw stale/missing caller, native
+classification and decoded missing-caller defects; a fixture compile error
+and a zero-test filter attempt were retained but not counted as reds. The
+corrected guest COREDLL path requires captured live caller birth and the
+native process lease before pseudo or real-handle dispatch. The birth-
+qualified pseudo operation signals only the selected exact process birth;
+decoded self-PID is classified before public-handle lookup, preventing a
+foreign-handle collision. Focused tests include a tiny-MIPS positive import.
+Final 18-block suites passed release **2,081/0/9 ignored** and no-default
+**1,502/0/3 ignored**; Unicorn-only and desktop-without-trace checks passed.
+The tiny-MIPS missing-birth negative is refused before guest entry, so an
+actual stale-A/B MIPS import trap remains unproved. Immediate native CPU stop,
+canonical Task retirement, the root return-stub path, D-011 stopped-exit
+framebuffer preflight/recovery, CE6 parity, full Stage 3 and live iNavi remain
+open. No emulator run, writable-mount operation or LAN session occurred.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

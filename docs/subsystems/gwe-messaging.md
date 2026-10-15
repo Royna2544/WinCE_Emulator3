@@ -174,29 +174,32 @@ separate stopped-exit gate: a mismatched saved backing must refuse completion
 before any window/process mutation and leave the stopped owner for recovery.
 The current source does not yet implement this policy.
 
-### Bounded guest self-exit caller gate (planned)
+### Bounded guest self-exit caller gate (source-tested)
 
-The native COREDLL `TerminateProcess` import already has a captured
-`ThreadBirthKey` and a per-attempt native process birth, but its raw handler
-currently drops that witness. The decoded direct-kernel PC-zero self-exit
-path also chooses a mutable numeric process and tries it as a handle before
-falling back to the pseudo handle. Before either guest ingress publishes
-window, send, backing, exit-code, waiter, trace or LastError effects, require
-one live captured caller thread birth whose frozen creation process equals
-both the native attempt owner and the selected Kernel process birth. A
-missing/stale/replayed or mismatched witness must fail closed; a valid same-
-birth self exit may use a birth-qualified Kernel operation. Classify decoded
-self-PID and pseudo-handle forms before handle lookup to avoid numeric
-PID/handle collision. The native import should require verified birth even
-for real-handle requests, but changing their continuation semantics is outside
-this gate. Synthetic raw tests that currently use an unregistered or
-other-process caller must gain canonical caller ownership rather than let a
-numeric selector authorize a guest mutation. Direct host fixture calls remain
-separate compatibility tests. Red controls will check stale A against live B
-with B's HWND and exit/wait state retained, plus missing birth and valid B;
-the decoded path needs its own stale and positive controls. This is a bounded
-native-register/process-lease preflight, not a completed Task/Frame or
-whole-process-stop proof, nor CE6 timing/LastError parity.
+The [receipt](../../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+seals a bounded guest-ingress gate. Raw COREDLL `TerminateProcess` now requires
+a captured live `ThreadBirthKey` owned by the selected exact process birth;
+the native import also checks the per-attempt process lease before dispatch
+for pseudo and real handles. The birth-qualified Kernel pseudo operation
+signals only that live process birth and publishes its wait once. Decoded
+PC-zero self-exit requires the same caller and native-owner proof, and
+classifies self-PID before public-handle lookup so a numeric collision cannot
+target a foreign process. Direct host Kernel fixtures remain a separate
+compatibility entry; the legacy shell fixture now registers its caller.
+
+Preserved behavioral reds covered raw stale/missing callers, the native
+classifier and decoded missing caller. Focused controls subsequently passed,
+including valid selected B, native lease, self-PID/foreign-handle collision,
+live-foreign/stale caller and a tiny-MIPS positive pseudo import. Final
+18-block suites passed release **2,081/0/9 ignored** and no-default
+**1,502/0/3 ignored**; alternate native feature checks passed. The negative
+tiny-MIPS missing-birth fixture is rejected before guest entry, not at the
+import hook; actual stale-A/B MIPS trap rejection remains unproved. A positive
+pseudo import signals the process object but does not prove immediate native
+CPU stop or canonical Task retirement. The separate root-thread return-stub
+path remains context-free; real-handle continuation, CE6 timing/LastError
+parity, full Stage 3 and live iNavi remain open. The separate D-011 stopped
+host-exit framebuffer preflight above is still unimplemented.
 
 ### Bounded sender-owned send transaction (source-tested)
 

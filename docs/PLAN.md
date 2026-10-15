@@ -96,9 +96,14 @@ production birth authority. The later
 retired only frozen-birth host-exit HWNDs despite synthetic foreign links and
 woke an exact sender waiting on a retired receiver; its release
 **2,072/0/9 ignored** and no-default **1,500/0/3 ignored** suites passed.
+The subsequent bounded [guest pseudo-exit caller gate](../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+source-tested captured thread and native process-lease admission plus decoded
+self-PID collision safety; release **2,081/0/9 ignored** and no-default
+**1,502/0/3 ignored** passed. It does not prove immediate native CPU stop,
+canonical Task retirement or whole-exit atomicity.
 Direct WndProc dispatch, receiver-side cross-process result writes,
-conditional system-origin device broadcasts, pseudo-exit caller authority,
-whole-exit atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
+conditional system-origin device broadcasts, D-011 stopped-exit framebuffer
+preflight/recovery, CE6 foreign-link/cancellation parity, full Stage 3 and
 live iNavi remain separate gates. No live run is approved by these source gates.
 
 Stage 7 budgets are a design gate, not values inferred from the current
@@ -287,8 +292,11 @@ close only their named gates, not Stage 2 or live acceptance.
   no-wait producers. The later
   [exact-window-set gate](../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
   source-tests foreign-link isolation without changing guest
-  `DestroyWindow` recursion; full exit-effect authority, live-app behavior
-  and CE6 parity remain open.
+  `DestroyWindow` recursion. The later
+  [pseudo-caller gate](../evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
+  source-tests native COREDLL and decoded self-exit caller/owner preflight,
+  but not immediate CPU stop or D-011 framebuffer recovery. Full exit-effect
+  authority, live-app behavior and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
