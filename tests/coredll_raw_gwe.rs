@@ -30292,6 +30292,215 @@ fn coredll_raw_get_message_expires_timed_out_cross_thread_send() -> Result<()> {
 }
 
 #[test]
+#[ignore = "expected red: raw Send/Timeout must reject a stale captured caller birth before queue publication"]
+fn coredll_raw_send_rejects_stale_caller_birth_after_pid_tid_reuse() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x0040_1000, 0, false);
+    let receiver_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(receiver_handle)
+        .expect("boot receiver birth");
+    let hwnd = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            receiver_birth,
+            "RAW_STALE_SEND_RECEIVER",
+            "receiver",
+            None,
+            None,
+            0,
+            0,
+            0,
+            Rect::default(),
+        )
+        .expect("live boot receiver HWND");
+
+    let sender_pid = 0x7310;
+    let sender_tid = 0x7311;
+    let process_a_handle = kernel.handles.create_process(sender_pid);
+    let process_a = kernel
+        .handles
+        .process_birth_key_for_handle(process_a_handle)
+        .expect("A process birth");
+    let thread_a_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(process_a, sender_tid, 0x0040_2000, 0, false)?;
+    let thread_a = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_a_handle)
+        .expect("A caller birth");
+    kernel.set_current_process_id(sender_pid);
+    assert_eq!(kernel.current_process_birth_key(), Some(process_a));
+
+    // Fixture-only retirement bypasses normal GWES cleanup, then deliberately
+    // reuses both public numbers so the captured A context is stale for B.
+    assert!(kernel.handles.mark_thread_exited_by_birth(thread_a, 0));
+    kernel.handles.close(thread_a_handle)?;
+    assert!(
+        kernel
+            .handles
+            .finish_process_execution_by_birth(process_a, 0)
+            .is_some()
+    );
+    kernel.handles.close(process_a_handle)?;
+    assert_eq!(kernel.handles.process_birth_key(sender_pid), None);
+
+    let process_b_handle = kernel.handles.create_process(sender_pid);
+    let process_b = kernel
+        .handles
+        .process_birth_key_for_handle(process_b_handle)
+        .expect("B process birth");
+    let thread_b_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(process_b, sender_tid, 0x0040_3000, 0, false)?;
+    let thread_b = kernel
+        .handles
+        .thread_birth_key_for_handle(thread_b_handle)
+        .expect("B caller birth");
+    assert_ne!(process_a, process_b);
+    assert_ne!(thread_a, thread_b);
+    assert_eq!(kernel.current_process_birth_key(), Some(process_b));
+
+    let result_ptr = 0xb2f0;
+    memory.map_words(result_ptr, 1);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+    let ids_before = kernel.gwe.sent_message_ids_for_windows(&[hwnd]);
+    let sends_before = kernel.gwe.stats().send_transaction_count;
+    let status_before = kernel
+        .gwe
+        .peek_queue_status_for_birth(receiver_birth, QS_SENDMESSAGE);
+    let ready_before = kernel.get_message_queue_ready_time_stamp_for_thread(receiver_tid, 0);
+    let wakes_before = kernel.scheduler_stats().message_input_wake_candidate_count;
+    let signals_before = kernel.scheduler_stats().message_input_signal_count;
+    let trace_before = kernel.recent_message_ops().len();
+    let stale_context = CoredllRawContext {
+        thread_id: sender_tid,
+        caller_birth: Some(thread_a),
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            stale_context.clone(),
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_USER + 0xc1, 1, 2, 0, 500, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            stale_context,
+            ORD_SEND_MESSAGE_W,
+            [hwnd, WM_USER + 0xc2, 3, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+        ids_before,
+        "stale A caller must not publish a B send ID"
+    );
+    assert_eq!(kernel.gwe.stats().send_transaction_count, sends_before);
+    assert_eq!(
+        kernel
+            .gwe
+            .peek_queue_status_for_birth(receiver_birth, QS_SENDMESSAGE),
+        status_before
+    );
+    assert_eq!(
+        kernel.get_message_queue_ready_time_stamp_for_thread(receiver_tid, 0),
+        ready_before
+    );
+    assert_eq!(
+        kernel.scheduler_stats().message_input_wake_candidate_count,
+        wakes_before
+    );
+    assert_eq!(
+        kernel.scheduler_stats().message_input_signal_count,
+        signals_before
+    );
+    assert_eq!(kernel.recent_message_ops().len(), trace_before);
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+
+    let current_context = CoredllRawContext {
+        thread_id: sender_tid,
+        caller_birth: Some(thread_b),
+        ..Default::default()
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            current_context.clone(),
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_USER + 0xc3, 5, 6, 0, 500, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            current_context,
+            ORD_SEND_MESSAGE_W,
+            [hwnd, WM_USER + 0xc4, 7, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let ids = kernel.gwe.sent_message_ids_for_windows(&[hwnd]);
+    assert_eq!(ids.len(), 2, "both live B caller paths must queue");
+    assert_eq!(
+        kernel.gwe.sent_message(ids[0]).unwrap().message.msg,
+        WM_USER + 0xc3
+    );
+    assert_eq!(
+        kernel.gwe.sent_message(ids[1]).unwrap().message.msg,
+        WM_USER + 0xc4
+    );
+    for id in ids {
+        let sent = kernel.gwe.sent_message(id).unwrap();
+        assert_eq!(sent.sender_thread_id, Some(sender_tid));
+        assert_eq!(sent.sender_process_id, Some(sender_pid));
+        assert_eq!(sent.receiver_birth, Some(receiver_birth));
+    }
+    assert_eq!(kernel.gwe.stats().send_transaction_count, sends_before + 2);
+    assert_ne!(
+        kernel
+            .gwe
+            .peek_queue_status_for_birth(receiver_birth, QS_SENDMESSAGE)
+            & (QS_SENDMESSAGE << 16),
+        0
+    );
+    assert!(kernel.scheduler_stats().message_input_wake_candidate_count > wakes_before);
+    assert_eq!(kernel.recent_message_ops().len(), trace_before + 2);
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;

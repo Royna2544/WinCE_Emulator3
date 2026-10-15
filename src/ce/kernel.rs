@@ -14716,6 +14716,105 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "expected red: reused PID host exit must select queued sends by sender process birth"]
+    fn reused_pid_host_exit_preserves_stranded_prior_birth_send() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let (receiver_handle, receiver_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let receiver_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(receiver_handle)
+            .expect("boot receiver birth");
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                receiver_birth,
+                "REUSED_PID_SEND_RECEIVER",
+                "receiver",
+                None,
+                None,
+                0,
+                0,
+                0,
+                Rect::default(),
+            )
+            .expect("live boot receiver HWND");
+
+        let launch_a = kernel.queue_process_launch(None, None);
+        let process_a = launch_a.process_birth.expect("A process birth");
+        let thread_a = launch_a.primary_thread_birth.expect("A thread birth");
+        kernel.set_current_process_id(launch_a.process_id);
+        let send_a = kernel
+            .begin_cross_thread_send_message_w(
+                launch_a.thread_id,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0xb1,
+                1,
+                2,
+                None,
+            )
+            .expect("A queued send");
+        assert_eq!(
+            kernel.gwe.sent_message(send_a).unwrap().sender_process_id,
+            Some(launch_a.process_id)
+        );
+
+        // Fixture-only: retire A's canonical records directly, bypassing
+        // Kernel/GWES sender-exit cleanup so its inert send remains observable.
+        assert!(kernel.handles.mark_thread_exited_by_birth(thread_a, 0));
+        kernel.handles.close(launch_a.thread_handle)?;
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(process_a, 0)
+                .is_some()
+        );
+        kernel.handles.close(launch_a.process_handle)?;
+        assert_eq!(kernel.handles.process_birth_key(launch_a.process_id), None);
+        assert!(kernel.gwe.sent_message(send_a).is_some());
+
+        kernel.next_process_id = launch_a.process_id;
+        let launch_b = kernel.queue_process_launch(None, None);
+        let process_b = launch_b.process_birth.expect("B process birth");
+        assert_eq!(launch_b.process_id, launch_a.process_id);
+        assert_ne!(process_a, process_b);
+        assert_ne!(launch_a.thread_id, launch_b.thread_id);
+        kernel.set_current_process_id(launch_b.process_id);
+        let send_b = kernel
+            .begin_cross_thread_send_message_w(
+                launch_b.thread_id,
+                hwnd,
+                crate::ce::gwe::WM_USER + 0xb2,
+                3,
+                4,
+                None,
+            )
+            .expect("B queued send");
+        assert_ne!(send_a, send_b);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]).len(), 2);
+
+        assert!(kernel.mark_process_launch_exited(&launch_b, 0));
+        assert!(
+            kernel.gwe.is_window(hwnd),
+            "boot receiver must survive B exit"
+        );
+        assert!(kernel.gwe.sent_message(send_b).is_none(), "B send retires");
+        assert!(
+            kernel.gwe.sent_message(send_a).is_some(),
+            "B exit must preserve A's stranded prior-birth send"
+        );
+        assert!(
+            kernel
+                .gwe
+                .has_pending_sent_message_for_birth(receiver_birth)
+        );
+        assert_eq!(
+            kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
+            vec![send_a]
+        );
+        assert_eq!(receiver_tid, receiver_birth.thread_id());
+        Ok(())
+    }
+
+    #[test]
     fn reused_pid_pseudo_host_teardown_preserves_stale_prior_birth_window() -> Result<()> {
         let mut kernel = CeKernel::boot(runtime_config_with_com7());
         let process_handle_a = kernel.handles.create_process(77);
