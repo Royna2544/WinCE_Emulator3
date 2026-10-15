@@ -228,13 +228,18 @@ close only their named gates, not Stage 2 or live acceptance.
   freezes creation ownership, preflights native ordinals 246/688/690, and
   birth-gates explicit HWND post and typed-payload retirement. Five pre-fix
   reds and the failed first broad attempt remain preserved; corrected release
-  passed 1,967/0/9 and no-feature 1,427/0/3. W-B1b remote touch/key input
-  remains a separate test-first gate: an explicit host HWND is not a guest
-  Get/Peek retrieval filter, coordinate touch retains live capture/hit-test,
-  blocked-wait/modal HWNDs are fallback hints only, and keys use live focus or
-  active ownership. Stale-capture DOWN versus MOVE/UP needs bounded controls;
-  full capture retirement, implicit gesture ownership and owner-filtered host
-  teardown are separate open gates. Broadcast, HWND timers, hotkeys,
+  passed 1,967/0/9 and no-feature 1,427/0/3. The separate bounded W-B1b
+  remote touch/key [source gate](../evidence/stage3-window-input-birth-20261015/validation.receipt.md)
+  passed 27/27 focused controls, a38 release 1,988/0/9 and a39 no-feature
+  1,448/0/3 across 18 blocks each, plus a40/a41 feature checks on the fresh
+  a38 seal. Earlier a33/a34 broad attempts failed on an obsolete hidden-window
+  fixture, repaired at a35 and focused a36/a37; they are not acceptance runs.
+  The input-only gate distinguishes explicit host HWNDs from guest Get/Peek
+  retrieval filters; coordinate touch retains live capture/hit-test, blocked-
+  wait/modal HWNDs are fallback hints only, and keys use live focus/active
+  ownership. Mixed touch/key ordering is the next separate gate; full exit
+  capture retirement, implicit gesture ownership and owner-filtered host
+  teardown remain open. Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates
   ([tasks-scheduler](subsystems/tasks-scheduler.md)). Opaque non-task targets
@@ -246,6 +251,14 @@ close only their named gates, not Stage 2 or live acceptance.
   Other blocked payload families have not been migrated by these parked-wait
   gates.
   These bounded source slices are not full Stage 3 or live-app acceptance.
+- W-B1c mixed touch/key admission order is [designed separately](subsystems/remote-observability.md)
+  against A1/A5, before code. Its first required control is the expected-red
+  Birth-owned A-focused key, then B-point DOWN, in one drain; only after that
+  red and independent plan review may one typed, sequenced `CeRemote` FIFO
+  replace the two current queues. Preserve W-B1b Birth routing and the current
+  message-time projection. O-C5 guest-time assignment, physical cross-adapter
+  arrival order, cross-thread WNDPROC execution order, host `GetMessage(NULL)`
+  wake without a HWND, and live tap delivery remain outside this source gate.
 - Native outcome: the E-7 full-backend count-stop and nonzero-unmapped-error
   controls were red originally and later turned green on the D: source. E-19
   added focused typed global-hook stop controls and passed the frozen full

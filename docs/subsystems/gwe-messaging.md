@@ -34,34 +34,44 @@ per-task SMT frames remain required. Controls: `occupied_send_message_timeout_sl
 `PostThreadMessageW`, `PostMessageW(hwnd=0)` and self `PostQuitMessage` capture a live `ThreadBirthKey`; stale births reject queue, quit, status, timestamp, trace and wake publication.
 One per-TID FIFO keeps each post's exact-birth, fixture-only legacy-unknown or unscoped compatibility owner; sent → posted → quit → paint priority and HWND/message filtering remain.
 Get/Peek, status/new-input, timestamp, wait wake/readiness and exact exit use birth-eligible state; A retirement preserves B and unscoped work, while window-originated status remains compatibility state.
-Unknown-target return/LastError parity, other window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
+Unknown-target return/LastError parity, window/broadcast/HWND-owned-timer/keyboard/remote/sent/paint/modal producer births outside the bounded gates below, and full GWES/live iNavi acceptance remain open. [Thread-post receipt](../../evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md): release 1,952/0/9; no-feature 1,417/0/3. [HWND-less timer receipt](../../evidence/stage3-thread-timer-birth-20261015/validation.receipt.md): release 1,960/0/9; no-feature 1,424/0/3.
 
-### W-B1 window-owner birth (W-B1a source-tested; W-B1b open)
+### W-B1 window-owner birth (W-B1a and W-B1b source-tested; teardown open)
 
 One immutable Window owner is exact `(ThreadBirthKey, creation ProcessBirthKey)`, explicit legacy-unknown, or system desktop; numeric TID/PID are creation-only projections, never a second owner authority.
 W-B1a preflights the captured native caller birth for `CreateWindowExW`, `CreateDialogIndirectParamW`, and `DialogBoxIndirectParamW` before any GWES/LastError effect; absent birth is a fixture-only compatibility path.
 Verified explicit HWND posts enter the existing FIFO as Birth-owned work, committing status, ready time, trace, and exact-birth wake together; stale ordinary HWNDs publish nothing, while desktop/legacy compatibility stays explicit.
 Typed-payload recipient and native CreateWindow callback ownership use the frozen process birth, never a current numeric PID lookup; CE6 return/LastError parity remains unverified where local GWES source is silent.
 Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible; it must not recursively destroy a B-owned descendant or sweep by numeric TID.
-W-B1b remote touch/key ownership is still test-first and open. An explicitly
-host-targeted HWND has a frozen recipient: if it is stale or destroyed, consume
+W-B1b remote touch/key ownership passed its bounded
+[source gate](../../evidence/stage3-window-input-birth-20261015/validation.receipt.md).
+For a Birth-owned window, an explicitly host-targeted HWND has a frozen recipient: if it is stale or destroyed, consume
 and drop that input before focus, state, queue/status, timestamp, post trace or
 wake publication; never reroute it to a later same-TID window. A guest
 `GetMessage`/`PeekMessage` HWND is only a retrieval filter, never external-input
 destination or drop authority. Coordinate-only touch instead selects a live
 capture window or delivery-time desktop hit-test; a blocked-wait/modal HWND is
 only a fallback hint after those checks. Keys select a live focus/active owner,
-not mouse capture.
+not mouse capture. `LegacyUnknown` fixture windows and `SystemDesktop` retain
+numeric compatibility routing; this gate does not prove their reuse isolation.
 
 For this bounded input gate, stale capture must not authorize a recycled
 recipient: a fresh DOWN can use a live coordinate hit-test, while MOVE/UP tied
 to the stale gesture are dropped rather than reassigned. Full capture
 retirement on exit, implicit gesture ownership and owner-filtered host teardown
-remain separate gates. These are source-test policies, not established CE6
+remain separate gates. These are bounded source-tested policies, not established CE6
 implementation parity. The CE-family [GetMessage retrieval-filter description](https://learn.microsoft.com/en-us/previous-versions/ms960724%28v%3Dmsdn.10%29)
 and [SetCapture mouse/stylus description](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms924858%28v%3Dmsdn.10%29)
 inform the boundary but do not verify this emulator's CE6 behavior.
-Broadcast, HWND timers, hotkeys, sent/paint/modal producers, full GWES, and live iNavi acceptance remain open.
+W-B1b passed 27/27 focused controls, a38 release 1,988/0/9 and a39
+no-feature 1,448/0/3 across 18 blocks each, plus a40/a41 feature checks.
+The a33/a34 broad failures on an obsolete hidden-window fixture preceded its
+a35 test repair, a36/a37 focused reruns and the fresh a38 source seal. Mixed
+touch/key ordering, broadcast, HWND timers, hotkeys, sent/paint/modal and other
+input producers, full GWES, and live iNavi acceptance remain open.
+The next mixed-admission-order gate is designed under
+[remote-observability](remote-observability.md); it changes host input
+sequencing, not GWE's per-thread dispatch priority or CE6 callback parity.
 Pre-fix expected-red controls covered explicit HWND post, native ordinals 246/688/690, and an in-slice MIPS self-termination followed by stale creation. The [W-B1a receipt](../../evidence/stage3-window-owner-birth-20261015/validation.receipt.md) seals the corrected source and records the initial failed broad attempt, focused fixes, release 1,967/0/9, no-feature 1,427/0/3, and two passing alternate-feature checks. This is a bounded source gate, not full Stage 3 or live-app acceptance.
 
 ## Failure and lifetime rules

@@ -8,6 +8,74 @@ Status: design-first subsystem plan. [Architecture](../ARCHITECTURE.md) is the s
 
 Status, framebuffer and separate debug keys are published independently. `claim_debug_publish_slot` uses host Instant to throttle publication. No shared epoch, publication-age guarantee or atomic cross-endpoint owner correlation exists. Equal active-before/active-after PID is a bracket observation, not proof against an intervening ABA switch. Current traces are bounded retained histories, not complete execution journals.
 
+### W-B1c mixed touch/key admission order (design gate; not implemented)
+
+The common [A1/A5 anchor](../ARCHITECTURE.md) targets one machine-wide
+accepted-event order. This interim gate changes only the current `CeRemote` →
+`CeKernel` adapter's local touch/key admission order. `CeRemote` currently owns separate touch/key
+FIFOs (`src/ce/remote.rs`); Kernel drains every touch before keys and resolves
+key focus afterward (`src/ce/kernel.rs`). A key accepted while A is focused can
+therefore be posted to B after a later DOWN focuses B. This is a host-admission
+ordering defect, not evidence of CE6 WNDPROC execution order.
+
+Keep one typed FIFO in `CeRemote` as the sole pending touch/key authority. Assign
+one checked, monotonically increasing *per-remote-instance* admission sequence
+to each expanded event when `enqueue_touch` or `enqueue_key` succeeds. A tap's
+DOWN and UP are an atomic, contiguous pair in this order. Preserve the current
+enqueue signatures, control/desktop/monitor/startup producers, per-kind status
+counts, and host-observed `enqueued_at_ms`; sequence, not wall time, orders the
+drain. Invalid input or sequence exhaustion rejects the entire local
+`CeRemote::enqueue_*` call before queue/log mutation; it does not retroactively
+reject an upstream HTTP ACK. Draining consumes each event once. The queue and sequence
+copy with `CeRemote::Clone` as instance-local state; this is not a machine-wide
+checkpoint lineage or globally unique ingress ID.
+
+Kernel's existing active, blocked-wait/modal-hint and explicit-HWND drain
+entrypoints consume this one FIFO in order. For active/hint drains, each key
+resolves live focus then stored active at its own position, replacing today's
+once-per-drain key-target snapshot. The explicit-HWND drain still targets both
+keys and touches to its supplied HWND, subject to per-event live-owner checks.
+Each touch retains W-B1b capture/hit-test, exact-Birth validation,
+stale-orphan/drop and owner-qualified post/wake rules. An explicit stale target
+still consumes/drops, without rerouting a later event.
+The per-event trace follows admission order; the existing target-thread list
+retains first-occurrence order with duplicate thread IDs omitted, and the
+remote control drain retains its existing `handled` count. Preserve the
+existing `Message.time_ms` projection for now; host wall time can tie or move
+backward, and a tap's synthetic UP is stamped 80 ms after DOWN even though both
+are admitted together. [O-C5](../DECISIONS.md) remains open: this gate neither
+sorts by timestamp nor chooses the future guest-time policy.
+
+Current producers are HTTP pending-control dispatch through Kernel, host
+desktop polling, and monitor/startup enqueues; Get/Peek, host blocked-wait and
+active-window paths are drain consumers. Existing type-specific drain methods
+are used only by Kernel and tests and must be retired, not left as a second
+reordering route. Per-kind HTTP status fields and logging remain observations,
+not routing authority. HTTP and desktop have separate upstream ingress paths:
+this gate proves touch/key order *after admission to CeRemote*, not physical
+arrival order across those sources, cross-thread WNDPROC return order, or a
+coherent snapshot. NMEA/serial controls can take effect during HTTP batch
+dispatch while touch/key are posted after the batch, so cross-device order is
+also unproved. Current unbounded `CeRemote` input capacity and HTTP
+backpressure/oldest-control eviction are separate remote-boundary work; do not
+add a silent drop to this gate.
+
+Test first with a real Birth-owned A/B fixture: focus A, enqueue key(A), then
+DOWN at B, drain once, and require key post/trace to A before DOWN post/trace
+to B, with B focused afterward under the current emulator's drain-time
+`WM_LBUTTONDOWN` focus mutation. That mutation is existing local policy, not
+CE6 focus/activation parity. Preserve the pre-fix red as evidence. Add a
+key(A) → DOWN(B) → key(B) control to prove per-key target resolution, plus
+reverse/interleaved, tap-pair, invalid/overflow atomicity, per-kind count,
+explicit stale HWND with both touch and key consumed/dropped without effects,
+and no-live-target controls. Run the W-B1b focused set,
+full release and no-feature suites, and Unicorn-only/desktop-without-trace
+checks on sealed source. A source pass is not a live iNavi tap or latency
+result; the next separately approved mounted run must re-verify guest tap
+delivery under the changed routing. Owner-filtered teardown, implicit gesture
+ownership and host `GetMessage(NULL)` wake without an HWND remain separate
+gates.
+
 ## Target responsibilities and interfaces
 
 Host transport may validate request shape, enforce bounds/authentication, assign ingress identity and queue an owned event. It must not modify guest task/window/device state on server threads, advance guest time, force a readiness event or choose a runnable task. CeMachine, under the anchor's shared event/time rules, is the single application/consumption authority. Application-defined addresses remain guest addresses interpreted only by the address-space/API boundary, never transport pointers.

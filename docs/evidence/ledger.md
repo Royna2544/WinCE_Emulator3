@@ -1573,6 +1573,42 @@ holds all raw logs, exact commands, attempt hashes and limits. Broadcast,
 HWND timers, hotkeys, sent/paint/modal paths, remote input, host teardown,
 full Stage 3 and live iNavi acceptance remain open.
 
+## W-B1b Remote touch/key window-owner source gate (2026-10-15, executed)
+
+Preserved test-first controls exposed stale explicit HWND touch/key reaching a
+reused TID, stale capture/focus and filter/hint routing, and coordinate-only
+events being lost instead of hit-testing the live window. Early tests that
+treated a guest filter or host hint as an explicit target were corrected and
+are not acceptance oracles. The corrected
+input-only path checks each selected Window's frozen birth before focus,
+input-state, FIFO/status/time/post-trace or wake effects. Explicit stale host
+targets consume/drop without replay; coordinate touch resolves live capture
+or delivery-time hit-test, blocked-wait/modal HWNDs remain fallback hints, and
+keys resolve live focus/active ownership rather than mouse capture. Focused
+controls passed **27/27**.
+
+The earlier a14 release pass was diagnostic-only because it still used those
+invalid routing oracles. Broad a33 release and diagnostic a34 no-default both exited 101 on the old
+`blocked_get_message_wait_wakes_when_remote_input_is_drained` fixture: its
+hidden, zero-rect legacy HWND could no longer be a valid input target. The
+a35 test-only repair used a visible, enabled Birth-owned window containing
+the touch point; named a36/a37 focused checks passed before the fresh a38
+source seal. Those failed broad attempts are retained, not counted as passes.
+
+The pre-run `seal-a38-source.md` SHA-256 is
+`08080D5382DF17C8825940EF05C294AE13F4C5451652CA49AC691D09477C4995`.
+Its base `413947b3` binary patch `seal-a38-source.patch` SHA-256 is
+`ED7A3B48DD9272F9E139DB883BCE5093661E443AEE7BE0684D35E576FA962D40`;
+the sealed kernel, GWE and integration-test file hashes remained unchanged
+through the final matrix despite the later backup HEAD. Release a38 passed
+**1,988/0/9** and no-default a39 **1,448/0/3**, each across 18 result
+blocks; Unicorn-only a40 and Unicorn/desktop no-trace a41 checks passed.
+The [receipt](../../evidence/stage3-window-input-birth-20261015/validation.receipt.md)
+holds raw attempts, commands, hashes and limits. Mixed touch/key ordering,
+full exit capture retirement, implicit gesture ownership, owner-filtered host
+teardown, remaining producers, CE6 implementation parity, full Stage 3 and
+live iNavi acceptance remain open.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
