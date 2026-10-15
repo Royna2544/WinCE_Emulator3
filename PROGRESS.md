@@ -48,6 +48,19 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- Bounded D-011 stopped host-exit framebuffer preflight/recovery source/test
+  gate ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
+  an exact-birth exit now validates every saved window backing against the
+  destination before changing windows, backing, sends, waits or process state.
+  A malformed/mismatched backing or missing destination returns a typed
+  recovery error; the stopped active, parked or pending CPU/launch remains
+  owned, and the live/monitor paths do not run another slice through that
+  refusal. The behavioral red was 2/2; corrected focused scheduler controls
+  passed 4/4 after an initial fixture error. Final 18-block suites passed
+  release **2,092/0/9 ignored** and no-default **1,509/0/3 ignored**;
+  alternate feature, format and diff checks passed. This does not prove
+  canonical Task/VM retirement after a root pseudo signal or atomicity of
+  every later exit effect. No live iNavi run was made.
 - Bounded guest pseudo-exit caller-birth source/test gate
   ([receipt](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)):
   native COREDLL and decoded self-exit now require the captured live caller
@@ -57,9 +70,9 @@ result. The per-slice text before this condense is at
   The 18-block suites passed release **2,081/0/9 ignored** and no-default
   **1,502/0/3 ignored**, with two alternate native feature checks green. The
   tiny-MIPS negative missing-birth case is refused before guest entry;
-  immediate CPU stop, Task retirement, root return-stub caller authority,
-  and whole-exit D-011 framebuffer recovery remain open. No live iNavi run
-  was made.
+  immediate CPU stop, Task retirement and root return-stub caller authority
+  remained open; D-011 framebuffer refusal is covered only by the later
+  bounded gate above. No live iNavi run was made.
 - Bounded host-exit exact-window-set source/test gate
   ([receipt](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)):
   GWES now retires only live windows selected by frozen process birth on

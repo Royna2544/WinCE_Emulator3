@@ -99,9 +99,13 @@ Refreshed on 2026-10-15. This file lists unresolved behavior only; resolved entr
     [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
     now checks captured guest caller birth and native owner lease, with
     release **2,081/0/9 ignored** and no-default **1,502/0/3 ignored**.
-    Full host teardown remains open: D-011 whole-exit framebuffer
-    preflight/recovery is unimplemented, and immediate pseudo-exit native CPU
-    stop/Task retirement, CE6 foreign-link topology, direct WndProc,
+    The bounded [D-011 framebuffer gate](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+    now refuses un-restorable saved backings before stopped-exit effects and
+    retains active/parked/pending ownership for recovery; release
+    **2,092/0/9 ignored** and no-default **1,509/0/3 ignored** passed.
+    Full host teardown remains open: failures after preflight are not proven
+    whole-exit atomic, and immediate pseudo-exit native CPU stop/canonical
+    Task/VM retirement, CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin
     device broadcasts are not established. No live-app or CE6 parity follows.
   - W-B1c does not establish physical arrival order across HTTP and desktop

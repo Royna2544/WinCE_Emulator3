@@ -35,9 +35,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      sender cleanup and the bounded
      [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
      and [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md):
-     implement D-011's strict stopped-exit framebuffer preflight and recovery
-     before any mutation, prove native self-exit CPU/Task retirement, and
-     settle foreign-link topology under O-G4.
+     [D-011's bounded framebuffer gate](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
+     now stops before mutation when a saved backing cannot restore. Next,
+     prove native self-exit CPU/Task/VM retirement, handle failures after
+     successful preflight without claiming whole-exit atomicity, and settle
+     foreign-link topology under O-G4.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
      Full exit capture retirement and implicit gesture ownership need their
