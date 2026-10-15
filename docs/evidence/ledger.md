@@ -1661,7 +1661,7 @@ driver/monitor death immediately after spawn or external writes after the
 last mount scan. Splash/map readiness, boot time, guest response lag and the
 current build's live memory footprint are still unmeasured.
 
-## Aborted prelaunch backup, withdrawn approval and script-only reseal (2026-10-15, no app run)
+## Aborted prelaunch backup, withdrawn approval and watchdog source candidate (2026-10-15, no app run)
 
 Approval `call_9b35e9d31fdf402ea082a3eb6a40ae16` was verified at
 02:50:21Z for one backup/run workflow. The adjacent backup began at 02:55:00Z
@@ -1692,7 +1692,7 @@ required before **any** further backup or launch.
 The backup and runner JSON overwrite defects were captured by
 [expected-red controls](../../evidence/stage3-live-evidence-20261015/atomic-json-overwrite-expected-red-receipt.md)
 and then closed by the [green offline control](../../evidence/stage3-live-evidence-20261015/atomic-json-overwrite-green-receipt.md).
-The current [22-file a02 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
+The now-historical [22-file a02 source seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
 has SHA-256 `1DC1537217C621EBD1B8C2D5E682C50B9CFA6FA131D22CC3202F54C7C5651F97`;
 its full W-B1c-scoped [patch](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-full-scoped.patch)
 has SHA-256 `8CF8CA60072D4F0ECDA8B21D5400A6B00F25344671D8082E374145F19CDAD18C`.
@@ -1704,8 +1704,9 @@ records **123/123 preflight, 40/40 runner, 14/14 backup, 9/9 observer** and
 green atomic overwrite controls. The previously sealed 11 Rust/Cargo files
 and `.gitattributes` match the clean-build source; the same preserved EXE/PDB
 and RSDS are carried forward, **without a Rust rebuild**. The earlier 21-file
-seal and 97/40/14/9 controls above remain historical; the interim a01 seal
-is superseded and **not live-usable**. The
+seal and 97/40/14/9 controls above remain historical; both a01 and a02 are
+superseded and **not live-usable** after the independent watchdog source
+change. The
 [withdrawn-ZIP cross-row receipt](../../evidence/stage3-live-evidence-20261015/withdrawn-zip-conflict-red-green-receipt.md)
 preserves an expected-red log (SHA-256
 `DB936FA73ABD15C757259A59A6B683FE29105D34B36A62838A5455CAE5DE2505`):
@@ -1713,12 +1714,30 @@ three false accepts shared a withdrawn ZIP with earlier/later historical rows
 or another withdrawal. A02 rejects those conflicts with `LEDGER_INVALID` and
 requires withdrawal evidence to contain exactly path and hash. Build-bridge
 pass flags are attestations linked to preserved Rust and script receipts, not
-a new binary test execution or live-app acceptance. No fresh Claude review of
-the a02 seal was available because that session reached its limit; this is
-not a waived review or new run authorization.
+a new binary test execution or live-app acceptance. Claude's a02 review was
+unavailable at that session limit; this is not a waived review or new run
+authorization.
 The [a02 source/build receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-build-receipt.md)
 records the per-file/binary hashes, actual-ledger and synthetic-bridge checks,
 and the remaining prelaunch conditions together.
+
+The later runner candidate closes the observed post-spawn/pre-descriptor
+containment gap with an independent `WatchdogWorker`. The driver starts and
+identity/heartbeat-checks that worker before publishing `launch-request.json`.
+After the monitor records the post-mount-scan marker, the watchdog has a
+355-second monotonic deadline even if a subsequent ledger or descriptor write
+stalls. It probes exact-app RSS and combined raw logs at two-second intervals,
+attempts exact monitor/app cleanup on deadline or worker error, and leaves the
+existing detached monitor's 390-second guard intact. The driver's missing-
+descriptor finalizer also performs exact cleanup while the monitor is alive;
+an unconfirmed cleanup leaves the independent watchdog active. No broad
+process-name kill is used. Offline candidate controls reached **123/123
+preflight, 66/66 runner, 14/14 backup, 9/9 observer**, plus atomic overwrite
+greens. A small exact-path matching correction still awaits final recheck and
+the a03 source/build seal. Claude's read-only review of the watchdog candidate
+identified no concrete launch blocker, but is not live dead-driver
+integration proof or permission to run. There has been no second real backup,
+runner reservation, guest launch or guest write from this workflow.
 
 ## Chat-project validation notes (not in this repository)
 

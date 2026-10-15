@@ -2,13 +2,16 @@
 
 Status: host-workflow design and source-only safety gate, with one **aborted
 prelaunch backup** recorded below. It did not produce a complete three-mount
-backup or launch the runner/guest. The current scripts have a
+backup or launch the runner/guest. The pre-watchdog scripts had a
 [22-file a02 seal](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-source-seal.json)
 and [script-only build bridge](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a02-build-bridge.json);
 the earlier [21-file preparation gate](../../evidence/stage3-live-evidence-20261015/final-source-build-seal-receipt.md)
-is historical, not the current script identity. Interim a01 is superseded and
-not live-usable. No fresh Claude review of a02 was available because that
-session reached its limit. Neither gate establishes full CE6 bring-up.
+is historical, not the current script identity. A02 and interim a01 are
+superseded and not live-usable after the independent watchdog source change.
+The new candidate awaits final offline recheck and an a03 source/build seal.
+Claude's read-only review found no concrete launch blocker, but is not a live
+dead-driver integration test or run approval. Neither gate establishes full
+CE6 bring-up.
 
 The [common anchor](../ARCHITECTURE.md) A1, A5 and A6 owns guest authority,
 time and evidence semantics; the [migration plan](../PLAN.md) owns runtime
@@ -25,8 +28,8 @@ the manifest's SHA-256 together with the exact source seal, build receipt,
 preserved EXE/PDB pair, configuration/app hashes, three new backup ZIP hashes,
 approval citation and run caps. The [pure preflight core](../../scripts/inavi_run_preflight_core.ps1)
 validates this structure; the [runner](../../scripts/inavi_bounded_e22.ps1)
-re-reads and rehashes it under the launch monitor's lock. In the current
-source-only gate, the current seal enumerates 22 required source files and a
+re-reads and rehashes it under the launch monitor's lock. In the historical
+a02 source-only gate, its seal enumerated 22 required source files and a
 full W-B1c-scoped patch; the preserved release EXE and PDB share an RSDS
 GUID+age and are outside disposable `target/`. The bridge binds the repaired
 scripts to that unchanged [clean-built binary](../../evidence/stage3-live-evidence-20261015/telemetry-broad-a03-clean-build-receipt.md);
@@ -155,19 +158,28 @@ three expected-red-then-green cross-row ZIP conflicts: a withdrawn ZIP cannot
 also appear in an earlier/later historical row or another withdrawal
 ([receipt](../../evidence/stage3-live-evidence-20261015/withdrawn-zip-conflict-red-green-receipt.md)).
 
-Once `Start-Process` returns, the monitor holds the process object. A
-post-spawn identity/spend/descriptor failure closes that held object before
-the error propagates. It writes a pre-spend `spawned-process.json` and then
-an active `process.json` after the spent append. The detached monitor enforces
-390 seconds, 2 GiB working-set and 512 MiB **combined** raw stdout/stderr
-caps, sampling memory every two seconds. The driver verifies PID plus start
-time, monitors heartbeat, sends abort requests, and uses an exact-identity
-kill if the monitor is dead or stalled. If a descriptor is missing, guarded
-fallbacks use the pre-spend record or the unique framebuffer-output argument
-plus executable path and start window; no process-name-wide kill is allowed.
-Those paths are offline-tested, but simultaneous driver and monitor death in
-the tiny post-spawn/pre-descriptor interval remains a residual orphan risk
-([offline gate](../../evidence/stage3-live-evidence-20261015/final-offline-safety-gate-receipt.md)).
+The runner candidate now starts a separate `WatchdogWorker` before the launch
+request; the driver verifies its PID/start identity and fresh heartbeat first.
+The monitor publishes a post-mount-scan marker. From that monotonic marker the
+watchdog enforces a 355-second deadline independently of a stalled
+post-`Start-Process` ledger or descriptor write, and checks exact-app RSS and
+combined raw stdout/stderr size every two seconds against 2 GiB and 512 MiB
+caps. It uses a verified spawned-process record or unique framebuffer-output
+argument plus executable path and start window for exact cleanup, including
+monitor cleanup; no process-name-wide kill is allowed. Worker exceptions
+attempt exact cleanup and record failure. The detached monitor also retains
+its 390-second/2-GiB/512-MiB guards, and the driver checks both workers'
+heartbeats and exact identities. Once `Start-Process` returns, the monitor
+holds the process object; a throwing post-spawn identity/spend/descriptor
+commit closes it before propagating the error. It writes a pre-spend
+`spawned-process.json` and then an active `process.json` after the spent
+append. The driver's no-descriptor finalizer now attempts exact pre-descriptor
+cleanup even if the monitor is still alive, leaving the independent watchdog
+active when that cleanup cannot be confirmed. The earlier driver/monitor-only
+post-spawn gap is therefore addressed in source and offline controls, not yet
+in a live dead-driver integration run. Simultaneous loss of all containment
+workers, or an operating-system failure preventing them from running, remains
+a residual risk.
 
 ## Observation and terminal evidence
 
@@ -203,7 +215,7 @@ filenames requested on the command line are not terminal artifacts.
 | Prelaunch backup aborts and approval is withdrawn | Retain the failure, incomplete manifest and any verified ZIP as evidence; record a deny-only `withdrawn` row. Do not complete or reuse that triplet. Obtain a new approval before another backup. |
 | Reservation exists but launch is not proved | Deny retry. Investigate exact monitor/process evidence and require independent confirmed-no-spawn reconciliation; do not infer it from a missing descriptor. |
 | Spawn or post-spawn spend/descriptor commit fails | Attempt failure; close the held process and preserve partial ledger plus cleanup evidence. Treat uncertain termination as unresolved. |
-| Watchdog, RSS/log cap, driver/worker failure, guest CPU exception, unexplained PC zero or nonzero/early exit | Failed or incomplete workload, never a clean CE exit or map-readiness result. Preserve crash/native and containment evidence. |
+| Either watchdog, RSS/log cap, driver/worker failure, guest CPU exception, unexplained PC zero or nonzero/early exit | Failed or incomplete workload, never a clean CE exit or map-readiness result. Preserve crash/native and containment evidence. |
 | First-frame/horizon/GET or terminal-artifact coverage is incomplete | Observation failure even if the app exits zero; report the missing interval or artifact, not an inferred frame. |
 | Runner exits zero with complete evidence | Only a bounded harness result. Inspect actual frame, input-consumption, native-outcome and phase-matched memory/lag evidence before making any boot or bring-up claim. |
 
