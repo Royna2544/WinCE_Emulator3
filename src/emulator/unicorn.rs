@@ -2369,15 +2369,12 @@ impl UnicornMips {
                     && callout.return_pc == *pc
                     && callout.send_thread_id.is_some()
                     && callout.send_timeout_result_ptr.is_none()
-                    && callout
-                        .resume_import
-                        .as_ref()
-                        .is_some_and(|resume| {
-                            resume.import_pc == *pc
-                                && resume.thread_id == self.current_thread_id
-                                && self.saved_context_thread_birth == Some(resume.thread_birth)
-                                && resume_import_has_live_birth(kernel, resume)
-                        })
+                    && callout.resume_import.as_ref().is_some_and(|resume| {
+                        resume.import_pc == *pc
+                            && resume.thread_id == self.current_thread_id
+                            && self.saved_context_thread_birth == Some(resume.thread_birth)
+                            && resume_import_has_live_birth(kernel, resume)
+                    })
             })
         }) else {
             return false;
@@ -3150,6 +3147,75 @@ impl UnicornMips {
             })
     }
 
+    /// A parked sender's saved import PC is not a runnable instruction. While
+    /// every other native task in this process is inside an unexpired, exact
+    /// finite Sleep frame, there is no CPU continuation to enter. Return the
+    /// nearest deadline so the host can idle briefly without replaying Send.
+    #[cfg(feature = "unicorn")]
+    fn blocked_sender_finite_sleep_idle_delay_ms(&self, kernel: &CeKernel) -> Option<u32> {
+        if self.running_guest_thread.is_some()
+            || self.saved_context.is_none()
+            || self.saved_context_thread_birth
+                != kernel.handles.thread_birth_key_by_id(self.current_thread_id)
+            || self.suspended_guest_thread.is_some()
+            || !self.suspended_guest_thread_queue.is_empty()
+            || !self.self_suspended_guest_threads.is_empty()
+            || self.blocked_guest_thread.is_some()
+            || !self.displaced_blocked_get_messages.is_empty()
+            || self.blocked_modal_message_box.is_some()
+            || self.blocked_popup_menu_modal.is_some()
+            || self.blocked_send_message_timeout.is_some()
+            || self.blocked_clipboard_data.is_some()
+            || !self.pending_wndproc_returns.is_empty()
+            || !self.pending_guest_thread_returns.is_empty()
+        {
+            return None;
+        }
+
+        let sender = self.blocked_wait_threads.iter().find(|wait| {
+            wait.thread_id == self.current_thread_id
+                && matches!(wait.kind, BlockedWaitKind::SendMessage { .. })
+        })?;
+        let BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id,
+            ..
+        } = sender.kind
+        else {
+            return None;
+        };
+        if sender.timeout_ms != crate::ce::timer::INFINITE
+            || verified_native_send_wait_birth(kernel, sender).is_none()
+            || kernel.sent_message_result_ready(send_id)
+        {
+            return None;
+        }
+        let sent = kernel.gwe.sent_message(send_id)?;
+        if sent.timeout_ms.is_some() || sent.receiver_thread_id != receiver_thread_id {
+            return None;
+        }
+
+        let now_ms = kernel.timers.tick_count();
+        let mut next_delay = None::<u32>;
+        for wait in &self.blocked_wait_threads {
+            if wait.wait_id == sender.wait_id {
+                continue;
+            }
+            if wait.thread_id != receiver_thread_id
+                || !matches!(wait.kind, BlockedWaitKind::Sleep)
+                || wait.frame_ref.is_none()
+                || verified_native_blocked_wait_birth(kernel, wait).is_none()
+                || blocked_wait_timed_out(wait, now_ms)
+            {
+                return None;
+            }
+            let elapsed = now_ms.wrapping_sub(wait.wait_started_ms);
+            let remaining = wait.timeout_ms.saturating_sub(elapsed);
+            next_delay = Some(next_delay.map_or(remaining, |prior| prior.min(remaining)));
+        }
+        next_delay
+    }
+
     #[cfg(not(feature = "unicorn"))]
     pub fn complete_active_process_thread_exit_with_framebuffer(
         &mut self,
@@ -3199,7 +3265,20 @@ impl UnicornMips {
         {
             return false;
         }
-        let Some(message) = kernel.take_ready_sent_message_w_filtered(thread_id, None, 0, 0) else {
+        let Some((send_id, _message, deferred_from_sleep_frame)) = kernel
+            .peek_ready_sent_message_w_filtered_with_sleep_frame(thread_id, None, 0, 0)
+        else {
+            return false;
+        };
+        // A finite-Sleep send remains queued even after its frame retires.
+        // Only T's actual message-retrieval import may activate it; this
+        // pre-run helper has no evidence that such an instruction occurred.
+        if deferred_from_sleep_frame.is_some() {
+            return false;
+        }
+        let Some(message) = kernel.take_ready_sent_message_w_filtered_if_id(
+            thread_id, None, 0, 0, send_id,
+        ) else {
             return false;
         };
         let Some(window) = kernel
@@ -7875,6 +7954,26 @@ impl UnicornMips {
             && self.rotate_to_next_parked_process(kernel)
         {
             tracing::debug!(target: "ce.gwe", "run entry rotated to next runnable parked process");
+            self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+            return Ok(());
+        }
+
+        if !active_has_receiver
+            && !active_has_visible_queued_receiver
+            && let Some(delay_ms) = self.blocked_sender_finite_sleep_idle_delay_ms(kernel)
+        {
+            // TimerSystem's tick_count already includes real host elapsed
+            // time. Do not add this delay again as virtual Sleep time.
+            let host_idle_ms = u64::from(delay_ms).min(limits.wall_clock_limit_ms).min(10);
+            if host_idle_ms != 0 {
+                std::thread::sleep(Duration::from_millis(host_idle_ms));
+            }
+            tracing::debug!(
+                target: "ce.scheduler",
+                sender_thread_id = self.current_thread_id,
+                host_idle_ms,
+                "idle blocked sender until finite Sleep receiver can resume"
+            );
             self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
             return Ok(());
         }
@@ -36667,6 +36766,9 @@ mod wait_scheduler_tests {
         .unwrap();
 
         let receiver_thread = super::MAIN_GUEST_THREAD_ID;
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("receiver birth");
         let sender_thread = 17;
         let import_pc = 0x7fff_2990_u32;
         let wndproc = 0x0001_2570_u32;
@@ -36728,6 +36830,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: receiver_thread,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(receiver_thread)
+                        .expect("receiver birth"),
                     running_thread: Some((
                         receiver_thread,
                         crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
@@ -36777,6 +36882,7 @@ mod wait_scheduler_tests {
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             import_pc,
             receiver_thread,
+            Some(receiver_birth),
             &pending_returns,
         ));
 
@@ -36794,6 +36900,108 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn escaped_get_message_does_not_complete_reused_thread_birth() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let receiver_thread = 17;
+        let old_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, receiver_thread, 0x0040_3000, 0, false)
+            .expect("old receiver");
+        let old_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("old receiver birth");
+        assert!(kernel.mark_guest_thread_exited_by_id(receiver_thread, 0));
+        kernel.close_handle(old_handle).expect("close old receiver");
+        let _new_handle = kernel
+            .handles
+            .try_create_thread_in_birth(owner, receiver_thread, 0x0040_4000, 0, false)
+            .expect("replacement receiver");
+        let new_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("replacement receiver birth");
+        assert_ne!(old_birth, new_birth);
+
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "ReusedSendTarget", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                super::MAIN_GUEST_THREAD_ID,
+                hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send to replacement");
+        assert!(kernel.gwe.activate_sent_message_for_receiver(receiver_thread, send_id));
+        let import_pc = 0x7fff_2990;
+        let return_sp = 0x7ffd_f160;
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(vec![
+            super::PendingWndProcReturn {
+                source: "GetMessageW/SentMessage",
+                hwnd,
+                msg: crate::ce::gwe::WM_USER + 1,
+                wparam: 0,
+                lparam: 0,
+                typed_payload_owner: None,
+                wndproc: 0x0040_5000,
+                return_pc: import_pc,
+                return_sp,
+                caller_regs: None,
+                class_name: Some("ReusedSendTarget".to_owned()),
+                api_result: None,
+                dialog_result_hwnd: None,
+                finalize_destroy: false,
+                destroy_root_hwnd: None,
+                remaining_destroy_callouts: Vec::new(),
+                send_thread_id: Some(receiver_thread),
+                send_timeout_result_ptr: None,
+                send_restore: None,
+                continuation: None,
+                resume_import: Some(super::ResumeImportAfterWndProc {
+                    thread_id: receiver_thread,
+                    thread_birth: old_birth,
+                    running_thread: Some((receiver_thread, old_handle)),
+                    regs: super::MipsGuestContext::zero(),
+                    import_pc,
+                }),
+                clear_focus_after_return: None,
+            },
+        ]));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::PC, u64::from(import_pc))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::SP, u64::from(return_sp))
+            .unwrap();
+        uc.reg_write(
+            unicorn_engine::RegisterMIPS::RA,
+            u64::from(super::WNDPROC_RETURN_STUB_ADDR),
+        )
+        .unwrap();
+
+        assert!(!super::complete_escaped_get_message_sent_callout(
+            &mut kernel,
+            &mut uc,
+            &super::SealedHostWriteGuard::default(),
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
+            import_pc,
+            receiver_thread,
+            Some(new_birth),
+            &pending_returns,
+        ));
+        assert_eq!(pending_returns.borrow().len(), 1);
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert!(kernel.gwe.in_send_message(receiver_thread));
+        assert_eq!(kernel.take_completed_send_message_result(send_id), None);
+    }
+
+    #[test]
     fn nested_get_message_does_not_complete_sent_wndproc_callout() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -36804,6 +37012,9 @@ mod wait_scheduler_tests {
         .unwrap();
 
         let receiver_thread = super::MAIN_GUEST_THREAD_ID;
+        let receiver_birth = kernel
+            .live_thread_birth_key_by_id(receiver_thread)
+            .expect("receiver birth");
         let sender_thread = 17;
         let import_pc = 0x7fff_2990_u32;
         let wndproc = 0x0001_2570_u32;
@@ -36851,6 +37062,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: receiver_thread,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(receiver_thread)
+                        .expect("receiver birth"),
                     running_thread: Some((
                         receiver_thread,
                         crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
@@ -36879,6 +37093,7 @@ mod wait_scheduler_tests {
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             import_pc,
             receiver_thread,
+            Some(receiver_birth),
             &pending_returns,
         ));
 
@@ -39050,6 +39265,11 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
         let active_thread_id = 7;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _ = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cd98, 0, false)
+            .expect("active thread");
         let active_thread_handle = 0x107;
         let receiver_thread_id = super::MAIN_GUEST_THREAD_ID;
         let receiver_process_id = 1;
@@ -39068,6 +39288,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs.clone(),
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
 
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: receiver_process_id,
@@ -39176,6 +39397,11 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
         let active_thread_id = 3;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _ = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cd98, 0, false)
+            .expect("active thread");
         let receiver_thread_id = 1;
         let receiver_process_id = 1;
         let active_process_id = 67;
@@ -39192,6 +39418,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs,
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
 
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: receiver_process_id,
@@ -39265,6 +39492,7 @@ mod wait_scheduler_tests {
                 pc: active_pc,
                 regs,
             });
+            scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(1);
             if active_orphan {
                 scheduler.last_debug = Some(super::UnicornDebugSnapshot {
                     pc: GUEST_THREAD_RETURN_STUB_ADDR,
@@ -39359,6 +39587,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs.clone(),
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
 
         kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
             process_id: receiver_process_id,
@@ -39447,6 +39676,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs.clone(),
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
 
         let hwnd = kernel.create_window_ex_w(
             active_thread_id,
@@ -39515,6 +39745,7 @@ mod wait_scheduler_tests {
             pc: active_pc,
             regs: active_regs,
         });
+        scheduler.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(active_thread_id);
         scheduler
             .pending_wndproc_returns
             .push(super::PendingWndProcReturn {
@@ -39623,6 +39854,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: active_thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(active_thread_id)
+                        .expect("active birth"),
                     running_thread: Some((active_thread_id, 0x41)),
                     regs: stale_regs,
                     import_pc: return_pc,
@@ -39878,6 +40112,11 @@ mod wait_scheduler_tests {
         // stop-snapshot candidates count as post-push escape evidence.
         scheduler.run_slice_generation = 1;
         let active_thread_id = 7;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _ = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cf80, 0, false)
+            .expect("active thread");
         let active_pc = 0x0031_cf80;
         let return_sp = 0x7ffb_f5f8;
         let wndproc = 0x6004_f0f4;
@@ -39933,6 +40172,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: active_thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(active_thread_id)
+                        .expect("active birth"),
                     running_thread: Some((active_thread_id, 0x107)),
                     regs: active_regs.clone(),
                     import_pc: active_pc,
@@ -39959,6 +40201,11 @@ mod wait_scheduler_tests {
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut scheduler = super::UnicornMips::new().unwrap();
         let active_thread_id = 16;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _ = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cf80, 0, false)
+            .expect("active thread");
         let active_pc = crate::emulator::imports::IMPORT_TRAP_BASE
             + crate::emulator::imports::IMPORT_TRAP_STRIDE;
         let return_sp = 0x7fe5_f290;
@@ -39995,6 +40242,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: active_thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(active_thread_id)
+                        .expect("active birth"),
                     running_thread: Some((active_thread_id, 0x10ac)),
                     regs: super::MipsGuestContext::zero(),
                     import_pc: active_pc,
@@ -40016,6 +40266,11 @@ mod wait_scheduler_tests {
         // stop-snapshot candidates count as post-push escape evidence.
         scheduler.run_slice_generation = 1;
         let active_thread_id = 16;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        let _ = kernel
+            .handles
+            .try_create_thread_in_birth(owner, active_thread_id, 0x0031_cf80, 0, false)
+            .expect("active thread");
         let return_pc = crate::emulator::imports::IMPORT_TRAP_BASE
             + crate::emulator::imports::IMPORT_TRAP_STRIDE;
         let wndproc = 0x6004_f0f4;
@@ -40057,6 +40312,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: active_thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(active_thread_id)
+                        .expect("active birth"),
                     running_thread: Some((active_thread_id, 0x10ac)),
                     regs: super::MipsGuestContext::zero(),
                     import_pc: return_pc,
@@ -40126,6 +40384,9 @@ mod wait_scheduler_tests {
                 continuation: None,
                 resume_import: Some(super::ResumeImportAfterWndProc {
                     thread_id: active_thread_id,
+                    thread_birth: kernel
+                        .live_thread_birth_key_by_id(active_thread_id)
+                        .expect("active birth"),
                     running_thread: Some((active_thread_id, 0x41)),
                     regs: super::MipsGuestContext::zero(),
                     import_pc: return_pc,
@@ -44085,10 +44346,17 @@ mod guest_thread_stack_tests {
         } else {
             0x0033_9c54
         };
+        if !orphan {
+            let _ = kernel
+                .handles
+                .try_create_thread_in_birth(owner, 7, pc, 0, false)
+                .expect("direct payload active thread");
+        }
         let mut regs = MipsGuestContext::zero();
         regs.regs[16] = 0x1234_5678;
         regs.regs[29] = 0x7ffd_f578;
         cpu.saved_context = Some(SavedCpuContext { pc, regs });
+        cpu.saved_context_thread_birth = kernel.live_thread_birth_key_by_id(cpu.current_thread_id);
         if orphan {
             cpu.last_debug = Some(UnicornDebugSnapshot {
                 pc,
@@ -76912,7 +77180,7 @@ mod unicorn_tests {
             super::UnicornRunLimits {
                 instruction_limit: 128,
                 wall_clock_limit_ms: 500,
-                stop_pc: None,
+                stop_pc: Some(sleep_return_pc),
                 live_pump: true,
             },
         );
@@ -76924,6 +77192,27 @@ mod unicorn_tests {
             kernel.gwe.sent_message_ids_for_windows(&[hwnd]),
             cpu.blocked_wait_threads,
         );
+        assert_eq!(cpu.saved_context_pc(), Some(sleep_return_pc));
+        assert_eq!(
+            cpu.saved_context_thread_birth,
+            Some(receiver_birth),
+            "Sleep return context lost T identity: report={:?}, current={}, running={:?}, native_waits={:?}, last_pc={:?}",
+            wake_attempt.report,
+            cpu.current_thread_id,
+            cpu.running_guest_thread,
+            cpu.blocked_wait_threads,
+            cpu.last_debug_snapshot().map(|snapshot| snapshot.pc),
+        );
+        assert_eq!(cpu.current_thread_id, receiver_thread);
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), send_ids);
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+        assert!(cpu.pending_wndproc_returns.is_empty());
+        assert!(
+            !cpu.prepare_active_sent_message_callout(&mut kernel),
+            "deferred send was activated before T executed GetMessageW"
+        );
+        assert_eq!(kernel.gwe.sent_message_ids_for_windows(&[hwnd]), send_ids);
+        assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
         Ok(())
     }
 
