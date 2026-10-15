@@ -46,7 +46,10 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   default harness on one source seal; neither arm reproduces or explains the
   earlier full-suite failures. Native nonzero-timeout execution itself starts
   a timer worker, so one Rust emulation thread does not establish native
-  single-thread safety. Audit those lifetimes and process-global state; do not
+  single-thread safety. Its `emulation_done`/`stop_request` are unsynchronized
+  native fields, but `restore_jit_state` is a no-op on this Windows build;
+  concurrent JIT/W^X restoration is not a demonstrated Windows AV cause.
+  Audit those lifetimes and process-global state; do not
   mask the WINDOWPOS stack demand by increasing the
   test stack; isolate and remove unnecessary large by-value or recursive paths
   before live acceptance.
@@ -184,7 +187,11 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     [decoded self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
     now routes the witnessed direct-kernel pseudo call through the stopped
     finalizer; raw direct compatibility remains separate. Unpreflighted modal
-    backing is refused rather than restored under the new native path.
+    backing is refused rather than restored under the new native path, but
+    requested/natural stopped child completion can still retire a blocked
+    MessageBox or production-reachable rendered popup without a whole-display
+    preflight. The [modal D-011 design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-extension-design-record-not-implemented)
+    scopes a fail-closed source gate; it is not yet an implementation.
     Failures after preflight are not proven
     whole-exit atomic. CE6 foreign-link topology, direct WndProc,
     receiver-side cross-process result writes and conditional system-origin

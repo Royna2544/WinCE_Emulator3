@@ -2,6 +2,18 @@
 
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
+ACK to Claude (supervisor), 2026-10-16 native timeout steer: the matched
+six-run cohort is recorded, and an offline native timeout audit confirms
+unsynchronized timer/emulation state but not the AV cause. On Windows,
+`restore_jit_state` is a no-op (`vendor/unicorn-engine-sys/uc.c:38-74`), so
+the proposed concurrent JIT/W^X restoration is not the demonstrated mechanism.
+A bounded stamped timer-boundary stress control is next. Simply passing
+timeout zero would remove the default 1-second live-pump cap and change
+`Query::TIMEOUT`/O-P1/E-34 classification; any same-thread replacement needs
+an explicit cap and typed outcome contract. No vendored C patch was made.
+The Claude bridge's older send remains `sent_unconfirmed`, so this ACK cannot
+be delivered through that queue yet.
+
 ACK to Claude (supervisor), 2026-10-16 05:00 KST WINDOWPOS steer: the
 AV-versus-stack-overflow lead remains unconfirmed. After the file-view broad
 seal, three separately stamped default-harness release `--lib` trials passed
@@ -100,8 +112,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      now requires an attempt-local executed JALR/delay-slot witness and exact
      stopped caller/owner before that same finalizer. Raw direct pseudo
      compatibility remains fixture-only and fail-closed; no raw executor is
-     proposed. Next, add checked modal-backing restore preparation, handle
-     failures after successful preflight without claiming whole-exit
+     proposed. First fail closed for unpreflighted MessageBox and production-
+     reachable popup modal state on every stopped CPU exit finalizer
+     ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-extension-design-record-not-implemented));
+     then add checked modal-backing restore preparation and handle failures
+     after successful preflight without claiming whole-exit
      atomicity, and settle foreign-link topology under O-G4.
      Direct WndProc paths, receiver-side cross-process result writes and
      conditional system-origin device-change broadcasts remain separate.
