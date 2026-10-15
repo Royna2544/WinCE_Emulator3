@@ -6191,24 +6191,26 @@ impl UnicornMips {
                         .thread_birth_key_by_id(self.initial_thread_id)
                         == Some(*birth)
             }) else {
-                return Err(Error::Backend(
-                    "stopped boot process exit lacks a verified primary thread birth".to_owned(),
-                ));
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "stopped boot CPU lacks a verified primary thread birth",
+                });
             };
             let Some(expected_birth) = kernel
                 .handles
                 .thread_creation_owner_by_id(primary_birth.thread_id())
             else {
-                return Err(Error::Backend(
-                    "stopped boot process exit lacks a verified process owner".to_owned(),
-                ));
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "stopped boot CPU lacks a verified process owner",
+                });
             };
             if !kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
                 expected_birth,
                 exit_code,
                 framebuffer,
             )? {
-                return Ok(false);
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "selected process does not match the stopped boot CPU owner",
+                });
             }
             self.seal_completed_active_process_cpu();
             let switched = self.try_switch_to_next_parked_process(kernel, false)?;
@@ -18718,7 +18720,7 @@ fn run_pending_process_launches<D>(
             if let Err(error) =
                 child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)
             {
-                if matches!(error, Error::HostExitRecoveryRequired { .. }) {
+                if error.is_host_exit_recovery_required() {
                     return Ok((ChildProcessRunOutcome::RecoveryRequired(error), child));
                 }
                 return Err(error);
@@ -51541,7 +51543,11 @@ mod guest_thread_stack_tests {
         let error = scheduler
             .try_complete_active_process_thread_exit(&mut kernel, Some(&mut framebuffer))
             .expect_err("selected foreign process must not let the boot CPU continue");
-        assert!(matches!(&error, Error::Backend(_)), "{error:?}");
+        assert!(
+            matches!(&error, Error::HostExitAuthorityRecoveryRequired { .. }),
+            "{error:?}"
+        );
+        assert!(error.is_host_exit_recovery_required());
         assert_eq!(kernel.current_process_state(), selected_before);
         assert_eq!(kernel.current_process_id(), foreign_launch.process_id);
         assert!(kernel.handles.process_execution_live_by_birth(boot_birth));

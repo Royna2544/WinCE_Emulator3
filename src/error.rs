@@ -57,8 +57,19 @@ pub enum Error {
         hwnd: Option<u32>,
         reason: &'static str,
     },
+    #[error("stopped process exit requires ownership recovery before CPU resume: {reason}")]
+    HostExitAuthorityRecoveryRequired { reason: &'static str },
     #[error("emulator backend error: {0}")]
     Backend(String),
+}
+
+impl Error {
+    pub fn is_host_exit_recovery_required(&self) -> bool {
+        matches!(
+            self,
+            Self::HostExitRecoveryRequired { .. } | Self::HostExitAuthorityRecoveryRequired { .. }
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
