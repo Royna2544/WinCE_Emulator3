@@ -98,8 +98,11 @@ live-app/CE6 acceptance.
 ### Proposed host-exit exact-window-set gate (design; not implemented)
 
 This Stage 3 cut applies the common [exit-effect ownership](../ARCHITECTURE.md)
-contract to **machine-driven process exit only**. Kernel's verified canonical
-`ProcessBirthKey` remains the exit authority. GWES owns the one live-HWND
+contract to the window-target portion of process exit. The stopped
+`mark_process_launch_exited_*` path verifies a canonical `ProcessBirthKey`;
+the current-process pseudo `terminate_process` path also calls the shared
+cleanup but still needs a captured guest caller lease/frame before its whole
+exit can satisfy the anchor. GWES owns the one live-HWND
 selection and exact-set mutation from each window's frozen creation process
 birth; parent and owner links are not target authority. `LegacyUnknown` with a
 captured process birth remains selectable by that birth, while an unbound
@@ -117,12 +120,18 @@ this cut does not implement whole-machine checkpoint relineage or make a
 cloned key valid in another machine.
 
 At the stopped host-exit boundary, preflight the canonical birth before any
-effect. GWES captures the complete live target set for that birth and retires
-**exactly that set** in one operation, returning the actually retired HWNDs.
-The shared exact-set destructor performs the existing per-target queue/send,
+window effect. GWES captures the complete live target set for that birth and
+retires **exactly that set** in one operation, returning the actually retired
+HWNDs.
+Retirement preserves the existing destroyed-window tombstones. The shared
+exact-set destructor performs the existing per-target queue/send,
 focus/capture and rendering cleanup once; the public recursive destructor may
 reuse that mutation routine only after independently deriving its recursive
-target set. Kernel uses the returned set, not a guessed descendant list, for
+target set at its current GWE call point. Do not freeze that public set before
+Kernel's existing `WM_RENDERALLFORMATS`/`WM_DESTROY` callbacks or omit its
+send wakes and framebuffer behavior. Host exit remains a distinct path with
+no synthesized destroy callbacks. Kernel uses the returned set, not a guessed
+descendant list, for
 payload, shell and timer cleanup and tracing. Kernel's separate frozen-birth
 backing-store list drives restore/discard even for already-dead HWNDs. An
 unknown/mismatched exit birth fails before mutation; no cross-birth parent or
@@ -133,11 +142,14 @@ behavior; do not add callback synthesis or a scheduling policy in this cut.
 Expected-red controls first: strand an A-birth HWND/backing under a recycled
 PID, then create B-birth windows and fixture-only cross-birth **parent** and
 **owner** links from B to A in separate cases. B's real host exit must retire
-B's complete set while A's HWND, frozen owner, backing, queued work, timers
-and typed payloads remain unclaimed. A same-birth child/owned-window exit
+B's complete set while A's HWND, frozen owner, backing, A-targeted queued
+work, timers and typed payloads remain unclaimed. A-authored work targeting a
+B window must still be canceled when that receiver is destroyed. A same-birth
+child/owned-window exit
 control must still retire the full B set, and a normal guest `DestroyWindow`
-control must still recurse through its valid same-birth subtree. Check both
-host exit callers, no-birth refusal and repeated/no-live-target exit; preserve
+control must still recurse through its valid same-birth subtree. Check the
+stopped host-exit path, and separately check the pseudo path's exact target
+selection and no-birth refusal without claiming its caller authority; preserve
 the pre-fix red log and then run focused, full release-feature, no-default and
 alternate-feature checks on a frozen source. Tests prove identity isolation,
 not CE6 permission for a cross-process parent/owner topology.
@@ -146,9 +158,12 @@ not CE6 permission for a cross-process parent/owner topology.
 foreign window's link to a retired parent/owner. An exact-set teardown must
 not silently destroy or reparent that foreign HWND to make the fixture pass;
 its visual visibility after a synthetic invalid link is not a CE6 claim.
-Partial host-exit teardown is not a successful completion: if a future
-preparation step can fail, move it before the first mutation or report the
-irreversible partial effect. This source gate neither accepts full Stage 3
+Partial host-exit teardown is not a successful completion. Currently the
+stopped path mutates windows/backing before its process-completion step can
+still fail, and ignores framebuffer-restore success. This gate records those
+risks and does not claim atomic whole-process exit or framebuffer rollback;
+they need a separate preflight/recovery gate. This source gate neither accepts
+full Stage 3
 nor authorizes a writable-mount iNavi run.
 
 ### Bounded sender-owned send transaction (source-tested)
