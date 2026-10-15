@@ -47,7 +47,7 @@ function Write-JsonAtomic([string]$Path, [object]$Value) {
     try {
         Write-Json $temporary $Value
         if (Test-Path -LiteralPath $Path -PathType Leaf) {
-            [System.IO.File]::Replace($temporary, $Path, $null)
+            [System.IO.File]::Replace($temporary, $Path, [NullString]::Value)
         } else {
             [System.IO.File]::Move($temporary, $Path)
         }

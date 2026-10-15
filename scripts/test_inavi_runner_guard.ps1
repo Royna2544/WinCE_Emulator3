@@ -24,7 +24,12 @@ foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
         'Get-InaviLedgerEvidenceHashes', 'Get-InaviReconciliationProofHashes',
         'Get-InaviHistoricalRunEvidenceHashes',
         'Stop-InaviProcessObject',
-        'Complete-InaviSpawnCommit')) {
+        'Complete-InaviSpawnCommit',
+        'Stop-InaviSpawnedFallback',
+        'Stop-InaviPreDescriptorLaunch',
+        'Test-InaviWatchdogAppCompleted',
+        'Get-InaviWatchdogAction',
+        'Get-InaviWatchdogResourceViolation')) {
     $definition = @($definitions | Where-Object Name -eq $name)
     if ($definition.Count -ne 1) { throw "Expected one pure runner function: $name" }
     . ([scriptblock]::Create($definition[0].Extent.Text))
@@ -277,8 +282,47 @@ Assert-Guard ($observerText.Contains("coverageStatus = 'pending-first-frame'") -
     $observerText.Contains('descriptorOutsideTwoSeconds = $coverageIncomplete')) `
     'pre-frame launch receipt does not claim completed coverage'
 Assert-Guard ($source.Contains('Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks') -and
-    $source.Contains('Stop-InaviSpawnedFallback $runDirectory $monitorProcess $ManifestSha256') -and
-    $source.Contains('Stop-InaviUniqueLaunchFallback $runDirectory')) 'driver checks heartbeat and pre-descriptor exact fallback'
+    $source.Contains('Stop-InaviPreDescriptorLaunch $runDirectory') -and
+    $source.Contains('Stop-InaviSpawnedFallback $Directory $MonitorProcess') -and
+    $source.Contains('Stop-InaviUniqueLaunchFallback $Directory $ExecutablePath $ManifestHash')) `
+    'driver checks heartbeat and pre-descriptor exact fallback'
+Assert-Guard ($source.Contains('$candidateDescriptor = Read-InaviJson') -and
+    $source.Contains('$appDescriptor = $candidateDescriptor') -and
+    $source.Contains('[long]$candidateDescriptor.monitorStartUtcTicks -ne')) `
+    'driver trusts active app identity only after monitor-birth validation'
+Assert-Guard ($source.Contains('[switch]$WatchdogWorker') -and
+    $source.Contains('if ($WatchdogWorker) { Invoke-Watchdog') -and
+    $source.Contains('watchdog-worker-ready.json') -and
+    $source.Contains('watchdog-worker-heartbeat.json')) `
+    'independent watchdog worker has a ready and liveness contract'
+$watchdogLaunchAt = $source.IndexOf("'-WatchdogWorker'", [StringComparison]::Ordinal)
+$launchRequestAt = $source.IndexOf('Write-AtomicJsonFile (Join-Path $runDirectory ''launch-request.json'')', [StringComparison]::Ordinal)
+Assert-Guard ($watchdogLaunchAt -ge 0 -and $launchRequestAt -gt $watchdogLaunchAt) `
+    'independent watchdog starts before launch request'
+$monitorDefinition = @($definitions | Where-Object Name -eq 'Invoke-Monitor')
+if ($monitorDefinition.Count -ne 1) { throw 'Expected one monitor function.' }
+$monitorText = $monitorDefinition[0].Extent.Text
+$reservedAt = $monitorText.IndexOf('Add-InaviDualLedgerEntry $checked.ledgers $reservation', [StringComparison]::Ordinal)
+$spawnAt = $monitorText.IndexOf('Start-Process -FilePath ([string]$manifest.executable.path)', [StringComparison]::Ordinal)
+$abortRecheckAt = $monitorText.IndexOf('Assert-InaviObserverLive $Directory', $reservedAt, [StringComparison]::Ordinal)
+Assert-Guard ($reservedAt -ge 0 -and $abortRecheckAt -gt $reservedAt -and
+    $abortRecheckAt -lt $spawnAt) 'monitor rechecks abort after reservation before spawn'
+$watchdogDefinition = @($definitions | Where-Object Name -eq 'Invoke-Watchdog')
+$watchdogActionDefinition = @($definitions | Where-Object Name -eq 'Get-InaviWatchdogAction')
+Assert-Guard ($watchdogDefinition.Count -eq 1 -and
+    $watchdogActionDefinition.Count -eq 1 -and
+    $watchdogDefinition[0].Extent.Text.Contains('prelaunch-mount-content-scan.json') -and
+    $watchdogDefinition[0].Extent.Text.Contains('Stop-InaviPreDescriptorLaunch') -and
+    $watchdogDefinition[0].Extent.Text.Contains('$anchorTicks = [long]$marker.checkedTicks') -and
+    $monitorText.Contains('checkedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()') -and
+    $watchdogDefinition[0].Extent.Text.Contains('Get-InaviWatchdogAction $anchorTicks $nowTicks') -and
+    $watchdogActionDefinition[0].Extent.Text.Contains('355L * $frequency')) `
+    'watchdog independently bounds the post-scan launch and commit gap'
+Assert-Guard ($watchdogDefinition[0].Extent.Text.Contains('Get-InaviWatchdogObservedApp') -and
+    $watchdogDefinition[0].Extent.Text.Contains('Get-InaviWatchdogResourceViolation') -and
+    $watchdogDefinition[0].Extent.Text.Contains("'independent-watchdog-worker-error'") -and
+    $source.Contains('-OperationTimeoutSec 3')) `
+    'watchdog samples resource caps and cleans up on its own I/O failure'
 Assert-Guard ($source.Contains('$rawLogBytes += (Get-Item -LiteralPath $streamPath).Length') -and
     $source.Contains('if ($rawLogBytes -gt 512MB)')) 'monitor caps combined raw-log bytes'
 $coreSource = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'inavi_run_preflight_core.ps1'))
@@ -287,9 +331,10 @@ $coreAst = [System.Management.Automation.Language.Parser]::ParseInput(
     $coreSource, [ref]$coreTokens, [ref]$coreErrors)
 $coreFunctions = @($coreAst.FindAll({ param($node)
     $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -in @('Get-InaviRequiredSourceFiles', 'Test-InaviCorePath')
+        $node.Name -in @('Get-InaviRequiredSourceFiles', 'Test-InaviCorePath',
+            'Test-InaviCoreSamePath')
 }, $true))
-if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 2) {
+if ($coreErrors.Count -ne 0 -or $coreFunctions.Count -ne 3) {
     throw 'Offline runner guard could not load the shared source-file list.'
 }
 foreach ($coreFunction in $coreFunctions) {
@@ -298,8 +343,9 @@ foreach ($coreFunction in $coreFunctions) {
 $requiredFiles = @(Get-InaviRequiredSourceFiles)
 Assert-Guard ($source.Contains('foreach ($relative in (Get-InaviRequiredSourceFiles))') -and
     $coreSource.Contains('$requiredSourceFiles = @(Get-InaviRequiredSourceFiles)') -and
-    $requiredFiles.Count -eq 21 -and '.gitattributes' -in $requiredFiles -and
-    'scripts/test_inavi_runner_guard.ps1' -in $requiredFiles) 'worker and validator use one 21-file source map'
+    $requiredFiles.Count -eq 22 -and '.gitattributes' -in $requiredFiles -and
+    'scripts/test_inavi_runner_guard.ps1' -in $requiredFiles -and
+    'scripts/test_atomic_json_overwrite.ps1' -in $requiredFiles) 'worker and validator use one 22-file source map'
 
 $repository = 'D:\GitHub\Wince_emulation_v3'
 $emptyProofs = Get-InaviReconciliationProofHashes @(@{ state = 'reserved' }) $repository
@@ -367,5 +413,173 @@ Assert-Guard ($source.Contains('$observed.observation.verifiedReconciliationProo
 Assert-Guard ($source.Contains('$observed.observation.verifiedHistoricalRunEvidenceSha256 =') -and
     $source.Contains('Get-InaviHistoricalRunEvidenceHashes $ledgers.local $Repository')) `
     'worker independently hashes named historical receipts before core decision'
+
+# The independent watchdog's exact-identity decision is exercised with tiny
+# synthetic descriptors. No real process, mount, ledger or app is touched.
+$watchdogScratchParent = [System.IO.Path]::GetFullPath(
+    [System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+$watchdogScratch = [System.IO.Path]::GetFullPath((Join-Path $watchdogScratchParent (
+    'inavi-watchdog-offline-' + [Guid]::NewGuid().ToString('N'))))
+if (-not [string]::Equals([System.IO.Path]::GetDirectoryName($watchdogScratch),
+        $watchdogScratchParent, [StringComparison]::OrdinalIgnoreCase) -or
+    [System.IO.Path]::GetFileName($watchdogScratch) -cnotmatch
+        '^inavi-watchdog-offline-[0-9a-f]{32}$') {
+    throw "Unsafe offline watchdog scratch target: $watchdogScratch"
+}
+try {
+    $clockBase = 10L * $frequency
+    Assert-Guard ((Get-InaviWatchdogAction $clockBase `
+        ($clockBase + (354L * $frequency)) $clockBase $false) -eq 'wait') `
+        'watchdog waits before the post-scan deadline'
+    Assert-Guard ((Get-InaviWatchdogAction $clockBase `
+        ($clockBase + (355L * $frequency)) $clockBase $false) -eq 'deadline') `
+        'watchdog expires a stalled no-descriptor commit without driver state'
+    Assert-Guard ((Get-InaviWatchdogAction $clockBase `
+        ($clockBase + (355L * $frequency)) $clockBase $true) -eq 'complete') `
+        'watchdog does not kill an exact app already confirmed exited'
+    Assert-Guard ((Get-InaviWatchdogAction $null `
+        ($clockBase + (894L * $frequency)) $clockBase $false) -eq 'wait') `
+        'watchdog waits for a prelaunch scan without an app'
+    Assert-Guard ((Get-InaviWatchdogAction $null `
+        ($clockBase + (895L * $frequency)) $clockBase $false) -eq 'no-scan') `
+        'watchdog ends an unstarted prelaunch horizon'
+    Assert-Reject {
+        Get-InaviWatchdogAction ($clockBase + $frequency) $clockBase $clockBase $false
+    } 'watchdog rejects a future scan anchor'
+    Assert-Guard ($null -eq (Get-InaviWatchdogResourceViolation 2048MB 512MB)) `
+        'watchdog accepts exact resource ceilings'
+    Assert-Guard ((Get-InaviWatchdogResourceViolation (2048MB + 1) 0) -eq 'rss-limit') `
+        'watchdog rejects RSS above 2 GiB'
+    Assert-Guard ((Get-InaviWatchdogResourceViolation 0 (512MB + 1)) -eq
+        'combined-raw-log-limit') 'watchdog rejects raw logs above 512 MiB'
+    [void][System.IO.Directory]::CreateDirectory($watchdogScratch)
+    function Get-MatchingProcess([int]$TargetProcessId, [long]$StartUtcTicks) {
+        if ($script:syntheticAppAlive) {
+            return [pscustomobject]@{
+                Id = $TargetProcessId; Path = 'D:\synthetic-emulator.exe'
+            }
+        }
+        return $null
+    }
+    function Get-InaviUniqueLaunchCandidate([string]$Directory, [string]$ExecutablePath,
+        [string]$ManifestHash) {
+        if ($script:syntheticUniqueStillLive) { return @{ processId = 9999; startUtcTicks = 1234L } }
+        return $null
+    }
+    $script:syntheticUniqueStillLive = $false
+    Assert-Guard (-not (Test-InaviWatchdogAppCompleted $watchdogScratch $hash `
+                ('E' * 64) 'D:\synthetic-emulator.exe')) `
+        'watchdog does not infer a completed app before publication'
+    $monitorBirth = [DateTime]::UtcNow.Ticks
+    $appBirth = $monitorBirth + 100
+    [System.IO.File]::WriteAllText((Join-Path $watchdogScratch 'monitor-worker-ready.json'),
+        (@{ monitorPid = 5432; monitorStartUtcTicks = $monitorBirth } | ConvertTo-Json))
+    $record = @{
+        manifestSha256 = $hash; executableSha256 = 'E' * 64
+        monitorPid = 5432; monitorStartUtcTicks = $monitorBirth
+        processId = 6543; startUtcTicks = $appBirth
+    }
+    [System.IO.File]::WriteAllText((Join-Path $watchdogScratch 'spawned-process.json'),
+        ($record | ConvertTo-Json))
+    $script:syntheticAppAlive = $true
+    Assert-Guard (-not (Test-InaviWatchdogAppCompleted $watchdogScratch $hash `
+                ('E' * 64) 'D:\synthetic-emulator.exe')) `
+        'watchdog remains active while exact spawned app lives'
+    $script:syntheticAppAlive = $false
+    $script:syntheticUniqueStillLive = $true
+    Assert-Guard (-not (Test-InaviWatchdogAppCompleted $watchdogScratch $hash `
+                ('E' * 64) 'D:\synthetic-emulator.exe')) `
+        'wrong or stale descriptor does not hide a live unique-run app'
+    $script:syntheticUniqueStillLive = $false
+    Assert-Guard (Test-InaviWatchdogAppCompleted $watchdogScratch $hash `
+            ('E' * 64) 'D:\synthetic-emulator.exe') `
+        'watchdog may exit only after exact spawned app is gone'
+    $record.monitorStartUtcTicks++
+    [System.IO.File]::WriteAllText((Join-Path $watchdogScratch 'process.json'),
+        ($record | ConvertTo-Json))
+    Assert-Reject {
+        Test-InaviWatchdogAppCompleted $watchdogScratch $hash `
+            ('E' * 64) 'D:\synthetic-emulator.exe'
+    } 'watchdog rejects a mismatched monitor birth'
+
+    $monitorFake = [pscustomobject]@{
+        Id = 5432; StartTime = [DateTime]::new($monitorBirth, [DateTimeKind]::Utc)
+    }
+    Assert-Guard (-not (Stop-InaviSpawnedFallback $watchdogScratch $monitorFake `
+                $hash 'D:\synthetic-emulator.exe' ('E' * 64))) `
+        'stale spawned PID and birth cannot suppress unique-run discovery'
+
+    $script:cleanupSteps = [System.Collections.Generic.List[string]]::new()
+    function Write-AtomicJsonFile([string]$Path, [object]$Value) {
+        $script:cleanupSteps.Add('abort')
+    }
+    function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
+        $script:cleanupSteps.Add("monitor:$TargetProcessId`:$StartUtcTicks")
+        if ($script:syntheticMonitorStopThrows) { throw 'synthetic monitor-stop failure' }
+    }
+    function Stop-InaviSpawnedFallback([string]$Directory, [object]$MonitorProcess,
+        [string]$ExpectedManifestHash, [string]$ExecutablePath,
+        [string]$ExpectedExecutableHash) {
+        $script:cleanupSteps.Add('spawned-app')
+        if ($script:syntheticSpawnedThrows) { throw 'synthetic spawned-descriptor failure' }
+        return $script:syntheticSpawnedPresent
+    }
+    function Stop-InaviUniqueLaunchFallback([string]$Directory, [string]$ExecutablePath,
+        [string]$ManifestHash) {
+        $script:cleanupSteps.Add('unique-app')
+        return $script:syntheticUniqueFound
+    }
+    function Write-JsonFile([string]$Path, [object]$Value) {
+        $script:cleanupSteps.Add('cleanup-receipt')
+    }
+    $script:syntheticSpawnedPresent = $true
+    $script:syntheticSpawnedThrows = $false
+    $script:syntheticMonitorStopThrows = $false
+    $script:syntheticUniqueFound = $true
+    $stopped = Stop-InaviPreDescriptorLaunch $watchdogScratch $monitorFake `
+        'D:\synthetic-emulator.exe' $hash ('E' * 64) 'offline-stalled-commit'
+    Assert-Guard ($stopped -and $script:cleanupSteps.Count -eq 4 -and
+        $script:cleanupSteps[0] -eq "monitor:5432`:$monitorBirth" -and
+        $script:cleanupSteps[1] -eq 'spawned-app' -and
+        $script:cleanupSteps[2] -eq 'abort') `
+        "stalled commit cleanup stops exact monitor and spawned app before evidence writes (steps=$($script:cleanupSteps -join ','))"
+    $script:cleanupSteps.Clear()
+    $script:syntheticSpawnedPresent = $false
+    $stopped = Stop-InaviPreDescriptorLaunch $watchdogScratch $monitorFake `
+        'D:\synthetic-emulator.exe' $hash ('E' * 64) 'offline-no-spawned-marker'
+    Assert-Guard ($stopped -and $script:cleanupSteps -contains 'unique-app') `
+        'missing spawned descriptor uses only unique-launch fallback'
+    $script:cleanupSteps.Clear()
+    $script:syntheticSpawnedThrows = $true
+    $script:syntheticUniqueFound = $false
+    Assert-Reject {
+        Stop-InaviPreDescriptorLaunch $watchdogScratch $monitorFake `
+            'D:\synthetic-emulator.exe' $hash ('E' * 64) `
+            'offline-unresolved-descriptor' 0
+    } 'unresolved spawned-descriptor error cannot claim completed cleanup'
+    $script:cleanupSteps.Clear()
+    $script:syntheticSpawnedThrows = $false
+    $script:syntheticSpawnedPresent = $true
+    $script:syntheticMonitorStopThrows = $true
+    Assert-Reject {
+        Stop-InaviPreDescriptorLaunch $watchdogScratch $monitorFake `
+            'D:\synthetic-emulator.exe' $hash ('E' * 64) `
+            'offline-monitor-stop-failed' 0
+    } 'monitor-stop failure cannot claim completed cleanup'
+    Assert-Guard ($script:cleanupSteps -contains 'spawned-app' -and
+        $script:cleanupSteps -contains 'abort') `
+        'monitor-stop failure still attempts abort and exact app cleanup'
+} finally {
+    if (-not [string]::Equals([System.IO.Path]::GetDirectoryName(
+                [System.IO.Path]::GetFullPath($watchdogScratch)),
+            $watchdogScratchParent, [StringComparison]::OrdinalIgnoreCase) -or
+        [System.IO.Path]::GetFileName($watchdogScratch) -cnotmatch
+            '^inavi-watchdog-offline-[0-9a-f]{32}$') {
+        throw "Refusing unsafe offline watchdog scratch cleanup: $watchdogScratch"
+    }
+    if (Test-Path -LiteralPath $watchdogScratch -PathType Container) {
+        Remove-Item -LiteralPath $watchdogScratch -Recurse -Force
+    }
+}
 
 Write-Output "Offline runner guards: $passed passed, 0 failed."

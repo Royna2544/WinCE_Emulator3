@@ -14,6 +14,7 @@ Its HTTP ACKs are not proof that guest COM7: consumed or parsed the bytes.
 param(
     [switch]$ObserverWorker,
     [switch]$MonitorWorker,
+    [switch]$WatchdogWorker,
     [string]$RunDirectory,
     [string]$ManifestPath,
     [string]$ManifestSha256,
@@ -41,12 +42,21 @@ function Write-AtomicJsonFile([string]$Path, [object]$Value) {
 }
 
 function Write-ReplacingJsonFile([string]$Path, [object]$Value) {
-    $temporary = "$Path.tmp"
-    Write-JsonFile $temporary $Value
-    if (Test-Path -LiteralPath $Path -PathType Leaf) {
-        [System.IO.File]::Replace($temporary, $Path, $null)
-    } else {
-        [System.IO.File]::Move($temporary, $Path)
+    $temporary = Join-Path (Split-Path -Parent $Path) (
+        '.' + [System.IO.Path]::GetFileName($Path) + '-' +
+        [guid]::NewGuid().ToString('N') + '.tmp'
+    )
+    try {
+        Write-JsonFile $temporary $Value
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $Path, [NullString]::Value)
+        } else {
+            [System.IO.File]::Move($temporary, $Path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
     }
 }
 
@@ -1091,6 +1101,21 @@ function Test-InaviMonitorHeartbeatFresh(
     } catch { return $false }
 }
 
+function Assert-InaviWatchdogLive([string]$Directory) {
+    $ready = Read-InaviJson (Join-Path $Directory 'watchdog-worker-ready.json')
+    $heartbeat = Read-InaviJson (Join-Path $Directory 'watchdog-worker-heartbeat.json')
+    if ([int]$ready.watchdogPid -le 0 -or [long]$ready.watchdogStartUtcTicks -le 0 -or
+        [int]$heartbeat.watchdogPid -ne [int]$ready.watchdogPid -or
+        [long]$heartbeat.watchdogStartUtcTicks -ne [long]$ready.watchdogStartUtcTicks -or
+        $null -eq (Get-MatchingProcess ([int]$ready.watchdogPid) ([long]$ready.watchdogStartUtcTicks))) {
+        throw 'Independent watchdog process identity is absent or mismatched.'
+    }
+    $age = [System.Diagnostics.Stopwatch]::GetTimestamp() - [long]$heartbeat.ticks
+    if ($age -lt 0 -or $age -gt (5L * $frequency)) {
+        throw 'Independent watchdog heartbeat is stale.'
+    }
+}
+
 function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
     $candidate = Get-MatchingProcess $TargetProcessId $StartUtcTicks
     if ($null -eq $candidate) { return }
@@ -1103,22 +1128,37 @@ function Stop-ExactApp([int]$TargetProcessId, [long]$StartUtcTicks) {
 function Stop-InaviSpawnedFallback(
     [string]$Directory,
     [object]$MonitorProcess,
-    [string]$ExpectedManifestHash
+    [string]$ExpectedManifestHash,
+    [string]$ExecutablePath,
+    [string]$ExpectedExecutableHash
 ) {
     $path = Join-Path $Directory 'spawned-process.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
     $spawned = Read-InaviJson $path
     $monitorReady = Read-InaviJson (Join-Path $Directory 'monitor-worker-ready.json')
     if ([string]$spawned.manifestSha256 -cne $ExpectedManifestHash -or
+        [string]$spawned.executableSha256 -cne $ExpectedExecutableHash -or
         [int]$spawned.monitorPid -ne [int]$MonitorProcess.Id -or
         [int]$monitorReady.monitorPid -ne [int]$MonitorProcess.Id -or
         [long]$spawned.monitorStartUtcTicks -ne
             [long]$monitorReady.monitorStartUtcTicks -or
+        [long]$spawned.monitorStartUtcTicks -ne
+            [long]$MonitorProcess.StartTime.ToUniversalTime().Ticks -or
         [int]$spawned.processId -le 0 -or
         [long]$spawned.startUtcTicks -le 0) {
         throw 'Pre-spend spawned-process descriptor is not the exact monitor-owned app.'
     }
+    $candidate = Get-MatchingProcess ([int]$spawned.processId) `
+        ([long]$spawned.startUtcTicks)
+    if ($null -eq $candidate) { return $false }
+    if (-not (Test-InaviCoreSamePath ([string]$candidate.Path) $ExecutablePath)) {
+        throw 'Pre-spend spawned-process executable path does not match the sealed app.'
+    }
     Stop-ExactApp ([int]$spawned.processId) ([long]$spawned.startUtcTicks)
+    if ($null -ne (Get-MatchingProcess ([int]$spawned.processId) `
+            ([long]$spawned.startUtcTicks))) {
+        throw 'Pre-spend spawned process remains alive after exact stop.'
+    }
     Write-JsonFile (Join-Path $Directory 'fallback-spawn-cleanup.json') @{
         utc = [DateTime]::UtcNow.ToString('O')
         processId = [int]$spawned.processId
@@ -1128,7 +1168,7 @@ function Stop-InaviSpawnedFallback(
     return $true
 }
 
-function Stop-InaviUniqueLaunchFallback(
+function Get-InaviUniqueLaunchCandidate(
     [string]$Directory,
     [string]$ExecutablePath,
     [string]$ManifestHash
@@ -1144,36 +1184,227 @@ function Stop-InaviUniqueLaunchFallback(
         throw 'Unique-launch fallback lacks a matching run claim.'
     }
     $claimedUtc = [DateTimeOffset]::Parse([string]$claim.claimedUtc).UtcDateTime
-    $matches = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+    $matches = @(Get-CimInstance -ClassName Win32_Process -OperationTimeoutSec 3 `
+        -ErrorAction Stop |
         Where-Object {
             $null -ne $_.CommandLine -and
             [string]$_.CommandLine -like '*--framebuffer-dump*' -and
             [string]$_.CommandLine -like "*$ppmPath*"
         })
     if ($matches.Count -gt 1) { throw 'Unique-run framebuffer path matched multiple processes.' }
-    if ($matches.Count -eq 0) { return $false }
+    if ($matches.Count -eq 0) { return $null }
     $record = $matches[0]
     if ([string]::IsNullOrWhiteSpace([string]$record.ExecutablePath) -or
         -not (Test-InaviCoreSamePath ([string]$record.ExecutablePath) $ExecutablePath)) {
         throw 'Unique-run command line belongs to a different executable.'
     }
-    $candidate = Get-Process -Id ([int]$record.ProcessId) -ErrorAction Stop
+    try {
+        $candidate = Get-Process -Id ([int]$record.ProcessId) -ErrorAction Stop
+    } catch {
+        if ($_.CategoryInfo.Category -eq [System.Management.Automation.ErrorCategory]::ObjectNotFound) {
+            return $null
+        }
+        throw
+    }
     $startUtc = $candidate.StartTime.ToUniversalTime()
     if (-not (Test-InaviCoreSamePath ([string]$candidate.Path) $ExecutablePath) -or
         $startUtc -lt $claimedUtc.AddSeconds(-2) -or
         $startUtc -gt [DateTime]::UtcNow.AddSeconds(2)) {
         throw 'Unique-run process path or start window is invalid.'
     }
-    Stop-ExactApp ([int]$candidate.Id) ([long]$startUtc.Ticks)
-    Write-JsonFile (Join-Path $Directory 'fallback-unique-launch-cleanup.json') @{
-        utc = [DateTime]::UtcNow.ToString('O')
+    return @{
         processId = [int]$candidate.Id
         startUtcTicks = [long]$startUtc.Ticks
-        executablePath = $ExecutablePath
         framebufferPath = $ppmPath
-        reason = 'monitor-died-before-process-descriptor'
+    }
+}
+
+function Stop-InaviUniqueLaunchFallback(
+    [string]$Directory,
+    [string]$ExecutablePath,
+    [string]$ManifestHash
+) {
+    $identity = Get-InaviUniqueLaunchCandidate $Directory $ExecutablePath $ManifestHash
+    if ($null -eq $identity) { return $false }
+    Stop-ExactApp ([int]$identity.processId) ([long]$identity.startUtcTicks)
+    Write-JsonFile (Join-Path $Directory 'fallback-unique-launch-cleanup.json') @{
+        utc = [DateTime]::UtcNow.ToString('O')
+        processId = [int]$identity.processId
+        startUtcTicks = [long]$identity.startUtcTicks
+        executablePath = $ExecutablePath
+        framebufferPath = $identity.framebufferPath
+        reason = 'missing-active-descriptor'
     }
     return $true
+}
+
+function Stop-InaviPreDescriptorLaunch(
+    [string]$Directory,
+    [object]$MonitorProcess,
+    [string]$ExecutablePath,
+    [string]$ManifestHash,
+    [string]$ExecutableHash,
+    [string]$Reason,
+    [ValidateRange(0, 10)][int]$SearchSeconds = 10
+) {
+    $abortPath = Join-Path $Directory 'abort-request.json'
+    $abortError = $null; $monitorError = $null; $spawnedError = $null
+    # Stop the only process allowed to spawn first. An evidence-volume write
+    # may itself be stalled, so no file I/O may precede this exact stop.
+    try {
+        Stop-ExactApp ([int]$MonitorProcess.Id) `
+            ([long]$MonitorProcess.StartTime.ToUniversalTime().Ticks)
+    } catch { $monitorError = $_.Exception.Message }
+    if ($null -ne $monitorError -and
+        -not (Test-Path -LiteralPath $abortPath -PathType Leaf)) {
+        try {
+            Write-AtomicJsonFile $abortPath @{
+                utc = [DateTime]::UtcNow.ToString('O'); reason = $Reason
+            }
+        } catch { $abortError = $_.Exception.Message }
+    }
+    $stoppedApp = $false
+    try {
+        $stoppedApp = Stop-InaviSpawnedFallback $Directory $MonitorProcess `
+            $ManifestHash $ExecutablePath $ExecutableHash
+    } catch { $spawnedError = $_.Exception.Message }
+    if (-not $stoppedApp) {
+        # Start-Process may have crossed process creation just as the monitor
+        # was stopped, without publishing spawned-process.json. Search only
+        # this run's unique executable/framebuffer identity for ten seconds.
+        $searchDeadline = [System.Diagnostics.Stopwatch]::GetTimestamp() +
+            ([long]$SearchSeconds * $frequency)
+        do {
+            $stoppedApp = Stop-InaviUniqueLaunchFallback $Directory $ExecutablePath $ManifestHash
+            if ($stoppedApp) { break }
+            Start-Sleep -Milliseconds 200
+        } while ([System.Diagnostics.Stopwatch]::GetTimestamp() -lt $searchDeadline)
+    }
+    if ($null -eq $monitorError -and
+        -not (Test-Path -LiteralPath $abortPath -PathType Leaf)) {
+        try {
+            Write-AtomicJsonFile $abortPath @{
+                utc = [DateTime]::UtcNow.ToString('O'); reason = $Reason
+            }
+        } catch { $abortError = $_.Exception.Message }
+    }
+    Write-JsonFile (Join-Path $Directory 'pre-descriptor-cleanup.json') @{
+        utc = [DateTime]::UtcNow.ToString('O'); reason = $Reason
+        appFoundAndStopped = $stoppedApp; abortWriteError = $abortError
+        monitorStopError = $monitorError; spawnedDescriptorError = $spawnedError
+    }
+    if ($null -ne $monitorError -or $null -ne $abortError -or
+        ($null -ne $spawnedError -and -not $stoppedApp)) {
+        throw "Pre-descriptor cleanup was not fully confirmed: monitor=$monitorError; abort=$abortError; spawned=$spawnedError; uniqueStop=$stoppedApp"
+    }
+    return $stoppedApp
+}
+
+function Test-InaviWatchdogAppCompleted(
+    [string]$Directory,
+    [string]$ManifestHash,
+    [string]$ExecutableHash,
+    [string]$ExecutablePath
+) {
+    $recordPath = Join-Path $Directory 'process.json'
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) {
+        $recordPath = Join-Path $Directory 'spawned-process.json'
+        if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return $false }
+    }
+    $record = Read-InaviJson $recordPath
+    $monitorReady = Read-InaviJson (Join-Path $Directory 'monitor-worker-ready.json')
+    if ([string]$record.manifestSha256 -cne $ManifestHash -or
+        [string]$record.executableSha256 -cne $ExecutableHash -or
+        [int]$record.monitorPid -ne [int]$monitorReady.monitorPid -or
+        [long]$record.monitorStartUtcTicks -ne [long]$monitorReady.monitorStartUtcTicks -or
+        [int]$record.processId -le 0 -or [long]$record.startUtcTicks -le 0) {
+        throw 'Independent watchdog saw a mismatched app process identity.'
+    }
+    $candidate = Get-MatchingProcess ([int]$record.processId) `
+        ([long]$record.startUtcTicks)
+    if ($null -ne $candidate) {
+        if (-not (Test-InaviCoreSamePath ([string]$candidate.Path) $ExecutablePath)) {
+            throw 'Independent watchdog app descriptor points to a different executable.'
+        }
+        return $false
+    }
+    # An absent PID/start is not proof of exit if a corrupt descriptor names
+    # someone else. The unique framebuffer launch identity must also be gone.
+    return ($null -eq (Get-InaviUniqueLaunchCandidate $Directory $ExecutablePath $ManifestHash))
+}
+
+function Get-InaviWatchdogAction(
+    [AllowNull()][object]$AnchorTicks,
+    [long]$NowTicks,
+    [long]$StartedTicks,
+    [bool]$AppCompleted
+) {
+    if ($AppCompleted) { return 'complete' }
+    if ($null -ne $AnchorTicks) {
+        $anchor = [long]$AnchorTicks
+        if ($anchor -le 0 -or $anchor -gt $NowTicks) {
+            throw 'Independent watchdog has an invalid monotonic scan anchor.'
+        }
+        if ($NowTicks - $anchor -ge (355L * $frequency)) { return 'deadline' }
+        return 'wait'
+    }
+    if ($NowTicks - $StartedTicks -ge (895L * $frequency)) {
+        return 'no-scan'
+    }
+    return 'wait'
+}
+
+function Get-InaviWatchdogResourceViolation([long]$RssBytes, [long]$RawLogBytes) {
+    if ($RssBytes -gt 2048MB) { return 'rss-limit' }
+    if ($RawLogBytes -gt 512MB) { return 'combined-raw-log-limit' }
+    return $null
+}
+
+function Get-InaviWatchdogObservedApp(
+    [string]$Directory,
+    [string]$ExecutablePath,
+    [string]$ManifestHash,
+    [string]$ExecutableHash
+) {
+    $recordPath = Join-Path $Directory 'process.json'
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) {
+        $recordPath = Join-Path $Directory 'spawned-process.json'
+    }
+    if (Test-Path -LiteralPath $recordPath -PathType Leaf) {
+        $record = Read-InaviJson $recordPath
+        $monitorReady = Read-InaviJson (Join-Path $Directory 'monitor-worker-ready.json')
+        if ([string]$record.manifestSha256 -cne $ManifestHash -or
+            [string]$record.executableSha256 -cne $ExecutableHash -or
+            [int]$record.monitorPid -ne [int]$monitorReady.monitorPid -or
+            [long]$record.monitorStartUtcTicks -ne [long]$monitorReady.monitorStartUtcTicks -or
+            [int]$record.processId -le 0 -or [long]$record.startUtcTicks -le 0) {
+            throw 'Independent watchdog resource probe saw a mismatched app identity.'
+        }
+        $candidate = Get-MatchingProcess ([int]$record.processId) `
+            ([long]$record.startUtcTicks)
+        if ($null -ne $candidate -and
+            -not (Test-InaviCoreSamePath ([string]$candidate.Path) $ExecutablePath)) {
+            throw 'Independent watchdog resource identity points to a different executable.'
+        }
+        return $candidate
+    }
+    $unique = Get-InaviUniqueLaunchCandidate $Directory $ExecutablePath $ManifestHash
+    if ($null -eq $unique) { return $null }
+    return Get-MatchingProcess ([int]$unique.processId) ([long]$unique.startUtcTicks)
+}
+
+function Get-InaviWatchdogMonitorIdentity([string]$Directory) {
+    $monitorReady = Read-InaviJson (Join-Path $Directory 'monitor-worker-ready.json')
+    if ([int]$monitorReady.monitorPid -le 0 -or
+        [long]$monitorReady.monitorStartUtcTicks -le 0) {
+        throw 'Independent watchdog lacks the exact monitor identity.'
+    }
+    return [pscustomobject]@{
+        Id = [int]$monitorReady.monitorPid
+        StartTime = [DateTime]::new(
+            [long]$monitorReady.monitorStartUtcTicks,
+            [DateTimeKind]::Utc)
+    }
 }
 
 function Assert-InaviWorkerClaim(
@@ -1272,6 +1503,158 @@ function Complete-InaviSpawnCommit(
     }
 }
 
+function Invoke-Watchdog([string]$Directory) {
+    Assert-WorkerDirectory $Directory
+    Test-ExpectedHash $ManifestPath $ManifestSha256
+    $claim = Read-InaviJson (Join-Path $Directory 'run-claim.json')
+    Assert-InaviWorkerClaim $claim $claim $Directory $ManifestPath $ManifestSha256 `
+        $ApprovalReference $LaunchNonce
+    $manifest = Read-InaviJson $ManifestPath
+    if ([string]$manifest.runTag -cne [string]$claim.runTag -or
+        [string]$manifest.executable.path -cne
+            'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\telemetry-a03-wince_emulation_v3.exe' -or
+        [int]$manifest.caps.rssMiB -ne 2048 -or
+        [int]$manifest.caps.rawLogMiB -ne 512) {
+        throw 'Independent watchdog has a mismatched run tag, executable or resource cap.'
+    }
+    $self = Get-Process -Id $PID -ErrorAction Stop
+    $selfStartUtcTicks = $self.StartTime.ToUniversalTime().Ticks
+    $readyPath = Join-Path $Directory 'watchdog-worker-ready.json'
+    $heartbeatPath = Join-Path $Directory 'watchdog-worker-heartbeat.json'
+    $markerPath = Join-Path $Directory 'prelaunch-mount-content-scan.json'
+    $monitorReadyPath = Join-Path $Directory 'monitor-worker-ready.json'
+    $startedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $anchorTicks = $null
+    $nextHeartbeat = $startedTicks
+    $nextResourceCheck = $startedTicks
+    Write-AtomicJsonFile $readyPath @{
+        readyUtc = [DateTime]::UtcNow.ToString('O')
+        watchdogPid = $PID; watchdogStartUtcTicks = $selfStartUtcTicks
+        manifestSha256 = $ManifestSha256; runTag = [string]$claim.runTag
+        postScanDeadlineSeconds = 355
+    }
+    try {
+    while ($true) {
+        $nowTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        if ($nowTicks -ge $nextHeartbeat) {
+            Write-ReplacingJsonFile $heartbeatPath @{
+                utc = [DateTime]::UtcNow.ToString('O'); ticks = $nowTicks
+                watchdogPid = $PID; watchdogStartUtcTicks = $selfStartUtcTicks
+            }
+            $nextHeartbeat = $nowTicks + $frequency
+        }
+        if ($null -eq $anchorTicks -and (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+            $marker = Read-InaviJson $markerPath
+            if ([string]$marker.manifestSha256 -cne $ManifestSha256 -or
+                [string]$marker.approvalReference -cne $ApprovalReference -or
+                [long]$marker.checkedTicks -le 0 -or
+                [long]$marker.checkedTicks -gt $nowTicks) {
+                throw 'Independent watchdog saw a mismatched prelaunch scan marker.'
+            }
+            $anchorTicks = [long]$marker.checkedTicks
+        }
+        $appCompleted = Test-InaviWatchdogAppCompleted $Directory $ManifestSha256 `
+            ([string]$manifest.executable.sha256) ([string]$manifest.executable.path)
+        $action = Get-InaviWatchdogAction $anchorTicks $nowTicks $startedTicks $appCompleted
+        if ($null -ne $anchorTicks -and -not $appCompleted -and
+            $nowTicks -ge $nextResourceCheck) {
+            $observedApp = Get-InaviWatchdogObservedApp $Directory `
+                ([string]$manifest.executable.path) $ManifestSha256 `
+                ([string]$manifest.executable.sha256)
+            if ($null -ne $observedApp) {
+                $observedApp.Refresh()
+                $rawLogBytes = 0L
+                foreach ($streamPath in @(
+                        (Join-Path $Directory 'app.stdout.raw.txt'),
+                        (Join-Path $Directory 'app.stderr.raw.txt'))) {
+                    if (Test-Path -LiteralPath $streamPath -PathType Leaf) {
+                        $rawLogBytes += (Get-Item -LiteralPath $streamPath).Length
+                    }
+                }
+                $resourceViolation = Get-InaviWatchdogResourceViolation `
+                    ([long]$observedApp.WorkingSet64) $rawLogBytes
+                if ($null -ne $resourceViolation) {
+                    Stop-ExactApp ([int]$observedApp.Id) `
+                        ([long]$observedApp.StartTime.ToUniversalTime().Ticks)
+                    $monitorIdentity = Get-InaviWatchdogMonitorIdentity $Directory
+                    [void](Stop-InaviPreDescriptorLaunch $Directory $monitorIdentity `
+                        ([string]$manifest.executable.path) $ManifestSha256 `
+                        ([string]$manifest.executable.sha256) `
+                        "independent-watchdog-$resourceViolation")
+                    Write-JsonFile (Join-Path $Directory 'watchdog-result.json') @{
+                        endedUtc = [DateTime]::UtcNow.ToString('O')
+                        reason = $resourceViolation
+                        workingSetBytes = [long]$observedApp.WorkingSet64
+                        rawLogBytes = $rawLogBytes
+                        appFoundAndStopped = $true
+                    }
+                    return
+                }
+            }
+            $nextResourceCheck = [System.Diagnostics.Stopwatch]::GetTimestamp() + (2L * $frequency)
+        }
+        if ($action -eq 'complete') {
+            Write-JsonFile (Join-Path $Directory 'watchdog-result.json') @{
+                endedUtc = [DateTime]::UtcNow.ToString('O')
+                reason = 'exact-app-exit-confirmed'
+                appFoundAndStopped = $false
+            }
+            return
+        }
+        if ($action -eq 'deadline') {
+            $monitorIdentity = Get-InaviWatchdogMonitorIdentity $Directory
+            $stoppedApp = Stop-InaviPreDescriptorLaunch $Directory $monitorIdentity `
+                ([string]$manifest.executable.path) $ManifestSha256 `
+                ([string]$manifest.executable.sha256) `
+                'independent-watchdog-post-scan-deadline'
+            Write-JsonFile (Join-Path $Directory 'watchdog-result.json') @{
+                endedUtc = [DateTime]::UtcNow.ToString('O')
+                reason = '355-second-post-scan-deadline'
+                appFoundAndStopped = $stoppedApp
+            }
+            return
+        }
+        if ($action -eq 'no-scan') {
+            Write-JsonFile (Join-Path $Directory 'watchdog-result.json') @{
+                endedUtc = [DateTime]::UtcNow.ToString('O')
+                reason = '895-second-no-scan-marker'
+                appFoundAndStopped = $false
+            }
+            return
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    } catch {
+        $watchdogError = $_.Exception.Message
+        $cleanupError = $null
+        if (Test-Path -LiteralPath $monitorReadyPath -PathType Leaf) {
+            try {
+                $monitorIdentity = Get-InaviWatchdogMonitorIdentity $Directory
+                [void](Stop-InaviPreDescriptorLaunch $Directory $monitorIdentity `
+                    ([string]$manifest.executable.path) $ManifestSha256 `
+                    ([string]$manifest.executable.sha256) `
+                    'independent-watchdog-worker-error')
+            } catch { $cleanupError = $_.Exception.Message }
+        } else {
+            try {
+                if (-not (Test-Path -LiteralPath (Join-Path $Directory 'abort-request.json') -PathType Leaf)) {
+                    Write-AtomicJsonFile (Join-Path $Directory 'abort-request.json') @{
+                        utc = [DateTime]::UtcNow.ToString('O')
+                        reason = 'independent-watchdog-worker-error-before-monitor-ready'
+                    }
+                }
+            } catch { $cleanupError = $_.Exception.Message }
+        }
+        try {
+            Write-JsonFile (Join-Path $Directory 'watchdog-failure.json') @{
+                utc = [DateTime]::UtcNow.ToString('O')
+                error = $watchdogError; exactCleanupError = $cleanupError
+            }
+        } catch { }
+        throw "Independent watchdog failed: $watchdogError; exact cleanup: $cleanupError"
+    }
+}
+
 function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
     Assert-WorkerDirectory $Directory
     $requestPath = Join-Path $Directory 'launch-request.json'
@@ -1327,6 +1710,7 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
                 $ApprovalReference $repository
             Write-AtomicJsonFile (Join-Path $Directory 'prelaunch-mount-content-scan.json') @{
                 checkedUtc = [DateTime]::UtcNow.ToString('O')
+                checkedTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
                 filesHashed = $checked.mountContentScan.filesHashed
                 fileBytesHashed = $checked.mountContentScan.fileBytesHashed
                 elapsedSeconds = $checked.mountContentScan.elapsedSeconds
@@ -1353,9 +1737,12 @@ function Invoke-Monitor([string]$Directory, [int]$LimitMiB) {
                 '--framebuffer-dump', $ppmPath
             )
             Assert-InaviObserverLive $Directory
+            Assert-InaviWatchdogLive $Directory
             $reservation = New-InaviUseEvent ([string]$manifest.runTag) `
                 $ManifestSha256 $manifest 'reserved' $null
             Add-InaviDualLedgerEntry $checked.ledgers $reservation
+            Assert-InaviObserverLive $Directory
+            Assert-InaviWatchdogLive $Directory
             $launchTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
             $app = Start-Process -FilePath ([string]$manifest.executable.path) `
                 -ArgumentList $arguments -WorkingDirectory $repository `
@@ -1537,6 +1924,7 @@ function Invoke-InputPost([System.Net.Http.HttpClient]$Client, [string]$Url, [ob
 
 if ($ObserverWorker) { Invoke-Observer $RunDirectory; return }
 if ($MonitorWorker) { Invoke-Monitor $RunDirectory $MaxWorkingSetMiB; return }
+if ($WatchdogWorker) { Invoke-Watchdog $RunDirectory; return }
 
 $repository = Split-Path -Parent $PSScriptRoot
 if ($repository -ne 'D:\GitHub\Wince_emulation_v3') { throw "Unexpected checkout: $repository" }
@@ -1571,7 +1959,8 @@ Write-AtomicJsonFile (Join-Path $runDirectory 'run-claim.json') @{
     claimedUtc = [DateTime]::UtcNow.ToString('O')
 }
 $previousDirectory = Get-Location
-$observerJob = $null; $monitorProcess = $null; $appDescriptor = $null; $client = $null
+$observerJob = $null; $monitorProcess = $null; $watchdogProcess = $null
+$appDescriptor = $null; $client = $null; $preDescriptorCleanupComplete = $false
 $endedByScript = $null; $driveError = $null; $exitCode = $null; $exitStatus = 1
 try {
     Set-Location -LiteralPath $repository
@@ -1598,6 +1987,16 @@ try {
         param($scriptPath, $directory)
         & $scriptPath -ObserverWorker -RunDirectory $directory
     } -ArgumentList $PSCommandPath, $runDirectory
+    $watchdogProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') `
+        -ArgumentList @('-NoProfile', '-File', ('"' + $PSCommandPath + '"'),
+            '-WatchdogWorker', '-RunDirectory', ('"' + $runDirectory + '"'),
+            '-ManifestPath', ('"' + $ManifestPath + '"'),
+            '-ManifestSha256', $ManifestSha256,
+            '-ApprovalReference', ('"' + $ApprovalReference + '"'),
+            '-LaunchNonce', $launchNonce) `
+        -WorkingDirectory $repository -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $runDirectory 'watchdog-worker.stdout.raw.txt') `
+        -RedirectStandardError (Join-Path $runDirectory 'watchdog-worker.stderr.raw.txt')
     $monitorProcess = Start-Process -FilePath (Join-Path $PSHOME 'pwsh.exe') `
         -ArgumentList @('-NoProfile', '-File', ('"' + $PSCommandPath + '"'),
             '-MonitorWorker', '-RunDirectory', ('"' + $runDirectory + '"'),
@@ -1610,9 +2009,13 @@ try {
         -RedirectStandardOutput (Join-Path $runDirectory 'monitor-worker.stdout.raw.txt') `
         -RedirectStandardError (Join-Path $runDirectory 'monitor-worker.stderr.raw.txt')
     $jobWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    while (-not ((Test-Path -LiteralPath (Join-Path $runDirectory 'observer-worker-ready.json')) -and (Test-Path -LiteralPath (Join-Path $runDirectory 'monitor-worker-ready.json')))) {
-        if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited) { throw 'Observer or detached monitor failed before launch.' }
-        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $jobWait) -ge (15L * $frequency)) { throw 'Observer/monitor did not become ready in 15 seconds.' }
+    while (-not ((Test-Path -LiteralPath (Join-Path $runDirectory 'observer-worker-ready.json')) -and
+            (Test-Path -LiteralPath (Join-Path $runDirectory 'monitor-worker-ready.json')) -and
+            (Test-Path -LiteralPath (Join-Path $runDirectory 'watchdog-worker-ready.json')) -and
+            (Test-Path -LiteralPath (Join-Path $runDirectory 'watchdog-worker-heartbeat.json')))) {
+        if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited -or
+            $watchdogProcess.HasExited) { throw 'Observer, detached monitor or watchdog failed before launch.' }
+        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $jobWait) -ge (15L * $frequency)) { throw 'Observer/monitor/watchdog did not become ready in 15 seconds.' }
         Start-Sleep -Milliseconds 100
     }
     $monitorReady = Get-Content -LiteralPath (Join-Path $runDirectory 'monitor-worker-ready.json') -Raw | ConvertFrom-Json
@@ -1620,6 +2023,14 @@ try {
         [long]$monitorReady.monitorStartUtcTicks -ne $monitorProcess.StartTime.ToUniversalTime().Ticks) {
         throw 'Detached monitor readiness descriptor did not match the launched process.'
     }
+    $watchdogReady = Read-InaviJson (Join-Path $runDirectory 'watchdog-worker-ready.json')
+    if ([int]$watchdogReady.watchdogPid -ne $watchdogProcess.Id -or
+        [long]$watchdogReady.watchdogStartUtcTicks -ne
+            $watchdogProcess.StartTime.ToUniversalTime().Ticks -or
+        [string]$watchdogReady.manifestSha256 -cne $ManifestSha256) {
+        throw 'Independent watchdog readiness descriptor did not match the launched process.'
+    }
+    Assert-InaviWatchdogLive $runDirectory
     $stdout = Join-Path $runDirectory 'app.stdout.raw.txt'
     $stderr = Join-Path $runDirectory 'app.stderr.raw.txt'
     $ppm = Join-Path $runDirectory 'terminal-frame.ppm'
@@ -1633,22 +2044,35 @@ try {
         approvalObservedUtc = [string]$manifest.approvalObservedUtc
     }
     $launchWait = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $nextWatchdogCheck = $launchWait
     while (-not (Test-Path -LiteralPath (Join-Path $runDirectory 'process.json'))) {
         if ($monitorProcess.HasExited) { throw 'Detached monitor exited without an app process descriptor.' }
+        if ($watchdogProcess.HasExited) { throw 'Independent watchdog exited before the app descriptor.' }
         if ($observerJob.State -ne 'Running') {
             throw 'Observer ended before the app process descriptor was published.'
         }
-        if (([System.Diagnostics.Stopwatch]::GetTimestamp() - $launchWait) -ge (895L * $frequency)) {
+        $nowTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+        if ($nowTicks -ge $nextWatchdogCheck) {
+            Assert-InaviWatchdogLive $runDirectory
+            $nextWatchdogCheck = $nowTicks + $frequency
+        }
+        if (($nowTicks - $launchWait) -ge (895L * $frequency)) {
             throw 'Detached monitor did not publish the app descriptor within the bounded prelaunch horizon.'
         }
         Start-Sleep -Milliseconds 100
     }
-    $appDescriptor = Get-Content -LiteralPath (Join-Path $runDirectory 'process.json') -Raw | ConvertFrom-Json
-    if ([string]$appDescriptor.executableSha256 -ne [string]$manifest.executable.sha256 -or
-        [string]$appDescriptor.manifestSha256 -ne $ManifestSha256 -or
-        [string]$appDescriptor.approvalReference -ne $ApprovalReference) {
+    $candidateDescriptor = Read-InaviJson (Join-Path $runDirectory 'process.json')
+    if ([string]$candidateDescriptor.executableSha256 -cne [string]$manifest.executable.sha256 -or
+        [string]$candidateDescriptor.manifestSha256 -cne $ManifestSha256 -or
+        [string]$candidateDescriptor.approvalReference -cne $ApprovalReference -or
+        [int]$candidateDescriptor.processId -le 0 -or
+        [long]$candidateDescriptor.startUtcTicks -le 0 -or
+        [int]$candidateDescriptor.monitorPid -ne [int]$monitorReady.monitorPid -or
+        [long]$candidateDescriptor.monitorStartUtcTicks -ne
+            [long]$monitorReady.monitorStartUtcTicks) {
         throw 'Launched app descriptor does not match the built executable.'
     }
+    $appDescriptor = $candidateDescriptor
     $launchTicks = [long]$appDescriptor.launchTicks
     $client = New-HttpClient
     $inputLog = Join-Path $runDirectory 'input-post.jsonl'
@@ -1656,6 +2080,12 @@ try {
     while ($null -ne (Get-MatchingProcess ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks))) {
         if ($observerJob.State -eq 'Failed' -or $monitorProcess.HasExited) {
             $endedByScript = 'required-worker-failed'; break
+        }
+        if ($watchdogProcess.HasExited) {
+            $endedByScript = 'independent-watchdog-exited'; break
+        }
+        try { Assert-InaviWatchdogLive $runDirectory } catch {
+            $endedByScript = 'independent-watchdog-stale'; break
         }
         if (-not (Test-InaviMonitorHeartbeatFresh $runDirectory $appDescriptor $launchTicks)) {
             $endedByScript = 'monitor-heartbeat-stale'; break
@@ -1692,7 +2122,9 @@ try {
         Write-AtomicJsonFile (Join-Path $runDirectory 'abort-request.json') @{
             utc = [DateTime]::UtcNow.ToString('O'); reason = $endedByScript
         }
-        if ($monitorProcess.HasExited -or $endedByScript -eq 'monitor-heartbeat-stale') {
+        if ($monitorProcess.HasExited -or $endedByScript -in @(
+                'monitor-heartbeat-stale', 'independent-watchdog-exited',
+                'independent-watchdog-stale')) {
             # A dead or stalled monitor cannot be trusted to honor the abort
             # request. The driver terminates only the verified app identity.
             Stop-ExactApp ([int]$appDescriptor.processId) ([long]$appDescriptor.startUtcTicks)
@@ -1789,27 +2221,13 @@ try {
     throw
 } finally {
     if ($null -ne $client) { $client.Dispose() }
-    if ($null -eq $appDescriptor -and $null -ne $monitorProcess -and
-        $monitorProcess.HasExited) {
+    if ($null -eq $appDescriptor -and $null -ne $monitorProcess) {
         try {
-            $spawnedDescriptorError = $null
-            try {
-                $fallbackNeeded = Stop-InaviSpawnedFallback $runDirectory $monitorProcess $ManifestSha256
-            } catch {
-                $spawnedDescriptorError = $_.Exception.Message
-                $fallbackNeeded = $false
-            }
-            if (-not $fallbackNeeded) {
-                $fallbackNeeded = Stop-InaviUniqueLaunchFallback $runDirectory `
-                    ([string]$manifest.executable.path) $ManifestSha256
-            }
-            if ($null -ne $spawnedDescriptorError) {
-                Write-JsonFile (Join-Path $runDirectory 'fallback-descriptor-error.json') @{
-                    utc = [DateTime]::UtcNow.ToString('O')
-                    error = $spawnedDescriptorError
-                    uniqueLaunchFallbackFound = $fallbackNeeded
-                }
-            }
+            $fallbackNeeded = Stop-InaviPreDescriptorLaunch $runDirectory `
+                $monitorProcess ([string]$manifest.executable.path) $ManifestSha256 `
+                ([string]$manifest.executable.sha256) `
+                'driver-finally-no-active-descriptor'
+            $preDescriptorCleanupComplete = $true
             if ($fallbackNeeded) {
                 $fallbackAfterPath = Join-Path $runDirectory 'fallback-mounted-after.jsonl'
                 $fallbackAfterCount = Write-MountedInventory $backups $fallbackAfterPath
@@ -1826,7 +2244,7 @@ try {
             Write-JsonFile (Join-Path $runDirectory 'cleanup-error.json') @{
                 utc = [DateTime]::UtcNow.ToString('O')
                 error = $_.Exception.Message
-                phase = 'missing-active-descriptor-fallback'
+                phase = 'missing-active-descriptor-exact-cleanup'
             }
         }
     }
@@ -1857,12 +2275,28 @@ try {
                 [void]$monitorProcess.WaitForExit(10000)
             }
         } else {
-            # A launch request can race with descriptor publication. Never
-            # kill the sole independent watchdog without an app identity;
-            # it will self-timeout prelaunch or stop the app at its bound.
+            # The independent watchdog remains alive if exact pre-descriptor
+            # cleanup could not prove that the monitor/app were stopped.
             Write-JsonFile (Join-Path $runDirectory 'monitor-left-detached.json') @{
                 utc = [DateTime]::UtcNow.ToString('O'); monitorPid = $monitorProcess.Id
-                reason = 'driver-has-no-verified-app-descriptor'
+                reason = 'pre-descriptor-cleanup-not-confirmed'
+            }
+        }
+    }
+    if ($null -ne $watchdogProcess -and -not $watchdogProcess.HasExited) {
+        $monitorGone = ($null -eq $monitorProcess -or $monitorProcess.HasExited)
+        $appGone = if ($null -ne $appDescriptor) {
+            $null -eq (Get-MatchingProcess ([int]$appDescriptor.processId) `
+                ([long]$appDescriptor.startUtcTicks))
+        } else { $preDescriptorCleanupComplete -or $null -eq $monitorProcess }
+        if ($monitorGone -and $appGone) {
+            Stop-ExactApp ([int]$watchdogProcess.Id) `
+                ([long]$watchdogProcess.StartTime.ToUniversalTime().Ticks)
+        } else {
+            Write-JsonFile (Join-Path $runDirectory 'watchdog-left-detached.json') @{
+                utc = [DateTime]::UtcNow.ToString('O')
+                watchdogPid = $watchdogProcess.Id
+                reason = 'exact-monitor-or-app-cleanup-not-confirmed'
             }
         }
     }

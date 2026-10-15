@@ -79,7 +79,8 @@ function Get-InaviRequiredSourceFiles {
         'scripts/test_backup_rw_mounts_inventory.ps1',
         'scripts/inavi_summary_observer_core.ps1',
         'scripts/test_inavi_summary_observer.ps1',
-        'scripts/test_inavi_runner_guard.ps1'
+        'scripts/test_inavi_runner_guard.ps1',
+        'scripts/test_atomic_json_overwrite.ps1'
     )
 }
 
@@ -601,6 +602,10 @@ function Test-InaviRunManifestCore {
         [System.StringComparer]::OrdinalIgnoreCase)
     $withdrawnAttempts = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
+    $nonWithdrawnZipHashes = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $withdrawnZipHashes = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
     $sourceRootForProof = if (Test-InaviCoreField $Observed 'currentSourceRoot') {
         $Observed.currentSourceRoot
     } else { $null }
@@ -695,6 +700,16 @@ function Test-InaviRunManifestCore {
             }
         }
         if (-not $validZipHashes) { continue }
+        if (-not $isWithdrawn) {
+            # Historical rows and reserved/spent pairs may share a ZIP, but
+            # no row may reuse a ZIP already sealed by a withdrawal.
+            foreach ($zip in $entry.zipSha256) {
+                if ($withdrawnZipHashes.Contains($zip)) {
+                    Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                }
+                [void]$nonWithdrawnZipHashes.Add($zip)
+            }
+        }
         if ($entry.state -in @('reserved', 'spent', 'historical-spent', 'legacy-deny')) {
             if ($withdrawnAttempts.Contains($entry.attemptId) -or
                 ($entry.state -ne 'legacy-deny' -and
@@ -722,6 +737,7 @@ function Test-InaviRunManifestCore {
                 $null -eq (ConvertTo-InaviCoreUtc $entry.utc) -or
                 -not (Test-InaviCoreField $entry 'withdrawalEvidence') -or
                 -not (Test-InaviCoreMap $entry.withdrawalEvidence) -or
+                $entry.withdrawalEvidence.Count -ne 2 -or
                 -not (Test-InaviCoreField $entry.withdrawalEvidence 'path') -or
                 -not (Test-InaviCoreField $entry.withdrawalEvidence 'sha256') -or
                 -not (Test-InaviCoreEvidencePath $entry.withdrawalEvidence.path $sourceRootForProof) -or
@@ -739,6 +755,12 @@ function Test-InaviRunManifestCore {
                     $entry.withdrawalEvidence.sha256) {
                 Add-InaviCoreCode $codes 'LEDGER_WITHDRAWAL_UNVERIFIED'
                 continue
+            }
+            foreach ($zip in $entry.zipSha256) {
+                if ($nonWithdrawnZipHashes.Contains($zip) -or
+                    -not $withdrawnZipHashes.Add($zip)) {
+                    Add-InaviCoreCode $codes 'LEDGER_INVALID'
+                }
             }
             if ($usedApprovals.Contains($entry.approvalReference) -or
                 $usedAttempts.Contains($entry.attemptId) -or

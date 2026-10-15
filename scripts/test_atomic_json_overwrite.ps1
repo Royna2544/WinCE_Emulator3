@@ -5,7 +5,9 @@ overwrite helpers. Parse and define only the named function bodies; never
 dot-source either parent script or open an emulator mount, ZIP or ledger.
 #>
 [CmdletBinding()]
-param()
+param(
+    [string]$ScratchParent = [System.IO.Path]::GetTempPath()
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -91,7 +93,10 @@ function Assert-FailedOverwriteCleansScratch(
     Assert-NoScratchFiles (Split-Path -Parent $Path) "$Label failed overwrite"
 }
 
-$scratchParent = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/')
+$scratchParent = [System.IO.Path]::GetFullPath($ScratchParent).TrimEnd('\', '/')
+if (-not (Test-Path -LiteralPath $scratchParent -PathType Container)) {
+    throw "Atomic JSON scratch parent does not exist: $scratchParent"
+}
 $scratch = [System.IO.Path]::GetFullPath((Join-Path $scratchParent (
     'wce-atomic-json-test-' + [Guid]::NewGuid().ToString('N'))))
 $resolvedParent = [System.IO.Path]::GetDirectoryName($scratch)

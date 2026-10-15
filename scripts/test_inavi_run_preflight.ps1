@@ -50,7 +50,8 @@ function New-Baseline {
         'scripts/test_backup_rw_mounts_inventory.ps1',
         'scripts/inavi_summary_observer_core.ps1',
         'scripts/test_inavi_summary_observer.ps1',
-        'scripts/test_inavi_runner_guard.ps1'
+        'scripts/test_inavi_runner_guard.ps1',
+        'scripts/test_atomic_json_overwrite.ps1'
     )) { $sourceFiles[$relative] = New-SyntheticHash "source $relative" }
     $hash = @{
         sd = (New-SyntheticHash 'SD archive')
@@ -343,6 +344,33 @@ $sample.localLedger = @($withdrawn)
 $sample.trackedLedger = @(Copy-Fixture $withdrawn)
 $cases.Add(@{ name = 'withdrawn_listed_zip_cannot_be_reused'; data = $sample; accepted = $false; code = 'ZIP_REUSED' })
 
+$sharedZip = New-SyntheticHash 'withdrawn cross-row ZIP conflict'
+$sample = Copy-Fixture $base
+$historical = New-HistoricalSpentEntry 'call_offline_prior_shared_zip' @($sharedZip)
+$withdrawn = New-WithdrawnEntry 'call_offline_later_withdrawn_shared_zip' @($sharedZip)
+Set-ObservedHistoricalRunEvidence $sample $historical
+Set-ObservedWithdrawalEvidence $sample $withdrawn
+$sample.localLedger = @($historical, $withdrawn)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'withdrawn_cannot_claim_zip_from_prior_history'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$withdrawn = New-WithdrawnEntry 'call_offline_first_withdrawn_shared_zip' @($sharedZip)
+$historical = New-HistoricalSpentEntry 'call_offline_later_shared_zip_history' @($sharedZip)
+Set-ObservedWithdrawalEvidence $sample $withdrawn
+Set-ObservedHistoricalRunEvidence $sample $historical
+$sample.localLedger = @($withdrawn, $historical)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'later_history_cannot_reuse_withdrawn_zip'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$first = New-WithdrawnEntry 'call_offline_first_shared_zip_withdrawal' @($sharedZip)
+$second = New-WithdrawnEntry 'call_offline_second_shared_zip_withdrawal' @($sharedZip)
+Set-ObservedWithdrawalEvidence $sample $first
+$sample.localLedger = @($first, $second)
+$sample.trackedLedger = Copy-Fixture $sample.localLedger
+$cases.Add(@{ name = 'second_withdrawal_cannot_reuse_first_zip'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
 $sample = Copy-Fixture $base
 $reserved = New-UseEntry 'call_offline_reserved_then_withdrawn' 'reserved' @((New-SyntheticHash 'reserved SD'))
 $withdrawn = New-WithdrawnEntry $reserved.approvalReference @((New-SyntheticHash 'withdrawn SD'))
@@ -411,6 +439,21 @@ $sample.trackedLedger = @(Copy-Fixture $withdrawn)
 $cases.Add(@{ name = 'withdrawn_missing_evidence_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
 
 $sample = Copy-Fixture $base
+$withdrawn = New-WithdrawnEntry 'call_offline_missing_withdrawal_digest' @()
+$withdrawn.withdrawalEvidence.Remove('sha256')
+$sample.localLedger = @($withdrawn)
+$sample.trackedLedger = @(Copy-Fixture $withdrawn)
+$cases.Add(@{ name = 'withdrawn_missing_evidence_digest_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$withdrawn = New-WithdrawnEntry 'call_offline_malformed_withdrawal_digest' @()
+$withdrawn.withdrawalEvidence.sha256 = 'not-a-sha256-digest'
+Set-ObservedWithdrawalEvidence $sample $withdrawn
+$sample.localLedger = @($withdrawn)
+$sample.trackedLedger = @(Copy-Fixture $withdrawn)
+$cases.Add(@{ name = 'withdrawn_malformed_evidence_digest_invalid'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
 $withdrawn = New-WithdrawnEntry 'call_offline_bad_withdrawal_evidence' @()
 $withdrawn.withdrawalEvidence.path = 'D:\GitHub\Wince_emulation_v3\target\unpreserved-withdrawal.md'
 Set-ObservedWithdrawalEvidence $sample $withdrawn
@@ -455,6 +498,14 @@ Set-ObservedWithdrawalEvidence $sample $withdrawn
 $sample.localLedger = @($withdrawn)
 $sample.trackedLedger = @(Copy-Fixture $withdrawn)
 $cases.Add(@{ name = 'withdrawn_cannot_claim_a_process'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
+
+$sample = Copy-Fixture $base
+$withdrawn = New-WithdrawnEntry 'call_offline_withdrawn_nested_process' @()
+$withdrawn.withdrawalEvidence.pid = [long]4242
+Set-ObservedWithdrawalEvidence $sample $withdrawn
+$sample.localLedger = @($withdrawn)
+$sample.trackedLedger = @(Copy-Fixture $withdrawn)
+$cases.Add(@{ name = 'withdrawn_evidence_record_has_only_path_and_hash'; data = $sample; accepted = $false; code = 'LEDGER_INVALID' })
 
 $sample = Copy-Fixture $base
 $withdrawn = New-WithdrawnEntry 'call_offline_too_many_withdrawn_zips' @(
@@ -1082,7 +1133,7 @@ $sample.observed.fileSha256.Remove($oldPath)
 $sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
 $cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
 
-if ($cases.Count -ne 117) { throw "Unexpected fixture count: $($cases.Count)" }
+if ($cases.Count -ne 123) { throw "Unexpected fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress
