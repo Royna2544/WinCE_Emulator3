@@ -8623,6 +8623,101 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
 }
 
 #[test]
+fn raw_guest_trap_pseudo_terminate_refuses_before_synchronous_exit_effects() -> Result<()> {
+    const SENTINEL_ERROR: u32 = 0x5a5a;
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let launch = kernel.queue_process_launch(None, None);
+    let process_birth = launch.process_birth.expect("process birth");
+    let caller_birth = launch.primary_thread_birth.expect("caller birth");
+    kernel.set_current_process_id(launch.process_id);
+    let hwnd = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            caller_birth,
+            "GUEST_PSEUDO_EXIT",
+            "",
+            None,
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::default(),
+        )
+        .expect("process-owned window");
+    let state_before = kernel.current_process_state();
+    let process_trace_before = kernel.recent_process_ops().to_vec();
+    let message_trace_before = kernel.recent_message_ops().to_vec();
+    kernel
+        .threads
+        .set_last_error(launch.thread_id, SENTINEL_ERROR);
+
+    let result = table.dispatch_raw_ordinal_with_framebuffer_and_context(
+        &mut kernel,
+        &mut memory,
+        None,
+        CoredllRawContext {
+            thread_id: launch.thread_id,
+            caller_birth: Some(caller_birth),
+            trap_pc: Some(0x7fff_0000),
+            ..Default::default()
+        },
+        ORD_TERMINATE_PROCESS,
+        [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x55],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(launch.thread_id),
+        SENTINEL_ERROR
+    );
+    assert_eq!(kernel.current_process_state(), state_before);
+    assert!(kernel.gwe.is_window(hwnd));
+    assert!(
+        kernel
+            .handles
+            .process_execution_live_by_birth(process_birth)
+    );
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+    assert_eq!(kernel.recent_process_ops(), process_trace_before.as_slice());
+    assert_eq!(kernel.recent_message_ops(), message_trace_before.as_slice());
+
+    // A direct host/fixture call has no trap PC and retains its explicit raw path.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            CoredllRawContext {
+                thread_id: launch.thread_id,
+                caller_birth: Some(caller_birth),
+                ..Default::default()
+            },
+            ORD_TERMINATE_PROCESS,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x66],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch.process_handle),
+        Some(0x66)
+    );
+    Ok(())
+}
+
+#[test]
 fn raw_pseudo_terminate_stale_caller_preserves_selected_process() -> Result<()> {
     let table = CoredllExportTable::default();
     let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);

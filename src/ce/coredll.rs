@@ -31753,6 +31753,15 @@ fn terminate_process_raw(
     handle: u32,
     exit_code: u32,
 ) -> bool {
+    // Guest import traps must stop through the native owner before pseudo self-exit
+    // can retire Task/VM state. Only direct host/fixture raw calls may do so here.
+    if CeKernel::is_current_process_pseudo_handle(handle)
+        && (context.trap_pc.is_some()
+            || context.caller_pc.is_some()
+            || context.raw_caller_pc.is_some())
+    {
+        return false;
+    }
     let Some(caller_birth) = context
         .caller_birth
         .filter(|birth| birth.thread_id() == thread_id)
