@@ -42,7 +42,7 @@ One immutable Window owner is exact `(ThreadBirthKey, creation ProcessBirthKey)`
 W-B1a preflights the captured native caller birth for `CreateWindowExW`, `CreateDialogIndirectParamW`, and `DialogBoxIndirectParamW` before any GWES/LastError effect; absent birth is a fixture-only compatibility path.
 Verified explicit HWND posts enter the existing FIFO as Birth-owned work, committing status, ready time, trace, and exact-birth wake together; stale ordinary HWNDs publish nothing, while desktop/legacy compatibility stays explicit.
 Typed-payload recipient and native CreateWindow callback ownership use the frozen process birth, never a current numeric PID lookup; CE6 return/LastError parity remains unverified where local GWES source is silent.
-Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible without a numeric-TID sweep. CE-family [DestroyWindow](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa452942%28v%3Dmsdn.10%29) recursively destroys child and owned windows, while [SetParent](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa453645%28v%3Dmsdn.10%29) requires the child and new parent to belong to the same application. Cross-birth parent links are not established valid CE6 topology; recovery from foreign parent/owner links is unproved, not an accepted B-descendant-survival rule.
+Exact A exit retires A's Birth-owned posts and makes later explicit posts ineligible without a numeric-TID sweep. CE-family [DestroyWindow](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa452942%28v%3Dmsdn.10%29) recursively destroys child and owned windows, while [SetParent](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa453645%28v%3Dmsdn.10%29) requires the child and new parent to belong to the same application. Cross-birth parent links are not established valid CE6 topology; the later exact-window-set gate tests host-exit identity isolation, not foreign-link recovery or an accepted B-descendant-survival rule.
 W-B1b remote touch/key ownership passed its bounded
 [source gate](../../evidence/stage3-window-input-birth-20261015/validation.receipt.md).
 For a Birth-owned window, an explicitly host-targeted HWND has a frozen recipient: if it is stale or destroyed, consume
@@ -92,8 +92,9 @@ no-birth controls passed; the 18-group broad suites passed release
 ([validation receipt](../../evidence/stage3-host-teardown-20261015/validation.receipt.md)).
 The earlier host-exit gate did not birth-filter `destroy_window`'s recursive
 parent/owner traversal or numeric sent-message process cleanup. The later
-sender gate narrows the latter, not foreign-link recovery, full teardown or
-live-app/CE6 acceptance.
+sender gate narrows the latter; the exact-window-set gate separately avoids
+that traversal for host exit. Neither proves foreign-link recovery, full
+teardown or live-app/CE6 acceptance.
 
 ### Bounded host-exit exact-window-set gate (source-tested)
 
@@ -167,6 +168,30 @@ still fail, and ignores framebuffer-restore success. This gate records those
 risks and does not claim atomic whole-process exit or framebuffer rollback;
 they need a separate preflight/recovery gate. This source gate neither accepts
 full Stage 3 nor authorizes a writable-mount iNavi run.
+
+### Bounded guest self-exit caller gate (planned)
+
+The native COREDLL `TerminateProcess` import already has a captured
+`ThreadBirthKey` and a per-attempt native process birth, but its raw handler
+currently drops that witness. The decoded direct-kernel PC-zero self-exit
+path also chooses a mutable numeric process and tries it as a handle before
+falling back to the pseudo handle. Before either guest ingress publishes
+window, send, backing, exit-code, waiter, trace or LastError effects, require
+one live captured caller thread birth whose frozen creation process equals
+both the native attempt owner and the selected Kernel process birth. A
+missing/stale/replayed or mismatched witness must fail closed; a valid same-
+birth self exit may use a birth-qualified Kernel operation. Classify decoded
+self-PID and pseudo-handle forms before handle lookup to avoid numeric
+PID/handle collision. The native import should require verified birth even
+for real-handle requests, but changing their continuation semantics is outside
+this gate. Synthetic raw tests that currently use an unregistered or
+other-process caller must gain canonical caller ownership rather than let a
+numeric selector authorize a guest mutation. Direct host fixture calls remain
+separate compatibility tests. Red controls will check stale A against live B
+with B's HWND and exit/wait state retained, plus missing birth and valid B;
+the decoded path needs its own stale and positive controls. This is a bounded
+native-register/process-lease preflight, not a completed Task/Frame or
+whole-process-stop proof, nor CE6 timing/LastError parity.
 
 ### Bounded sender-owned send transaction (source-tested)
 

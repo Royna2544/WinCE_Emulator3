@@ -91,10 +91,15 @@ and pre-entry guards for the identified guest no-wait message producers. The
 three preserved sender expected-red controls are now enabled; release
 **2,067/0/9 ignored** and no-default **1,495/0/3 ignored** passed across 18
 groups each. `LegacyUnknown` remains explicit fixture compatibility, not
-production birth authority. Direct WndProc dispatch, receiver-side
-cross-process result writes, conditional system-origin device broadcasts,
-foreign GWE window traversal, CE6 cancellation parity, full Stage 3 and live
-iNavi remain separate gates. No live run is approved by either source gate.
+production birth authority. The later
+[exact-window-set source gate](../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
+retired only frozen-birth host-exit HWNDs despite synthetic foreign links and
+woke an exact sender waiting on a retired receiver; its release
+**2,072/0/9 ignored** and no-default **1,500/0/3 ignored** suites passed.
+Direct WndProc dispatch, receiver-side cross-process result writes,
+conditional system-origin device broadcasts, pseudo-exit caller authority,
+whole-exit atomicity, CE6 foreign-link/cancellation parity, full Stage 3 and
+live iNavi remain separate gates. No live run is approved by these source gates.
 
 Stage 7 budgets are a design gate, not values inferred from the current
 splash-only E-38 observation. Before calling memory or responsiveness "small"
@@ -279,8 +284,11 @@ close only their named gates, not Stage 2 or live acceptance.
   numeric sent-message sender cleanup lacked birth proof. The later bounded
   [sender gate](../evidence/stage3-sender-birth-20261015/validation.receipt.md)
   covers tested queued and active sends, including identified native and
-  no-wait producers; full owner-filtered host teardown,
-  live-app behavior and CE6 parity remain open.
+  no-wait producers. The later
+  [exact-window-set gate](../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
+  source-tests foreign-link isolation without changing guest
+  `DestroyWindow` recursion; full exit-effect authority, live-app behavior
+  and CE6 parity remain open.
   Broadcast, HWND timers, hotkeys,
   sent/paint/modal producers, native continuation
   payloads, wait-ID wrap/reuse and live modal behavior remain later gates

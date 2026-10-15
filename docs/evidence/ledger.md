@@ -1849,10 +1849,30 @@ This bounded gate validates exact sender-birth ownership of queued
 Send/Timeout and pre-entry guards for the identified guest no-wait producers.
 The stranded prior-birth send is synthetic safety evidence, not normal exit
 behavior. Direct WndProc dispatch, conditional system-origin storage/device
-broadcasts, receiver-side cross-process result writes, recursive foreign GWE
-links, CE6 parity, full Stage 3 and live iNavi remain open. There was no
+broadcasts, receiver-side cross-process result writes, and (at that sender
+seal) recursive foreign GWE links remained open. CE6 parity, full Stage 3 and
+live iNavi remain open. There was no
 emulator run, writable-mount operation, LAN session, footprint or latency
 measurement.
+
+## Host-exit exact-window-set source gate (2026-10-15, executed offline)
+
+The [final receipt](../../evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
+preserves the parent/owner and SendReply expected reds, attempt lineage,
+reversible source patch, tested file hashes and complete final-suite logs.
+The tested source at `32ef955c` selects live host-exit HWNDs only by frozen
+creation process birth, even when synthetic parent/owner links cross births;
+Kernel uses the actually retired set for payload, shell and timer cleanup.
+An exact A→B sender waiting on a retired B receiver HWND is woken once.
+Normal guest `DestroyWindow` keeps its existing recursion/callback path.
+Final 18-block offline suites passed release **2,072/0/9 ignored** and
+no-default **1,500/0/3 ignored**; Unicorn-only and desktop-without-trace
+release checks passed. The supplied `C:\Program Files\LLVM\bin` resolved
+the native libclang dependency. This is synthetic identity-safety evidence,
+not CE6 permission for foreign links. Pseudo-exit caller authority, fallible
+whole-exit effects, CE6 topology, full Stage 3 and live iNavi remain open.
+There was no emulator run, writable-mount operation, LAN session, footprint
+or input-to-frame latency measurement.
 
 ## Chat-project validation notes (not in this repository)
 

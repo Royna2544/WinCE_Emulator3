@@ -87,7 +87,7 @@ image/DLL, safe heap reuse, clone-lineage or full Stage 2 gates.
 | O-G1 | Canonical window-handle generation and lifetime. | open |
 | O-G2 | Custom pointer-message marshalling policy for application-defined LPARAMs. | open |
 | O-G3 | Which complete continuation family migrates first (ordinary GetMessage/send or window creation). | open |
-| O-G4 | How process-exit teardown handles a foreign-birth parent/owner link without changing explicit guest `DestroyWindow` recursion; establish valid CE6 topology before treating a synthetic foreign link as parity evidence. | open |
+| O-G4 | Establish valid CE6 parent/owner topology and the surviving foreign link's disposition after the source-tested exact-set host exit; do not change explicit guest `DestroyWindow` recursion or treat a synthetic foreign link as parity evidence. | open |
 | O-G5 | Whether and how legacy numeric-only sent-message sender records can be retired on exit without granting them a guessed birth; exact-birth production sends must not be swept by recycled PID/TID. | open |
 
 ### Devices and sensors ([page](subsystems/devices-sensors.md))
