@@ -26,8 +26,9 @@ use crate::{
             ApiHandleObject, ApiSetObject, CE_THREAD_PRIORITY_NORMAL, DeviceNotificationObject,
             FileChangeNotificationObject, FileChangeRecord, FileObject, FindFileObject,
             HandleTable, KernelObject, MAX_SUSPEND_COUNT, MAX_WIN32_PRIORITY_LEVELS,
-            MessageQueueHandleObject, ProcessBirthKey, TaskWaitPin, ThreadBirthKey, ThreadObject,
-            ThreadResumeResult, ThreadSuspendResult, VolumeObject, WaitMultipleResult, WaitResult,
+            MessageQueueHandleObject, ProcessBirthKey, TaskFrameError, TaskFrameRef, TaskWaitPin,
+            ThreadBirthKey, ThreadObject, ThreadResumeResult, ThreadSuspendResult, VolumeObject,
+            WaitMultipleResult, WaitResult,
             ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::{Registry, RegistryValue},
@@ -36,8 +37,8 @@ use crate::{
         },
         resource::ResourceSystem,
         scheduler::{
-            Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerStats,
-            SchedulerWaitKind, SchedulerWakeReason, WaitObjectKey,
+            Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerPublishError,
+            SchedulerStats, SchedulerWaitKind, SchedulerWakeReason, WaitObjectKey,
         },
         shell::{
             NotifyIconData, ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
@@ -439,6 +440,15 @@ pub enum WaitPublishError {
     ExitedOwnerBirth {
         owner: ThreadBirthKey,
     },
+}
+
+/// Failures before a finite Sleep frame becomes guest-visible. Native callers
+/// treat these as backend handoff failures, never as a CE Sleep return.
+#[derive(Debug)]
+pub enum FiniteSleepPublishError {
+    Owner(WaitPublishError),
+    Frame(TaskFrameError),
+    Scheduler(SchedulerPublishError),
 }
 
 impl std::fmt::Display for WaitPublishError {
@@ -7863,6 +7873,65 @@ impl CeKernel {
             ))
     }
 
+    /// The first Task/Frame migration boundary: publish one finite Sleep for
+    /// an exact live owner. The HandleTable owns its mutable phase; the
+    /// scheduler record carries only an immutable locator. No target object
+    /// pins are acquired by Sleep.
+    pub fn try_publish_finite_sleep_wait_for_birth(
+        &mut self,
+        owner_birth: ThreadBirthKey,
+        thread_handle: u32,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> std::result::Result<TaskFrameRef, FiniteSleepPublishError> {
+        self.validate_live_wait_owner_birth(owner_birth, owner_birth.thread_id())
+            .map_err(FiniteSleepPublishError::Owner)?;
+        let key = self
+            .handles
+            .preflight_finite_sleep_frame(owner_birth)
+            .map_err(FiniteSleepPublishError::Frame)?;
+        let frame = self
+            .scheduler
+            .try_register_finite_sleep_wait(key, thread_handle, wait_started_ms, timeout_ms)
+            .map_err(FiniteSleepPublishError::Scheduler)?;
+        if let Err(error) = self.handles.activate_finite_sleep_frame(frame) {
+            // No guest-visible result or native payload has been published.
+            // This cannot normally fail under the exclusive Kernel borrow,
+            // but a failed invariant must not leave a selectable wait.
+            let _ = self.remove_blocked_waiter(frame.wait_id());
+            return Err(FiniteSleepPublishError::Frame(error));
+        }
+        Ok(frame)
+    }
+
+    pub fn is_blocked_finite_sleep_frame(&self, frame: TaskFrameRef) -> bool {
+        self.handles.finite_sleep_frame_is_blocked(frame)
+            && self.blocked_waiter(frame.wait_id()).is_some_and(|wait| {
+                wait.frame_ref == Some(frame)
+                    && wait.owner_birth == Some(frame.key().owner_birth())
+                    && matches!(wait.kind, SchedulerBlockedWaitKind::Sleep)
+            })
+    }
+
+    pub fn begin_finite_sleep_completion(&mut self, frame: TaskFrameRef) -> bool {
+        self.is_blocked_finite_sleep_frame(frame)
+            && self.handles.begin_finite_sleep_completion(frame).is_ok()
+    }
+
+    /// Call only after native register restoration and return PC are checked.
+    /// The scheduler wait and its pins stay live until this exact completion.
+    pub fn retire_finite_sleep_completion(&mut self, frame: TaskFrameRef) -> bool {
+        if !self
+            .blocked_waiter(frame.wait_id())
+            .is_some_and(|wait| wait.frame_ref == Some(frame))
+            || self.handles.retire_finite_sleep_frame(frame).is_err()
+        {
+            return false;
+        }
+        self.remove_blocked_waiter(frame.wait_id())
+            .is_some_and(|wait| wait.frame_ref == Some(frame))
+    }
+
     fn validate_live_wait_owner_birth(
         &self,
         owner_birth: ThreadBirthKey,
@@ -8022,6 +8091,18 @@ impl CeKernel {
         self.comm_event_mask_changed_waits.remove(&wait_id);
         let removed = self.scheduler.remove_blocked_wait(wait_id);
         if let Some(wait) = &removed {
+            if let Some(frame) = wait.frame_ref {
+                // Cancellation, exact-birth exit and failed publication all
+                // retire only the matching canonical frame. A successful
+                // completion already retired it before removing the index.
+                if self.handles.active_finite_sleep_frame(frame.key().owner_birth())
+                    == Some(frame)
+                {
+                    if let Err(error) = self.handles.cancel_finite_sleep_frame(frame) {
+                        tracing::error!(target: "ce.scheduler", ?frame, ?error, "finite Sleep frame cancellation failed");
+                    }
+                }
+            }
             for pin in wait.pinned_targets.iter().flatten() {
                 assert!(self.handles.release_wait_target(*pin));
             }
@@ -8199,7 +8280,12 @@ impl CeKernel {
                 active_thread_id,
                 now_ms,
                 |wait| {
-                    if matches!(
+                    if let Some(frame) = wait.frame_ref {
+                        // Eligibility precedes readiness and timeout. A stale
+                        // generation can never become runnable merely because
+                        // its old numeric deadline expired.
+                        self.is_blocked_finite_sleep_frame(frame)
+                    } else if matches!(
                         wait.kind,
                         SchedulerBlockedWaitKind::GetMessage { .. }
                             | SchedulerBlockedWaitKind::MsgWait { .. }

@@ -278,6 +278,110 @@ impl ThreadBirthKey {
     }
 }
 
+/// Immutable identity of one continuation frame within an exact thread birth.
+/// The generation is never reused for another frame in that birth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaskFrameKey {
+    owner_birth: ThreadBirthKey,
+    generation: u64,
+}
+
+impl TaskFrameKey {
+    pub fn owner_birth(self) -> ThreadBirthKey {
+        self.owner_birth
+    }
+
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+/// A scheduler/native locator for one frame's one wait. Mutable phase is held
+/// only by the canonical ThreadRecord, never copied into this reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TaskFrameRef {
+    key: TaskFrameKey,
+    wait_id: u64,
+}
+
+impl TaskFrameRef {
+    pub fn new(key: TaskFrameKey, wait_id: u64) -> std::result::Result<Self, TaskFrameError> {
+        if wait_id == 0 {
+            return Err(TaskFrameError::InvalidWaitId);
+        }
+        Ok(Self { key, wait_id })
+    }
+
+    pub fn key(self) -> TaskFrameKey {
+        self.key
+    }
+
+    pub fn wait_id(self) -> u64 {
+        self.wait_id
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskFrameError {
+    InvalidWaitId,
+    StaleOwnerBirth {
+        expected: ThreadBirthKey,
+        current: Option<ThreadBirthKey>,
+    },
+    ExitedOwnerBirth {
+        owner: ThreadBirthKey,
+    },
+    ActiveFrameOccupied {
+        owner: ThreadBirthKey,
+        active: TaskFrameRef,
+    },
+    GenerationExhausted {
+        owner: ThreadBirthKey,
+    },
+    UnexpectedGeneration {
+        frame: TaskFrameKey,
+        next_generation: u64,
+    },
+    StaleFrame {
+        expected: TaskFrameRef,
+        active: Option<TaskFrameRef>,
+    },
+    AlreadyCompleting {
+        frame: TaskFrameRef,
+    },
+    NotCompleting {
+        frame: TaskFrameRef,
+    },
+}
+
+impl std::fmt::Display for TaskFrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FiniteSleepFramePhase {
+    Blocked,
+    Completing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskFrameState {
+    FiniteSleep {
+        reference: TaskFrameRef,
+        phase: FiniteSleepFramePhase,
+    },
+}
+
+impl TaskFrameState {
+    fn reference(self) -> TaskFrameRef {
+        match self {
+            Self::FiniteSleep { reference, .. } => reference,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ThreadHandleObject {
     thread_id: u32,
@@ -301,6 +405,10 @@ struct ThreadRecord {
     execution_live: bool,
     /// Registered wait frames retain this exact birth after public aliases close.
     wait_refs: u32,
+    /// The current canonical frame. The first migration uses this for finite
+    /// blocked Sleep; parent callout continuations remain a separate gate.
+    active_frame: Option<TaskFrameState>,
+    last_frame_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -888,6 +996,8 @@ impl HandleTable {
                 aliases: BTreeSet::new(),
                 execution_live: true,
                 wait_refs: 0,
+                active_frame: None,
+                last_frame_generation: 0,
             },
         );
         Ok((incarnation, next_incarnation))
@@ -1099,7 +1209,10 @@ impl HandleTable {
 
     fn retire_thread_if_unreferenced(&mut self, thread_id: u32) {
         if self.threads.get(&thread_id).is_some_and(|record| {
-            !record.execution_live && record.aliases.is_empty() && record.wait_refs == 0
+            !record.execution_live
+                && record.aliases.is_empty()
+                && record.wait_refs == 0
+                && record.active_frame.is_none()
         }) {
             self.threads.remove(&thread_id);
         }
@@ -1141,6 +1254,170 @@ impl HandleTable {
 
     pub fn contains_thread_birth(&self, key: ThreadBirthKey) -> bool {
         self.thread_birth_key_by_id(key.thread_id) == Some(key)
+    }
+
+    /// Validate the exact live owner and reserve a prospective frame identity
+    /// without changing task state. Activation repeats these checks.
+    pub fn preflight_finite_sleep_frame(
+        &self,
+        owner_birth: ThreadBirthKey,
+    ) -> std::result::Result<TaskFrameKey, TaskFrameError> {
+        let current = self.thread_birth_key_by_id(owner_birth.thread_id);
+        if current != Some(owner_birth) {
+            return Err(TaskFrameError::StaleOwnerBirth {
+                expected: owner_birth,
+                current,
+            });
+        }
+        let record = &self.threads[&owner_birth.thread_id];
+        if !record.execution_live || record.object.signaled {
+            return Err(TaskFrameError::ExitedOwnerBirth { owner: owner_birth });
+        }
+        if let Some(active) = record.active_frame {
+            return Err(TaskFrameError::ActiveFrameOccupied {
+                owner: owner_birth,
+                active: active.reference(),
+            });
+        }
+        let generation = record
+            .last_frame_generation
+            .checked_add(1)
+            .ok_or(TaskFrameError::GenerationExhausted { owner: owner_birth })?;
+        Ok(TaskFrameKey {
+            owner_birth,
+            generation,
+        })
+    }
+
+    /// Publish only the preflighted frame. The wait ID must already be unique
+    /// and nonzero; a failed publication leaves this record unchanged.
+    pub fn activate_finite_sleep_frame(
+        &mut self,
+        frame: TaskFrameRef,
+    ) -> std::result::Result<(), TaskFrameError> {
+        let next = self.preflight_finite_sleep_frame(frame.key.owner_birth)?;
+        if frame.key != next {
+            return Err(TaskFrameError::UnexpectedGeneration {
+                frame: frame.key,
+                next_generation: next.generation,
+            });
+        }
+        let record = &mut self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        record.last_frame_generation = frame.key.generation;
+        record.active_frame = Some(TaskFrameState::FiniteSleep {
+            reference: frame,
+            phase: FiniteSleepFramePhase::Blocked,
+        });
+        Ok(())
+    }
+
+    /// Query the task-owned reference, including after execution exit so exact
+    /// cancellation can release it before final retirement.
+    pub fn active_finite_sleep_frame(&self, owner_birth: ThreadBirthKey) -> Option<TaskFrameRef> {
+        let record = self.threads.get(&owner_birth.thread_id)?;
+        if record.incarnation != owner_birth.incarnation {
+            return None;
+        }
+        record.active_frame.map(TaskFrameState::reference)
+    }
+
+    /// A copied scheduler/native locator cannot select a stale or already
+    /// completing frame, even when its numeric TID or wait ID looks plausible.
+    pub fn finite_sleep_frame_is_blocked(&self, frame: TaskFrameRef) -> bool {
+        let Some(record) = self.threads.get(&frame.key.owner_birth.thread_id) else {
+            return false;
+        };
+        record.incarnation == frame.key.owner_birth.incarnation
+            && record.execution_live
+            && !record.object.signaled
+            && matches!(
+                record.active_frame,
+                Some(TaskFrameState::FiniteSleep {
+                    reference,
+                    phase: FiniteSleepFramePhase::Blocked,
+                }) if reference == frame
+            )
+    }
+
+    /// Claim one timeout/result commit. A second selection is rejected while
+    /// the exact frame is completing rather than consuming its wait twice.
+    pub fn begin_finite_sleep_completion(
+        &mut self,
+        frame: TaskFrameRef,
+    ) -> std::result::Result<(), TaskFrameError> {
+        let active = self.active_finite_sleep_frame(frame.key.owner_birth);
+        if active != Some(frame) {
+            return Err(TaskFrameError::StaleFrame {
+                expected: frame,
+                active,
+            });
+        }
+        if !self.thread_execution_live_by_id(frame.key.owner_birth.thread_id) {
+            return Err(TaskFrameError::ExitedOwnerBirth {
+                owner: frame.key.owner_birth,
+            });
+        }
+        let record = self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        match record.active_frame.as_mut().unwrap() {
+            TaskFrameState::FiniteSleep { phase, .. } => match phase {
+                FiniteSleepFramePhase::Blocked => {
+                    *phase = FiniteSleepFramePhase::Completing;
+                    Ok(())
+                }
+                FiniteSleepFramePhase::Completing => {
+                    Err(TaskFrameError::AlreadyCompleting { frame })
+                }
+            },
+        }
+    }
+
+    /// Release a successfully completed exact frame after the native return
+    /// context and result have been committed.
+    pub fn retire_finite_sleep_frame(
+        &mut self,
+        frame: TaskFrameRef,
+    ) -> std::result::Result<(), TaskFrameError> {
+        let active = self.active_finite_sleep_frame(frame.key.owner_birth);
+        if active != Some(frame) {
+            return Err(TaskFrameError::StaleFrame {
+                expected: frame,
+                active,
+            });
+        }
+        let record = self.threads.get_mut(&frame.key.owner_birth.thread_id).unwrap();
+        if !matches!(
+            record.active_frame,
+            Some(TaskFrameState::FiniteSleep {
+                phase: FiniteSleepFramePhase::Completing,
+                ..
+            })
+        ) {
+            return Err(TaskFrameError::NotCompleting { frame });
+        }
+        record.active_frame = None;
+        self.retire_thread_if_unreferenced(frame.key.owner_birth.thread_id);
+        Ok(())
+    }
+
+    /// Exact cancellation is legal from either phase: exit and terminal
+    /// backend failure must not retain an unresumable frame indefinitely.
+    pub fn cancel_finite_sleep_frame(
+        &mut self,
+        frame: TaskFrameRef,
+    ) -> std::result::Result<(), TaskFrameError> {
+        let active = self.active_finite_sleep_frame(frame.key.owner_birth);
+        if active != Some(frame) {
+            return Err(TaskFrameError::StaleFrame {
+                expected: frame,
+                active,
+            });
+        }
+        self.threads
+            .get_mut(&frame.key.owner_birth.thread_id)
+            .unwrap()
+            .active_frame = None;
+        self.retire_thread_if_unreferenced(frame.key.owner_birth.thread_id);
+        Ok(())
     }
 
     /// Acquire one lifetime reference for a validated, exact-birth wait target.
