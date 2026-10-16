@@ -6814,6 +6814,25 @@ impl UnicornMips {
             return Ok(switched || self.completed_active_process_exit);
         }
         let Some(exit_code) = self.active_process_thread_exit_code(kernel) else {
+            // A stopped boot CPU with an executed exit-stub witness cannot
+            // silently continue merely because its saved primary birth was
+            // lost or no longer matches Kernel authority. Ordinary stops are
+            // still non-candidates; neither path changes Kernel or CPU state.
+            if self.owned_process_launch.is_none()
+                && self.initial_thread_id == MAIN_GUEST_THREAD_ID
+                && self.current_thread_id == MAIN_GUEST_THREAD_ID
+                && self
+                    .saved_context
+                    .as_ref()
+                    .is_some_and(|saved| saved.pc == THREAD_EXIT_STUB_ADDR)
+                && self.last_debug_snapshot().is_some_and(|snapshot| {
+                    snapshot.pc == THREAD_EXIT_STUB_ADDR && snapshot.thread_exit_reached
+                })
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "stopped boot exit lacks a verified primary thread birth",
+                });
+            }
             return Ok(false);
         };
         let Some(launch) = self
