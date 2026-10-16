@@ -495,18 +495,22 @@ Process/Task record. Canonical HandleTable remains the only lifecycle authority.
 One implementable *candidate*, not a selected Rust API, is a private directory
 of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
 a separately inspectable checked state header, and a `RefCell<CpuPayload>`;
-only the directory owns/exposes the slot, while other subsystems receive its
-copyable `CpuSlotKey`. A `with_cpu(key, closure)` operation resolves and clones
-the private cell under a short, fallible directory borrow, releases that borrow,
-then uses `try_borrow_mut` on **that slot only** for the closure. It does not
+only the directory publishes its copyable `CpuSlotKey`, while scoped internal
+loans may hold a temporary private `Rc`. A non-executing
+`with_cpu(key, closure)` operation resolves and clones the private cell under
+a short, fallible directory borrow, releases that borrow, then uses
+`try_borrow_mut` on **that slot only** for the closure. It does not
 build a self-referential guard containing both an `Rc` and a `RefMut`, return an
 unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry. A
 parent's payload loan may stay on the paused import-hook stack while a
 different child slot is admitted and run; metadata/readiness queries must use
 the separate header, not try to reborrow the paused parent payload. Attempted
 same-slot reentry stops or defers with a typed conflict, never creates a
-second executable loan. The directory remains the sole durable CPU owner;
-the closure loan cannot retire or replace its slot while in use.
+second executable loan. A separate slot-loan latch, checked with the key's
+generation, must make `retire_exact` refuse removal/reuse while any payload
+loan or run permit exists; cloning the private `Rc` alone does not ensure
+that. The directory remains the durable registration/CPU owner after each
+scoped loan ends.
 
 Parked-tree edges and Scheduler ready/wait indexes would hold checked slot
 locators, not CPU boxes. A slot has at most one structural parent/location;
@@ -521,6 +525,13 @@ TID or queue position is never sufficient. Exactly one machine-wide run lease
 may execute guest instructions; every admitted slot is reachable from custody
 even when it is not runnable or its queue locator is being rewritten.
 
+Executable access needs a distinct `with_run_cpu(&RunPermit, closure)` gate
+that checks the permit is the active leaf for the exact slot/task/frame. A
+general `with_cpu` loan cannot expose an unmediated backend `run` method;
+the current public `UnicornMips::run_until_*` surface must be hidden behind
+the machine gate in a connected implementation. A private `Rc` clone or
+mutable payload reference never grants execution authority by itself.
+
 The candidate machine run permit is a checked *leaf* token, distinct from a
 backend native-engine lease. `suspend_parent_for_child` changes A's permit to
 `SuspendedForChild` and issues a scoped `ParentSuspension`; B may then become
@@ -529,8 +540,8 @@ import callback, but it cannot execute another guest instruction until B has
 finished/classified and the parent token explicitly resumes after exact
 birth/frame revalidation. Nested B→C repeats the transfer; no directory,
 parent queue or canonical Task borrow spans the child run. A typed
-execution/custody error or
-abandoned guard leaves the admitted slot stopped/non-runnable in custody and
+execution/custody error or abandoned guard leaves the admitted slot
+stopped/non-runnable in custody and
 stops the parent instead of silently resuming either actor. Infallible
 drop-time state fencing needs a non-borrowing slot/leaf latch; diagnostic
 details and checked recovery remain explicit operations, not `Drop` success.
@@ -550,8 +561,8 @@ before CPU construction, then make payload admission into that reservation
 non-fallible; a failed pre-CPU claim releases the exact original launch for
 retry without leaving a live but unreachable child. A real, evidenced CE
 creation/zero-slice failure completes only that exact birth. Once admitted,
-even a DLL-load, native, `Completed` publication or
-queue-borrow failure leaves the original CPU/context and Kernel live/wait
+even a DLL-load, native, `Completed` publication or queue-borrow failure
+leaves the original CPU/context and Kernel live/wait
 state reachable, stopped and non-runnable until a checked recovery. D-011
 pre-effect refusal remains a recovery hold. A failure after an irreversible
 Kernel/GWE/framebuffer effect becomes an explicit partial-effects quarantine,
@@ -595,11 +606,13 @@ process compatibility state is restored by a checked scoped token, never used
 as the CPU's birth witness. Framebuffer access needs the same scoped or
 non-reentrant event-publication rule; callbacks during an exit transaction may
 enqueue observations but cannot mutate Kernel/custody/topology under its
-borrow. Busy or forbidden reentry is typed and fail-closed, not a `RefCell`
-panic or an unchecked raw-pointer alias. Until those hook/Kernel/framebuffer
-loans are removed or explicitly proven at one narrowly audited unsafe
-boundary, O-T7 cannot claim a sound machine lease even if CPU owner-loss reds
-turn green. The native owner may remain open while A's hook is paused, but
+borrow. Reentry into these proposed machine-state/custody ports is typed and
+fail-closed, not a `RefCell` panic or an unchecked raw-pointer alias; this
+does not yet prove every existing pending-return `RefCell` safe. Until those
+hook/Kernel/framebuffer loans are removed or explicitly proven at one
+narrowly audited unsafe boundary, O-T7 cannot claim a sound machine lease
+even if CPU owner-loss reds turn green. The native owner may remain open while
+A's hook is paused, but
 only the checked leaf permit grants guest execution to B.
 
 `ProcessBirthKey` currently has no machine lineage, and the monitor's clone

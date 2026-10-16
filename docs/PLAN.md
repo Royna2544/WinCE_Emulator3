@@ -201,13 +201,16 @@ not an implemented owner. Stage its connected source cut in this order:
    permit or a panicking `RefCell` conflict is a failed control, not a yield.
 3. Admit boot and child CPU payloads into one machine-owned slot directory;
    review private stable per-slot cells with short directory borrowing and
-   closure-scoped fallible payload loans. A checked `ParentSuspension` transfers
-   the one executable leaf permit A→B while A's native callback is paused;
-   B is classified into custody before A may resume. Keep a claimed launch in
-   Kernel's original queue until admission/checked completion, and reserve
+   closure-scoped fallible payload loans. Gate backend entry on the exact
+   active leaf permit, and forbid slot retirement/reuse while any loan or
+   permit exists; a private `Rc` clone is not that gate. A checked
+   `ParentSuspension` transfers the one executable leaf permit A→B while A's
+   native callback is paused; B is classified into custody before A may resume.
+   Keep a claimed launch in Kernel's original queue until admission/checked
+   completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive
-   parked CPU boxes and active/displaced/ready references to
-   checked locators together. Migrate the immediate parent-suspension/child
+   parked CPU boxes and active/displaced/ready references to checked locators
+   together. Migrate the immediate parent-suspension/child
    lease, deferred launch, `Completed`, run-state drain/return, process switch
    and both main-loop/CPU-loop selector call sites before claiming custody.
    Keep existing scheduling policy pending Stage 5; do not add a parallel
