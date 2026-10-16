@@ -345,6 +345,48 @@ struct ParkedProcess {
     current_directory: Option<String>,
 }
 
+/// A stopped exit's CPU-only rewrite is prepared before Kernel retires the
+/// birth. Its output queues have capacity already, so the accepted completion
+/// only moves original parked CPU owners; it never has to re-identify them
+/// after their Kernel thread records have gone away.
+#[cfg(feature = "unicorn")]
+struct ExitSurvivorQueuePlan {
+    nodes: Vec<ExitSurvivorNodePlan>,
+    output: VecDeque<ParkedProcess>,
+    output_len: usize,
+}
+
+#[cfg(feature = "unicorn")]
+struct ExitSurvivorNodePlan {
+    remove_exiting_birth: bool,
+    children: ExitSurvivorQueuePlan,
+}
+
+#[cfg(feature = "unicorn")]
+impl ExitSurvivorQueuePlan {
+    fn apply(mut self, queue: &mut VecDeque<ParkedProcess>) {
+        debug_assert_eq!(queue.len(), self.nodes.len());
+        for node_plan in self.nodes {
+            let mut parked = queue.pop_front().expect("preflighted parked CPU node");
+            node_plan
+                .children
+                .apply(&mut parked.cpu.parked_child_processes);
+            if node_plan.remove_exiting_birth {
+                // Splice at this node's old position, without cloning a CPU,
+                // wait, continuation, native owner or mapped-page pin.
+                while let Some(survivor) = parked.cpu.parked_child_processes.pop_front() {
+                    self.output.push_back(survivor);
+                }
+            } else {
+                self.output.push_back(parked);
+            }
+        }
+        debug_assert!(queue.is_empty());
+        debug_assert_eq!(self.output.len(), self.output_len);
+        *queue = self.output;
+    }
+}
+
 #[cfg(feature = "unicorn")]
 struct UnicornRunStateHandles<'a> {
     parked_child_processes: &'a std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
@@ -5867,6 +5909,177 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn checked_parked_cpu_process_birth(
+        parked: &ParkedProcess,
+        kernel: &CeKernel,
+    ) -> Result<crate::ce::object::ProcessBirthKey> {
+        let cpu = parked.cpu.as_ref();
+        if cpu.completed_active_process_exit {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "exit survivor CPU is already sealed",
+            });
+        }
+        let birth = if let Some(launch) = cpu.owned_process_launch.as_ref() {
+            let birth = launch
+                .process_birth
+                .ok_or(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor launch has no exact process birth",
+                })?;
+            let primary =
+                launch
+                    .primary_thread_birth
+                    .ok_or(Error::HostExitAuthorityRecoveryRequired {
+                        reason: "exit survivor launch has no exact primary thread birth",
+                    })?;
+            if launch.process_id != parked.process_state.process_id
+                || launch.thread_id != cpu.initial_thread_id
+                || primary.thread_id() != launch.thread_id
+                || kernel.handles.thread_birth_key_by_id(primary.thread_id()) != Some(primary)
+                || kernel
+                    .handles
+                    .thread_creation_owner_by_id(primary.thread_id())
+                    != Some(birth)
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor launch does not own its parked CPU",
+                });
+            }
+            birth
+        } else {
+            // Only the boot CPU can lack a child launch. Its saved primary
+            // thread birth, never the selected PID, is its ownership witness.
+            let primary =
+                cpu.saved_context_thread_birth
+                    .ok_or(Error::HostExitAuthorityRecoveryRequired {
+                        reason: "exit survivor CPU has no frozen process owner",
+                    })?;
+            if cpu.initial_thread_id != MAIN_GUEST_THREAD_ID
+                || primary.thread_id() != MAIN_GUEST_THREAD_ID
+                || kernel.handles.thread_birth_key_by_id(primary.thread_id()) != Some(primary)
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor boot primary thread birth is stale",
+                });
+            }
+            kernel
+                .handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                .ok_or(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor boot CPU has no exact process owner",
+                })?
+        };
+        if parked.process_state.process_id != birth.process_id()
+            || kernel.handles.process_birth_key(birth.process_id()) != Some(birth)
+            || !kernel.handles.process_execution_live_by_birth(birth)
+        {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "exit survivor process birth is stale or no longer live",
+            });
+        }
+        let primary_birth = cpu
+            .owned_process_launch
+            .as_ref()
+            .and_then(|launch| launch.primary_thread_birth)
+            .or_else(|| {
+                cpu.saved_context_thread_birth
+                    .filter(|thread| thread.thread_id() == cpu.initial_thread_id)
+            });
+        for thread_id in [parked.thread_id, cpu.current_thread_id] {
+            if thread_id == 0 {
+                continue;
+            }
+            let frozen = if thread_id == cpu.initial_thread_id {
+                primary_birth
+            } else {
+                cpu.saved_context_thread_birth
+                    .filter(|saved| saved.thread_id() == thread_id)
+            };
+            if frozen.is_none()
+                || kernel.handles.thread_birth_key_by_id(thread_id) != frozen
+                || kernel.handles.thread_creation_owner_by_id(thread_id) != Some(birth)
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor CPU thread has no live exact birth and owner",
+                });
+            }
+        }
+        if let Some(saved) = cpu.saved_context_thread_birth {
+            if kernel.handles.thread_birth_key_by_id(saved.thread_id()) != Some(saved)
+                || kernel
+                    .handles
+                    .thread_creation_owner_by_id(saved.thread_id())
+                    != Some(birth)
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "exit survivor saved thread birth is stale",
+                });
+            }
+        } else if cpu.saved_context.is_some() {
+            return Err(Error::HostExitAuthorityRecoveryRequired {
+                reason: "exit survivor saved CPU context lacks a thread birth",
+            });
+        }
+        Ok(birth)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn preflight_exit_survivors_in_queue(
+        queue: &VecDeque<ParkedProcess>,
+        owner: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+        beneath_exiting_cpu: bool,
+    ) -> Result<ExitSurvivorQueuePlan> {
+        let mut nodes = Vec::new();
+        nodes
+            .try_reserve(queue.len())
+            .map_err(|_| Error::Backend("reserve stopped-exit CPU partition plan".to_owned()))?;
+        let mut output_len = 0usize;
+        for parked in queue {
+            // A sibling with another PID is not being disposed, but its
+            // descendants may contain the exiting birth. An exact owner or
+            // same-PID ambiguity must be checked before it can be removed.
+            let possibly_exiting = parked.process_state.process_id == owner.process_id()
+                || parked
+                    .cpu
+                    .owned_process_launch
+                    .as_ref()
+                    .and_then(|launch| launch.process_birth)
+                    == Some(owner);
+            let remove_exiting_birth = if beneath_exiting_cpu || possibly_exiting {
+                Self::checked_parked_cpu_process_birth(parked, kernel)? == owner
+            } else {
+                false
+            };
+            let children = Self::preflight_exit_survivors_in_queue(
+                &parked.cpu.parked_child_processes,
+                owner,
+                kernel,
+                beneath_exiting_cpu || remove_exiting_birth,
+            )?;
+            output_len = output_len
+                .checked_add(if remove_exiting_birth {
+                    children.output_len
+                } else {
+                    1
+                })
+                .ok_or_else(|| Error::Backend("stopped-exit CPU partition overflow".to_owned()))?;
+            nodes.push(ExitSurvivorNodePlan {
+                remove_exiting_birth,
+                children,
+            });
+        }
+        let mut output = VecDeque::new();
+        output
+            .try_reserve(output_len)
+            .map_err(|_| Error::Backend("reserve stopped-exit CPU survivor queue".to_owned()))?;
+        Ok(ExitSurvivorQueuePlan {
+            nodes,
+            output,
+            output_len,
+        })
+    }
+
+    #[cfg(feature = "unicorn")]
     #[cfg(test)]
     pub fn prune_exited_and_active_processes_from_parked(&mut self, kernel: &mut CeKernel) {
         self.prune_exited_and_active_processes_from_parked_with_framebuffer(kernel, None);
@@ -6019,8 +6232,12 @@ impl UnicornMips {
                         .ok_or(Error::HostExitAuthorityRecoveryRequired {
                             reason: "stopped parked child lost its exact process birth",
                         })
-                        // Natural completion drops the whole parked CPU tree.
                         .and_then(|owner| {
+                            if Self::checked_parked_cpu_process_birth(&process, kernel)? != owner {
+                                return Err(Error::HostExitAuthorityRecoveryRequired {
+                                    reason: "stopped parked CPU differs from its exit birth",
+                                });
+                            }
                             process.cpu.preflight_stopped_modal_display_tree(owner)?;
                             Self::preflight_parked_modal_siblings_for_birth(
                                 self,
@@ -6028,10 +6245,20 @@ impl UnicornMips {
                                 &self.parked_child_processes,
                                 owner,
                                 kernel,
-                            )
+                            )?;
+                            let plan = Self::preflight_exit_survivors_in_queue(
+                                &process.cpu.parked_child_processes,
+                                owner,
+                                kernel,
+                                true,
+                            )?;
+                            kept.try_reserve(plan.output_len).map_err(|_| {
+                                Error::Backend("reserve natural-exit survivor queue".to_owned())
+                            })?;
+                            Ok(plan)
                         })
-                        .and_then(|_| {
-                            if let Some(framebuffer) = framebuffer.as_mut() {
+                        .and_then(|plan| {
+                            let completed = if let Some(framebuffer) = framebuffer.as_mut() {
                                 kernel.try_mark_process_launch_exited_with_framebuffer(
                                     launch,
                                     exit_code,
@@ -6041,10 +6268,11 @@ impl UnicornMips {
                                 kernel.try_mark_process_launch_exited_with_framebuffer(
                                     launch, exit_code, None,
                                 )
-                            }
+                            }?;
+                            Ok((completed, plan))
                         });
-                    let completed = match completion {
-                        Ok(completed) => completed,
+                    let (completed, survivor_plan) = match completion {
+                        Ok(completion) => completion,
                         Err(error) => {
                             kept.push_back(process);
                             kept.append(&mut self.parked_child_processes);
@@ -6053,6 +6281,13 @@ impl UnicornMips {
                         }
                     };
                     if completed {
+                        survivor_plan.apply(&mut process.cpu.parked_child_processes);
+                        // The plan has already removed only this exact birth.
+                        // Publish original foreign CPU boxes at the completed
+                        // root's queue position before trace or owner teardown.
+                        while let Some(survivor) = process.cpu.parked_child_processes.pop_front() {
+                            kept.push_back(survivor);
+                        }
                         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                             op: "CreateProcessChildReturned",
                             application: process.application.clone(),
@@ -6333,6 +6568,12 @@ impl UnicornMips {
                 reason: "requested active child lost its exact process birth",
             })?;
         self.preflight_stopped_modal_display_for_birth(owner, kernel)?;
+        let survivor_plan = Self::preflight_exit_survivors_in_queue(
+            &self.parked_child_processes,
+            owner,
+            kernel,
+            false,
+        )?;
         let completed = if let Some(framebuffer) = framebuffer.as_mut() {
             kernel.try_mark_process_launch_exited_with_framebuffer(
                 &launch,
@@ -6345,6 +6586,7 @@ impl UnicornMips {
         if !completed {
             return Ok(false);
         }
+        survivor_plan.apply(&mut self.parked_child_processes);
         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessTerminationCompleted",
             application: launch.application.clone(),
@@ -6367,11 +6609,6 @@ impl UnicornMips {
             }
         }
         self.seal_completed_active_process_cpu();
-        self.remove_parked_process_tree_by_birth(
-            launch
-                .process_birth
-                .expect("checked completed launch birth"),
-        );
         Ok(true)
     }
 
@@ -52684,82 +52921,139 @@ mod guest_thread_stack_tests {
         scheduler.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
         scheduler.current_thread_id = MAIN_GUEST_THREAD_ID;
         scheduler.parked_child_processes.push_back(exiting_parked);
-        let exiting_cpu_before =
-            scheduler.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
         kernel.set_current_process_id(1);
-        let trace_before = kernel.recent_process_ops().len();
-        let attempt = scheduler
-            .try_prune_exited_and_active_processes_from_parked_with_framebuffer(&mut kernel, None);
-        match attempt {
-            Ok(()) => {
-                assert!(
-                    !kernel
-                        .handles
-                        .process_execution_live_by_birth(exiting_birth)
-                );
-                assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x63));
-                assert_eq!(
-                    kernel
-                        .recent_process_ops()
-                        .iter()
-                        .filter(|record| {
-                            record.op == "CreateProcessChildReturned"
-                                && record.process_id == Some(exiting.process_id)
-                        })
-                        .count(),
-                    1
-                );
-                assert_eq!(scheduler.parked_child_processes.len(), 1);
-                assert_parked_foreign_exit_survivor(
-                    &scheduler.parked_child_processes[0],
-                    &foreign,
-                    foreign_cpu_before,
-                    wait_id,
-                    0x0050_2340,
-                    0x7ffb_1000,
-                );
-            }
-            Err(error) => {
-                assert!(
-                    matches!(
-                        &error,
-                        Error::HostExitAuthorityRecoveryRequired { .. }
-                            | Error::HostExitRecoveryRequired { .. }
-                    ),
-                    "unexpected refusal: {error:?}"
-                );
-                assert!(
-                    kernel
-                        .handles
-                        .process_execution_live_by_birth(exiting_birth)
-                );
-                assert_eq!(
-                    kernel.process_exit_code(exiting.process_handle),
-                    Some(crate::ce::kernel::STILL_ACTIVE)
-                );
-                assert_eq!(kernel.recent_process_ops().len(), trace_before);
-                assert_eq!(scheduler.parked_child_processes.len(), 1);
-                let retained = &scheduler.parked_child_processes[0];
-                assert_eq!(
-                    retained.cpu.as_ref() as *const UnicornMips,
-                    exiting_cpu_before
-                );
-                assert_eq!(retained.cpu.parked_child_processes.len(), 1);
-                assert_parked_foreign_exit_survivor(
-                    &retained.cpu.parked_child_processes[0],
-                    &foreign,
-                    foreign_cpu_before,
-                    wait_id,
-                    0x0050_2340,
-                    0x7ffb_1000,
-                );
-            }
-        }
+        scheduler
+            .try_prune_exited_and_active_processes_from_parked_with_framebuffer(&mut kernel, None)
+            .expect("live exact foreign CPU must be hoisted when the parent exits");
+        assert!(
+            !kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x63));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessChildReturned"
+                        && record.process_id == Some(exiting.process_id)
+                })
+                .count(),
+            1
+        );
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        assert_parked_foreign_exit_survivor(
+            &scheduler.parked_child_processes[0],
+            &foreign,
+            foreign_cpu_before,
+            wait_id,
+            0x0050_2340,
+            0x7ffb_1000,
+        );
         assert!(
             kernel
                 .handles
                 .process_execution_live_by_birth(foreign_birth)
         );
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn natural_parked_exit_refuses_unknown_foreign_birth_before_effects() -> Result<()> {
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let exiting = kernel.queue_process_launch(Some("\\Test\\exiting.exe".to_owned()), None);
+        let foreign = kernel.queue_process_launch(Some("\\Test\\survivor.exe".to_owned()), None);
+        let exiting_birth = exiting.process_birth.expect("exiting birth");
+        let foreign_birth = foreign.process_birth.expect("foreign birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(foreign.process_id);
+        let (mut foreign_parked, wait_id) =
+            parked_blocked_foreign_exit_survivor(&mut kernel, &foreign, 0x0050_4560, 0x7ff9_3000)?;
+        let foreign_cpu_before = foreign_parked.cpu.as_ref() as *const UnicornMips;
+        let saved_before = foreign_parked
+            .cpu
+            .saved_context
+            .as_ref()
+            .expect("foreign saved context")
+            .clone();
+        let mut unknown_foreign = foreign.clone();
+        unknown_foreign.process_birth = None;
+        foreign_parked.cpu.owned_process_launch = Some(unknown_foreign.clone());
+
+        let mut exiting_cpu = UnicornMips::new()?;
+        exiting_cpu.owned_process_launch = Some(exiting.clone());
+        exiting_cpu.set_initial_thread_id(exiting.thread_id);
+        exiting_cpu.current_thread_id = exiting.thread_id;
+        exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x75,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        exiting_cpu.parked_child_processes.push_back(foreign_parked);
+        let mut exiting_parked = parked_process_for_cpu(exiting.thread_id, exiting_cpu);
+        exiting_parked.process_state.process_id = exiting.process_id;
+        exiting_parked.process_handle = Some(exiting.process_handle);
+        exiting_parked.thread_handle = Some(exiting.thread_handle);
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        scheduler.current_thread_id = MAIN_GUEST_THREAD_ID;
+        scheduler.parked_child_processes.push_back(exiting_parked);
+        let exiting_cpu_before =
+            scheduler.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
+        kernel.set_current_process_id(1);
+        let trace_before = kernel.recent_process_ops().len();
+        let error = scheduler
+            .try_prune_exited_and_active_processes_from_parked_with_framebuffer(&mut kernel, None)
+            .expect_err("unknown nested foreign process birth must refuse exit");
+        assert!(
+            matches!(&error, Error::HostExitAuthorityRecoveryRequired { .. }),
+            "unexpected refusal: {error:?}"
+        );
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert_eq!(
+            kernel.process_exit_code(exiting.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        let retained = &scheduler.parked_child_processes[0];
+        assert_eq!(
+            retained.cpu.as_ref() as *const UnicornMips,
+            exiting_cpu_before
+        );
+        assert_eq!(
+            retained
+                .cpu
+                .last_debug
+                .as_ref()
+                .map(|debug| (debug.pc, debug.v0)),
+            Some((THREAD_EXIT_STUB_ADDR, 0x75))
+        );
+        assert_eq!(retained.cpu.parked_child_processes.len(), 1);
+        let foreign_retained = &retained.cpu.parked_child_processes[0];
+        assert_parked_foreign_exit_survivor(
+            foreign_retained,
+            &unknown_foreign,
+            foreign_cpu_before,
+            wait_id,
+            0x0050_4560,
+            0x7ff9_3000,
+        );
+        let saved_after = foreign_retained.cpu.saved_context.as_ref().unwrap();
+        assert_eq!(saved_after, &saved_before);
         assert!(kernel.blocked_waiter(wait_id).is_some());
         Ok(())
     }
@@ -52795,81 +53089,40 @@ mod guest_thread_stack_tests {
         active.set_initial_thread_id(exiting.thread_id);
         active.current_thread_id = exiting.thread_id;
         active.parked_child_processes.push_back(duplicate_parked);
-        let duplicate_cpu_before =
-            active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
         kernel.set_current_process_id(exiting.process_id);
         assert!(kernel.terminate_process(exiting.process_handle, 0x6e));
-        let trace_before = kernel.recent_process_ops().len();
-
-        let attempt = active.complete_requested_active_child_termination(&mut kernel, None);
-        match attempt {
-            Ok(true) => {
-                assert!(active.active_process_execution_completed());
-                assert!(
-                    !kernel
-                        .handles
-                        .process_execution_live_by_birth(exiting_birth)
-                );
-                assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x6e));
-                assert_eq!(
-                    kernel
-                        .recent_process_ops()
-                        .iter()
-                        .filter(|record| {
-                            record.op == "CreateProcessTerminationCompleted"
-                                && record.process_id == Some(exiting.process_id)
-                        })
-                        .count(),
-                    1
-                );
-                assert_eq!(active.parked_child_processes.len(), 1);
-                assert_parked_foreign_exit_survivor(
-                    &active.parked_child_processes[0],
-                    &foreign,
-                    foreign_cpu_before,
-                    wait_id,
-                    0x0060_3450,
-                    0x7ffa_2000,
-                );
-            }
-            Err(error) => {
-                assert!(
-                    matches!(
-                        &error,
-                        Error::HostExitAuthorityRecoveryRequired { .. }
-                            | Error::HostExitRecoveryRequired { .. }
-                    ),
-                    "unexpected refusal: {error:?}"
-                );
-                assert!(!active.active_process_execution_completed());
-                assert!(
-                    kernel
-                        .handles
-                        .process_execution_live_by_birth(exiting_birth)
-                );
-                assert_eq!(
-                    kernel.process_exit_code(exiting.process_handle),
-                    Some(crate::ce::kernel::STILL_ACTIVE)
-                );
-                assert_eq!(kernel.recent_process_ops().len(), trace_before);
-                assert_eq!(active.parked_child_processes.len(), 1);
-                let retained = &active.parked_child_processes[0];
-                assert_eq!(
-                    retained.cpu.as_ref() as *const UnicornMips,
-                    duplicate_cpu_before
-                );
-                assert_eq!(retained.cpu.parked_child_processes.len(), 1);
-                assert_parked_foreign_exit_survivor(
-                    &retained.cpu.parked_child_processes[0],
-                    &foreign,
-                    foreign_cpu_before,
-                    wait_id,
-                    0x0060_3450,
-                    0x7ffa_2000,
-                );
-            }
-            Ok(false) => panic!("checked termination was neither completed nor refused"),
-        }
+        assert!(
+            active
+                .complete_requested_active_child_termination(&mut kernel, None)
+                .expect("live exact foreign CPU must survive requested exit")
+        );
+        assert!(active.active_process_execution_completed());
+        assert!(
+            !kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x6e));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessTerminationCompleted"
+                        && record.process_id == Some(exiting.process_id)
+                })
+                .count(),
+            1
+        );
+        assert_eq!(active.parked_child_processes.len(), 1);
+        assert_parked_foreign_exit_survivor(
+            &active.parked_child_processes[0],
+            &foreign,
+            foreign_cpu_before,
+            wait_id,
+            0x0060_3450,
+            0x7ffa_2000,
+        );
         assert!(
             kernel
                 .handles
