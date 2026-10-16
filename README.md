@@ -121,13 +121,19 @@ remote-control HTTP/WebSocket surface.
   already-exited-parent skip or ordinary first-slice error. The bounded
   [pre-CPU launch-retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
   keeps an already-published launch available for retry before any CPU
-  exists. Those reds are historical: Cut 3a now passes focused debug/release
-  real-MIPS controls that keep the original faulted B CPU in non-runnable,
+  exists. Those reds are historical: Cut 3a's earlier focused debug/release
+  real-MIPS controls passed, and the superseded producer-side a09 debug control kept
+  the original faulted B CPU in non-runnable,
   exact-birth custody after A's staged return and native sync/finish. A
   termination request retains the CPU; same-Kernel accepted exit retires it
-  and B's fixed-stack pin in that tested fault shape. A source-audited
-  post-load/pre-native-entry error may quarantine an unpoisoned CPU that the
-  exit consumer refuses to retire; general closure remains open. Final
+  and B's fixed-stack pin in that tested fault shape. Stamped a07 reproduced
+  a synthetic post-load/pre-native-entry unpoisoned-quarantine failure; the
+  producer-side seal passed a08 debug on the same source as a09; intermediate
+  producer-only a10 focused release also passed. Current source enforces the
+  terminal seal in `CpuCustody::quarantine_reserved` under Unicorn when the
+  slot becomes quarantined, while the exit consumer keeps its poison check.
+  Natural reachability and general closure remain unproved. Final-source
+  focused and
   sealed broad/no-default counts and receipt
   are pending; pre-seal a03 **2,183/0/9 ignored** is development evidence.
   Status/debug report retained mapped-blob bytes, not measured RSS. The

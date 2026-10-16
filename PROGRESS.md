@@ -6,7 +6,9 @@ references for historical reconstruction.
 
 ## 2026-10-17 Cut 3a non-runnable child CPU quarantine (focused; broad pending)
 
-An ordinary real-MIPS focused control passes under debug and release: A
+An ordinary real-MIPS focused control passed under debug and release before
+the pre-entry follow-up, then passed again in a09 debug on the superseded
+producer-side source: A
 executes `CreateProcessW`, retains its staged nonzero return after native
 sync/finish, and B runs post-native. B's fixed-stack first-touch `SW`/`LW`
 commits an exact-birth page, then a `READ_UNMAPPED` native fault leaves its
@@ -15,9 +17,17 @@ not the legacy parked tree. B remains Kernel-live and unsignaled; its native
 owner is closed and its unsafe saved continuation is cleared. A
 `TerminateProcess` request alone retains the slot; same-Kernel checked
 accepted exit retires it and the fixed-stack pin in this focused fault shape.
-Source audit found a separate post-load/pre-native-entry error could be
-quarantined without the poison bit required by the exit consumer, so general
-error-path closure is not established. The production run loop
+Stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
+error quarantining an unpoisoned CPU that the exit consumer refused to retire.
+A producer-side seal made the a08 synthetic pre-entry control green; a09's
+real-MIPS fault control was also green in debug on the same `unicorn.rs`
+SHA-256 `1AAE8A66ACFFFE3D8FE9CED10687C98A28879BF9267A1736D7B4689F21A33090`.
+A10 focused release passed on an intermediate producer-only source, now
+superseded. Current source makes `CpuCustody::quarantine_reserved` enforce the
+terminal seal on `Reserved`→`Quarantined` under Unicorn; the exit consumer keeps
+its poison-bit backstop. No final-source focused or broad result is claimed.
+The a07/a08 precondition is synthetic, not proof of natural reachability or
+general error-path closure. The production run loop
 owns custody, monitor save/restore refuse while it exists, and status/debug
 publish slot identity and retained mapped-blob bytes. Those bytes are not a
 measured host RSS peak. The Kernel-minted exit witness carries exact birth,

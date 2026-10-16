@@ -246,17 +246,24 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       [07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
       and the [pre-Cut-3a rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
       repeated that owner-loss result. The direct-helper ignored fixture has
-      since been replaced by an ordinary real-MIPS Cut 3a control, focused
-      debug/release green: it retains the original faulted B CPU in a
+      since been replaced by an ordinary real-MIPS Cut 3a control, earlier
+      focused debug/release green and superseded producer-side a09 debug green: it retains
+      the original faulted B CPU in a
       non-runnable machine slot, not the legacy parked tree. Final sealed broad
       receipt/counts are pending. This bounded result does not repair the
       nonempty descendant publication conflict above, other parked/active
       owner-loss paths, or the public run wrapper's custody bypass. A
-      source-audited post-load/pre-native-entry error can cross the producer's
-      `child_admitted` flag before private-attempt poisoning, move an
-      unpoisoned CPU into quarantine, and then fail the exit consumer's
-      poison-bit preflight. That edge has no executed control or accepted
-      retirement proof yet; general error-path closure is blocked. The two
+      stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
+      error crossing the producer's `child_admitted` flag before poisoning,
+      moving an unpoisoned CPU into quarantine and failing the exit consumer's
+      poison-bit preflight. A producer-side seal made a08 debug pre-entry
+      and a09 debug real-MIPS fault controls green on superseded source
+      SHA-256 `1AAE8A66…33090`; intermediate producer-only a10 focused
+      release passed but is superseded. Current source makes the custody
+      directory itself seal an admitted CPU on `Reserved`→`Quarantined` under
+      Unicorn; the consumer poison check remains a backstop. This does not
+      prove natural pre-entry reachability, general error-path closure or
+      final broad validation. The two
       stale route-specific controls were retired; none is a live iNavi result.
     - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
       refuses a preseeded busy block service but does not exclude raw

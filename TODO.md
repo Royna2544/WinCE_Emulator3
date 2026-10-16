@@ -142,8 +142,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
      that proved an ordinary first-slice error left a still-live child
      without CPU custody is historical. An ordinary real-MIPS Cut 3a
-     replacement passes focused debug/release controls, with final broad
-     validation pending. The
+     replacement passed focused debug/release controls at an earlier seal; its
+     superseded producer-side a09 debug rerun passed, with final broad validation
+     pending. The
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
@@ -235,7 +236,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      A-to-B handoff and full CPU-custody gates; do not count either
      guard as the connected port.
      Finish [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-focused-source-cut-final-broad-pending)
-     validation/receipt on one source seal. Its focused real-MIPS debug/release
+     validation/receipt on one source seal. Its earlier focused real-MIPS debug/release
      control now executes A's `CreateProcessW` and B's fixed-stack first touch
      plus native fault; the original B CPU stays in a non-runnable exact-birth
      slot instead of being dropped or parked in the legacy tree. A's staged
@@ -243,10 +244,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      status/debug show its identity and retained mapped-blob bytes (not RSS),
      and checkpoint save/restore refuse it. A `TerminateProcess` request
      leaves B live; same-Kernel accepted exit retires its slot and fixed stack
-     in the tested native-fault shape. Add a control/fix for the source-audited
-     post-load/pre-native-entry error: it may quarantine an unpoisoned CPU,
-     which the current exit consumer cannot retire. Do not claim general
-     error-path closure until that boundary is sealed.
+     in the tested native-fault shape. Stamped a07 expected red reproduced a
+     synthetic post-load/pre-native-entry unpoisoned-quarantine failure;
+     producer-side sealing passed a08 debug pre-entry and a09 debug real-MIPS
+     fault on one superseded `unicorn.rs` SHA-256 `1AAE8A66…33090`. The
+     intermediate producer-only a10 focused release passed but is superseded.
+     Current source makes `CpuCustody::quarantine_reserved` seal the CPU under
+     Unicorn on `Reserved`→`Quarantined`; the exit consumer keeps its poison
+     backstop. Rerun focused and counted broad suites on that source. Natural
+     reachability and general error-path closure remain unproved.
      The pre-seal a03 broad **2,183/0/9 ignored** is development-only; final
      sealed broad/no-default counts and receipt remain pending. No general
      private VM/file-view exit cleanup or runnable leaf permit follows.
