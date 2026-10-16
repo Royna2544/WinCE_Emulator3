@@ -615,6 +615,37 @@ even if CPU owner-loss reds turn green. The native owner may remain open while
 A's hook is paused, but
 only the checked leaf permit grants guest execution to B.
 
+The 2026-10-17 read-only callback inventory is for `unicorn.rs` SHA-256
+`F102058948DCA07E745BA98FF8E482B32E72995B6924D76A8FDCD3911859857B`;
+it counts source-line references, not runtime calls. `kernel_ptr` is created
+at `unicorn.rs:9754`; its 133 hook
+uses and `framebuffer_ptr`'s 10 hook uses are grouped below. The latter is
+created at `:9755` (11 total source lines including its declaration).
+
+| Hook family in `unicorn.rs` | `kernel_ptr` uses | `framebuffer_ptr` uses | Reentry surface |
+|---|---:|---:|---|
+| Global code hook (`9871–10352`) | 4 | 1 | GetMessage/remote/input service and tick |
+| Scoped code hooks (`10353–10916`) | 5 | 1 | Same service and parked-peer readiness |
+| Scheduler block hook (`10917–11397`) | 19 | 0 | Wait/modal/suspended return and host input |
+| Import entry/return (`11398–12335`) | 50 | 1 | WNDPROC, sent reply, GUI completion/destruction |
+| Import pre-dispatch/callout (`12336–13279`) | 38 | 5 | Birth/wait checks, serial/socket, window/thread callouts |
+| Import loader/HLE/launch (`13280–13679`) | 10 | 2 | HLE dispatch and immediate child run |
+| Import post-dispatch (`13680–13807`) | 6 | 0 | Callout and wait/GetMessage resume |
+| Memory-fault hook (`13970–14013`) | 1 | 0 | Missing-page repair |
+
+The immediate non-live-pump `CreateProcessW` handoff at `:13569–13579` is
+the first nested-run family to migrate. Its HLE dispatch loan at
+`:13435–13453` has ended; the held loan is instead
+`run_pending_process_launches(&mut CeKernel)` (`:19961–20337`) across
+`child.run_until_import_trap_with_framebuffer_limits(kernel, ...)`
+(`:20161–20184`), while the parent attempt's `&mut CeKernel` spans native
+entry. Wrapping that entire child call inside `try_with_kernel` would retain
+the loan and is not a port fix. The deferred live-pump caller at
+`:14641–14670` shares the callee and needs a separate gate. Converting one
+hook access while the child interface and other raw aliases remain is only
+a partial diagnostic, not a sound machine lease. No port or slot is yet
+implemented.
+
 `ProcessBirthKey` currently has no machine lineage, and the monitor's clone
 path copies `UnicornMips` and `CeKernel` independently. Until one checkpoint
 transaction can relineage Kernel process/thread births, frames/waits, VM,
