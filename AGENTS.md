@@ -327,9 +327,10 @@ moves the terminal seal into `CpuCustody::quarantine_reserved` under Unicorn
 on `Reserved`→`Quarantined`; final-source focused/broad release and no-default
 counts and receipt are **pending**. A
 `TerminateProcess` request does not retire B; checked accepted exit retires
-the slot and its fixed-stack page in the focused native-fault shape. A
-a07 expected red reproduced a post-load/pre-native-entry unpoisoned CPU that
-the exit consumer refused to retire; the superseded producer-side a08 made
+the slot and its fixed-stack page in the focused native-fault shape. Stamped
+a07 expected red reproduced post-load/pre-native-entry unpoisoned quarantine;
+the test stopped at that assertion. By source inspection, the exit consumer
+would refuse its poison preflight. The superseded producer-side a08 made
 that synthetic precondition green. Custody now enforces the seal itself, with
 the exit consumer's poison check retained. Natural reachability and general closure
 remain unproved. Status/debug report retained mapped-blob

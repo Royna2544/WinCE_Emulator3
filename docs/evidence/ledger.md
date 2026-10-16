@@ -2452,7 +2452,9 @@ context cleared while B remains Kernel-live and unsignaled. A
 `TerminateProcess` request alone does not retire it. Same-Kernel checked
 accepted exit retires the slot and the fixed-stack pin in that focused path.
 Stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
-unpoisoned quarantine that the exit consumer refused to retire. Producer-side
+unpoisoned quarantine and stopped at that test assertion. Source inspection
+shows the exit consumer would refuse its poison preflight; that consumer
+refusal was not executed. Producer-side
 sealing made a08 debug pre-entry and a09 debug real-MIPS fault controls green
 on superseded `unicorn.rs` SHA-256
 `1AAE8A66ACFFFE3D8FE9CED10687C98A28879BF9267A1736D7B4689F21A33090`.

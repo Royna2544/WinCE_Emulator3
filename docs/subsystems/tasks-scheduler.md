@@ -666,12 +666,14 @@ checked leaf permit grants guest execution to B.
 
 The first CPU-custody production cut is narrower than wholesale parked-tree
 conversion: the main run loop owns a directory that accepts
-only exact-birth, stopped, **non-runnable** child payloads from a genuine
-post-admission native error. This is not a second runnable queue. A pre-CPU
+only exact-birth, stopped, **non-runnable** child payloads after a
+post-admission non-recovery error. A native fault is the real-MIPS tested
+subset; the post-load/pre-native-entry refusal is a synthetic control. This
+is not a second runnable queue. A pre-CPU
 DLL/PE/setup error still returns the original pending launch for retry;
 [`run_pending_process_launches`](../../src/emulator/unicorn.rs) now reserves
 exact-birth slot capacity before constructing B and separates pre-CPU retry
-from post-admission native-error ownership. The original faulted B CPU moves
+from post-admission non-recovery ownership. The original faulted B CPU moves
 to quarantine, never the legacy parked tree. Every quarantined slot is
 reported in status/debug, counted by checkpoint save/restore refusal, and
 retired only after checked accepted exact-birth exit in the tested fault path;
