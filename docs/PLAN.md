@@ -278,7 +278,19 @@ not an implemented owner. Stage its connected source cut in this order:
    review and executed feature-appropriate suites gate the port; even a green
    port leaves O-T7 CPU custody open.
 3. Admit boot and child CPU payloads into one machine-owned slot directory;
-   review private stable per-slot cells with short directory borrowing and
+   stage this rather than converting every parked path at once. A narrow
+   [Cut 3a quarantine](subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-review-answer-not-implemented)
+   may precede complete Step 2 because it never runs a custody-held CPU: the
+   main run loop owns exact-birth, generation-checked slots only for faulted,
+   non-runnable admitted children. The post-native child-error producer,
+   exact-birth exit/termination/prune retirement, checkpoint refusal,
+   status/debug publication and one-owner invariant must land together with
+   its green real-MIPS fault witness. Pre-CPU launch errors still retry;
+   native-error quarantine never fabricates a resumable context. This cut
+   cannot claim a sound machine lease, raw-alias safety or general VM/view
+   cleanup. Move runnable and parked CPU paths one connected family at a
+   time after that; add the leaf permit when the first runnable slot lands.
+   For those later connected cuts, review private stable per-slot cells with short directory borrowing and
    closure-scoped fallible payload loans. Gate backend entry on the exact
    active leaf permit, and forbid slot retirement/reuse while any loan or
    permit exists; a private `Rc` clone is not that gate. A checked

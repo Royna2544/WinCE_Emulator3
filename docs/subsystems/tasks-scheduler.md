@@ -657,6 +657,45 @@ even if CPU owner-loss reds turn green. In any remaining nested in-hook path,
 A's native owner may remain open while its callback is paused, but only the
 checked leaf permit grants guest execution to B.
 
+##### Cut 3a quarantine resource lifetime (review answer; not implemented)
+
+The first CPU-custody production cut can be narrower than wholesale parked-
+tree conversion: the main run loop owns a directory that initially accepts
+only exact-birth, stopped, **non-runnable** child payloads from a genuine
+post-admission native error. This is not a second runnable queue. A pre-CPU
+DLL/PE/setup error still returns the original pending launch for retry;
+[`run_pending_process_launches`](../../src/emulator/unicorn.rs#L20255) currently
+mixes those cases with the native run in one `child_result` closure, whose
+`Err` arm drops the local B CPU. Split that ownership result before admitting
+anything. During migration each original CPU must be reachable in exactly
+one owner, custody or the legacy parked tree. Every admitted slot must be
+reported in status/debug, counted by checkpoint save/restore refusal, and
+retired only after accepted exact-birth exit; a `TerminateProcess` request
+alone is not completion. The leaf permit, runnable locators and public-run
+bypass removal belong to subsequent connected cuts. The callback-scoped
+Kernel/framebuffer port remains separate Step 2 work; this quarantine does
+not make the current raw aliases sound.
+
+Under D-003's fresh-engine default, the quarantined payload and its release
+obligations are:
+
+| Resource after B's ordinary native fault | Lifetime / exact-birth exit path |
+| --- | --- |
+| B's original `UnicornMips` loader `MemoryMap`, mapped blobs, module/import metadata, `owned_process_launch`, pending/wait records and fault snapshot | The directory must retain the same payload, poisoned and non-runnable. After [checked Kernel completion](../../src/ce/kernel.rs#L3364), retire B's exact slot and drop its CPU-local data; first hoist any foreign-birth parked descendants rather than dropping their original CPUs. [Parked prune](../../src/emulator/unicorn.rs#L6240) demonstrates the existing preflight/seal/hoist order, but does not yet consume custody slots. On preflight refusal the slot remains. |
+| Native Unicorn handle, hooks, mapping pins and resumable native snapshot | The [private-error abort](../../src/emulator/unicorn.rs#L15265) poisons and clears the saved continuation; [fresh-owner close](../../src/emulator/native_engine.rs#L680) destroys native maps/hooks before releasing callback boxes and pins, publishing no native snapshot. The quarantine therefore must not claim a live native engine or a recoverable PC. Opt-in persistent-owner semantics are not established by this proof. |
+| Canonical B-birth fixed heap/stack pages, writable-image runs and heap state | These live in `CeKernel::memory`, not merely in B's CPU. [Accepted exact-birth completion](../../src/ce/kernel.rs#L3555) retires those three families after the execution pin is released. Dropping a CPU without that transition is not VM cleanup. |
+| General private VM and file-mapping view registrations | No complete process-exit release path exists yet: [completion](../../src/ce/kernel.rs#L3555) does not retire these families, while explicit [UnmapViewOfFile](../../src/ce/coredll.rs#L31147) removes exact-birth public view records and `CloseHandle` [preserves live views](../../src/ce/kernel.rs#L6865). Normal public views are birth-keyed pointer-backed slabs; legacy injected/DIB views can have no birth. A first-slice fixed-stack fault with no such views may gate the narrow 3a ownership result, but full resource-release parity needs separate exact-birth cleanup and tests. The private-error abort also does not prove legacy file-view writeback immediately before a fault. |
+
+The proposed green replacement witness runs guest A's real `CreateProcessW`,
+executes B's fixed-stack first touch followed by a native fault, and checks
+one exact B-birth quarantined slot, zero B in the legacy parked tree, closed
+native owner, live unsignaled B in Kernel and no runnable continuation. It
+replaces the existing ignored direct-helper native-fault red **only in the
+same sealed cut as the producer and exit/checkpoint/observability consumers**;
+it must not be added as another ignored test. Neither this witness nor the
+directory alone proves the Step 2 port, complete view/VM cleanup, full O-T7
+leaf authority or live-app acceptance.
+
 ##### Callback-scoped machine-state port cut (proposed, not implemented)
 
 The first connected port cut changes the *whole native attempt's* access
