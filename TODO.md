@@ -217,9 +217,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
       The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
       routes that callback's 19 Kernel and two framebuffer dereferences
       through one guarded raw adapter and rejects a preseeded busy service
-      point. Its fresh per-attempt flag is shared by no other hook family;
-      next move an actual import/block cross-family entry behind one machine-
-      state busy flag and test real reentry. Preserve the whole-attempt
+      point. Its fresh per-attempt flag is shared by no other hook family.
+      Current source has one native entry, sequential import/block hooks and
+      deferred child execution; there is no natural overlap to justify a
+      synthetic shared-flag gate. Audit reachable raw-alias/host-callback
+      loans instead. Preserve the whole-attempt
       setup/tail, selected-birth, modal partial-effects, A-to-B handoff and
       native-fault CPU-custody gates; do not count this as the port.
      Audit the five remaining unchecked native `V0` return writes in the
