@@ -72129,6 +72129,22 @@ mod unicorn_tests {
         bytes
     }
 
+    fn tiny_mips_direct_pseudo_exit_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_spinner_pe();
+        for (index, word) in [
+            0x2405_0063_u32, // addiu a1,zero,0x63: guest exit code
+            0x2408_f3fa,     // addiu t0,zero,-3078: encoded CE syscall target
+            0x0100_f809,     // jalr t0
+            0x2404_0042,     // delay slot: current-process pseudo handle
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        bytes
+    }
+
     fn write_guest_fixture_bytes(parent: &mut super::UnicornMips, address: u32, bytes: &[u8]) {
         let blob = parent
             .mapped_blobs
@@ -85335,6 +85351,96 @@ mod unicorn_tests {
             kernel.process_exit_code(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: first-slice Completed borrows an empty held parent queue"]
+    fn real_mips_direct_completed_skips_empty_held_parent_queue() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("direct-exit.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&child_path, tiny_mips_direct_pseudo_exit_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("direct-exit.exe".to_owned()), None);
+        let child_birth = launch.process_birth.expect("exact child birth");
+        let thread_birth = launch
+            .primary_thread_birth
+            .expect("exact primary thread birth");
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = BorrowParentQueueOnRestore {
+            inner: VirtualFramebuffer::default_primary()?,
+            parent_queue: parked.as_ref(),
+            held_parent_borrow: None,
+            restore_dirty_calls: 0,
+        };
+        let root_process_state = kernel.current_process_state();
+        kernel.set_current_process_id(launch.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                thread_birth,
+                "DIRECT_EXIT_BORROW",
+                "saved image",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("child birth-owned window");
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        kernel.set_current_process_state(root_process_state);
+
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::run_pending_process_launches(
+                &mut root_uc,
+                &mut kernel,
+                root_pid,
+                &guard,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &[],
+                &parked,
+            )
+        }));
+
+        assert_eq!(framebuffer.restore_dirty_calls, 1, "real window restore");
+        assert!(framebuffer.held_parent_borrow.is_some());
+        assert!(!kernel.gwe.is_window(hwnd));
+        assert_eq!(kernel.current_process_id(), root_pid);
+        assert!(!kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x63));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessExited"
+                        && record.process_id == Some(launch.process_id)
+                })
+                .count(),
+            1,
+            "exact child exit committed once"
+        );
+        assert!(parked.borrow().is_empty(), "no live descendant CPU to lose");
+        let result = attempt.expect("Completed must not panic on a held parent queue");
+        result?;
         Ok(())
     }
 
