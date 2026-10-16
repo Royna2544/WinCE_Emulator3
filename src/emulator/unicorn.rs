@@ -496,6 +496,16 @@ impl NativeCurrentThread {
         self.set_unverified(thread_id);
     }
 
+    fn fail_exit_authority_recovery(&self, thread_id: u32, reason: &'static str) {
+        tracing::error!(target: "ce.scheduler", thread_id, reason, "native exit authority requires recovery");
+        let mut failure = self.terminal_error.borrow_mut();
+        if failure.is_none() {
+            *failure = Some(Error::HostExitAuthorityRecoveryRequired { reason });
+        }
+        drop(failure);
+        self.set_unverified(thread_id);
+    }
+
     fn get(&self) -> (u32, Option<crate::ce::object::ThreadBirthKey>) {
         self.state.get()
     }
@@ -11537,7 +11547,7 @@ impl UnicornMips {
                             None,
                             native_owner_birth,
                         ) else {
-                            current_thread_id_hook.fail_backend(
+                            current_thread_id_hook.fail_exit_authority_recovery(
                                 active_thread_id,
                                 "raw thread exit has no exact live birth and process owner",
                             );
@@ -11545,7 +11555,7 @@ impl UnicornMips {
                             return;
                         };
                         if Some(verified_birth) != active_thread_birth {
-                            current_thread_id_hook.fail_backend(
+                            current_thread_id_hook.fail_exit_authority_recovery(
                                 active_thread_id,
                                 "raw thread exit changed its native register birth",
                             );
@@ -11553,7 +11563,7 @@ impl UnicornMips {
                             return;
                         }
                         let Some(primary_birth) = process_primary_thread_birth else {
-                            current_thread_id_hook.fail_backend(
+                            current_thread_id_hook.fail_exit_authority_recovery(
                                 active_thread_id,
                                 "raw thread exit has no canonical process primary birth",
                             );
@@ -11590,7 +11600,7 @@ impl UnicornMips {
                         if !unsafe { &mut *kernel_ptr }
                             .mark_guest_thread_exited_by_birth(verified_birth, exit_code)
                         {
-                            current_thread_id_hook.fail_backend(
+                            current_thread_id_hook.fail_exit_authority_recovery(
                                 active_thread_id,
                                 "raw worker exit rejected its exact thread birth",
                             );
@@ -15161,6 +15171,12 @@ impl UnicornMips {
         if let Some(err) = immediate_process_sync_failure {
             report.failure_operation = Some("synchronize native process mapping");
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
+            if err.is_host_exit_recovery_required() {
+                // This stopped CPU is retained by the child-launch recovery
+                // lane, but an authority failure must never re-enter it on a
+                // later scheduler pass without whole-machine repair.
+                self.private_slab_attempt_poisoned = true;
+            }
             if diagnostic_private {
                 reject_private_attempt!(
                     err,
@@ -85726,6 +85742,117 @@ mod unicorn_tests {
             kernel.handles.thread_birth_key_for_handle(worker_handle),
             Some(worker)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn real_mips_missing_primary_birth_exit_requires_recovery_and_retains_cpu() -> crate::Result<()>
+    {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("missing-primary.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_image = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_image, 0x200, 0x2402_0063); // addiu v0,zero,0x63
+        write_vec_u32(&mut child_image, 0x204, 0x03e0_0008); // jr ra
+        write_vec_u32(&mut child_image, 0x208, 0); // delay slot
+        std::fs::write(&child_path, child_image).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("missing-primary.exe".to_owned()), None);
+        let owner = launch.process_birth.expect("queued child birth");
+        let original_primary = launch.primary_thread_birth.expect("launch primary birth");
+        // Synthetic interrupted-publish state: the launch still names the
+        // original primary, but its unpublished alias/record was rolled back.
+        // A same-TID worker can run; it cannot become process-exit authority.
+        assert!(
+            kernel
+                .handles
+                .discard_unpublished_thread(launch.thread_handle, launch.thread_id)
+        );
+        assert_eq!(kernel.handles.process_primary_thread_birth(owner), None);
+        let worker_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)?;
+        let worker = kernel
+            .handles
+            .thread_birth_key_for_handle(worker_handle)
+            .expect("replacement worker birth");
+        assert_ne!(worker, original_primary);
+
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let pixels_before = framebuffer.pixels().to_vec();
+        let dirty_before = framebuffer.dirty_rects().to_vec();
+        super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
+        let result = super::run_pending_process_launches(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        );
+        let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
+        assert_eq!(
+            executed,
+            Some((THREAD_EXIT_STUB_ADDR, 0x63, worker)),
+            "guest MIPS must reach the raw exit stub in this attempt"
+        );
+        assert!(
+            matches!(
+                &result,
+                Err(Error::HostExitAuthorityRecoveryRequired { .. })
+            ),
+            "missing canonical primary must request typed recovery: {result:?}"
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(
+            kernel.guest_thread_exit_code(worker_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            matches!(
+                record.op,
+                "CreateProcessExited" | "CreateProcessChildReturned"
+            ) && record.process_id == Some(launch.process_id)
+        }));
+        assert_eq!(framebuffer.pixels(), pixels_before.as_slice());
+        assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
+        let parked = parked.borrow();
+        assert_eq!(parked.len(), 1, "failed exit must retain its admitted CPU");
+        let retained = parked.front().expect("retained child CPU");
+        assert_eq!(retained.cpu.owned_process_launch.as_ref(), Some(&launch));
+        assert!(
+            retained.cpu.private_slab_attempt_poisoned,
+            "retry needs fresh-machine repair"
+        );
+        assert!(!retained.cpu.completed_active_process_exit);
+        assert_eq!(retained.cpu.saved_context_thread_birth, None);
+        assert!(
+            retained.cpu.saved_context.is_none(),
+            "the poisoned private attempt must discard unsafe restart registers"
+        );
+        assert!(retained.cpu.run_slice_generation > 0);
         Ok(())
     }
 
