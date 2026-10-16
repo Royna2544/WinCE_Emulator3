@@ -164,6 +164,66 @@ struct NativeMixedJrStopProbe {
     checked_stop_seen: bool,
 }
 
+/// A bounded reentry fence for the scheduler block callback. This is not the
+/// machine-wide Kernel/framebuffer port: the other hook families and the
+/// post-native child handoff still have their own raw aliases.
+#[cfg(feature = "unicorn")]
+struct SchedulerBlockStateLease<'a, 'frame> {
+    busy: &'a std::cell::Cell<bool>,
+    kernel: *mut CeKernel,
+    framebuffer: *mut (dyn Framebuffer + 'frame),
+}
+
+#[cfg(feature = "unicorn")]
+impl<'a, 'frame> SchedulerBlockStateLease<'a, 'frame> {
+    fn try_enter(
+        busy: &'a std::cell::Cell<bool>,
+        kernel: *mut CeKernel,
+        framebuffer: *mut (dyn Framebuffer + 'frame),
+    ) -> Option<Self> {
+        if busy.replace(true) {
+            None
+        } else {
+            Some(Self {
+                busy,
+                kernel,
+                framebuffer,
+            })
+        }
+    }
+
+    fn kernel(&self) -> &CeKernel {
+        // SAFETY: this call is confined to the audited scheduler callback.
+        // The guard prevents another scheduler callback from entering while
+        // this reference is live; other hook aliases remain an open port cut.
+        unsafe { &*self.kernel }
+    }
+
+    fn kernel_mut(&mut self) -> &mut CeKernel {
+        // SAFETY: the returned loan is tied to this callback-local guard.
+        // Whole-attempt exclusivity is not claimed by this bounded fence.
+        unsafe { &mut *self.kernel }
+    }
+
+    fn framebuffer_mut(&mut self) -> &mut dyn Framebuffer {
+        // SAFETY: the returned loan is tied to this callback-local guard.
+        unsafe { &mut *self.framebuffer }
+    }
+
+    fn kernel_and_framebuffer_mut(&mut self) -> (&mut CeKernel, &mut dyn Framebuffer) {
+        // SAFETY: Kernel and framebuffer are disjoint parameters of the
+        // native attempt, and both loans end before this guard is reused.
+        unsafe { (&mut *self.kernel, &mut *self.framebuffer) }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+impl Drop for SchedulerBlockStateLease<'_, '_> {
+    fn drop(&mut self) {
+        self.busy.set(false);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
@@ -205,6 +265,8 @@ pub struct UnicornMips {
     last_native_slice_outcome: NativeSliceOutcome,
     #[cfg(all(test, feature = "unicorn"))]
     native_mixed_jr_stop_probe: Option<Rc<std::cell::Cell<NativeMixedJrStopProbe>>>,
+    #[cfg(all(test, feature = "unicorn"))]
+    scheduler_block_busy_probe: Option<Rc<std::cell::Cell<bool>>>,
     // An E18 pointer-map failure or unowned worker exit cannot resume from an
     // older CPU snapshot or silently restart at process entry on a later call.
     private_slab_attempt_poisoned: bool,
@@ -2308,6 +2370,8 @@ impl UnicornMips {
             last_native_slice_outcome: NativeSliceOutcome::NoAttempt,
             #[cfg(all(test, feature = "unicorn"))]
             native_mixed_jr_stop_probe: None,
+            #[cfg(all(test, feature = "unicorn"))]
+            scheduler_block_busy_probe: None,
             private_slab_attempt_poisoned: false,
             completed_active_process_exit: false,
             owned_process_launch: None,
@@ -8494,6 +8558,8 @@ impl UnicornMips {
                 last_native_slice_outcome: std::mem::take(&mut self.last_native_slice_outcome),
                 #[cfg(all(test, feature = "unicorn"))]
                 native_mixed_jr_stop_probe: self.native_mixed_jr_stop_probe.take(),
+                #[cfg(all(test, feature = "unicorn"))]
+                scheduler_block_busy_probe: self.scheduler_block_busy_probe.take(),
                 private_slab_attempt_poisoned: std::mem::take(
                     &mut self.private_slab_attempt_poisoned,
                 ),
@@ -9762,6 +9828,10 @@ impl UnicornMips {
         // snapshot. Only a checked safe-PC write and emu_stop may set it.
         let native_hook_stop_reason = Rc::new(Cell::new(None::<NativeHookStopReason>));
         let native_hook_control_error = Rc::new(RefCell::new(None::<String>));
+        // This first-fault latch never borrows while a host callback can
+        // reenter the scheduler hook. It is consumed before deferred launches
+        // or decoded-exit handling, not converted into a scheduler yield.
+        let scheduler_block_access_fault = Rc::new(Cell::new(None::<&'static str>));
         let immediate_process_sync_error = Rc::new(RefCell::new(None::<Error>));
         let immediate_process_sync_error_hook = Rc::clone(&immediate_process_sync_error);
         let active_private_page_guards_import = Rc::clone(&active_private_page_guards);
@@ -10998,6 +11068,14 @@ impl UnicornMips {
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
         let scheduler_timeslice_pending_hook = Rc::clone(&scheduler_timeslice_pending);
         let framebuffer_timeslice_hook = framebuffer as *mut dyn Framebuffer;
+        let scheduler_block_busy = Rc::new(Cell::new(false));
+        #[cfg(test)]
+        let scheduler_block_busy = self
+            .scheduler_block_busy_probe
+            .clone()
+            .unwrap_or(scheduler_block_busy);
+        let scheduler_block_busy_hook = Rc::clone(&scheduler_block_busy);
+        let scheduler_block_access_fault_hook = Rc::clone(&scheduler_block_access_fault);
         let current_thread_id_timeslice_hook = Rc::clone(&current_thread_id);
         let suspended_guest_thread_timeslice_hook = Rc::clone(&suspended_guest_thread);
         let suspended_guest_thread_queue_timeslice_hook = Rc::clone(&suspended_guest_thread_queue);
@@ -11062,19 +11140,37 @@ impl UnicornMips {
                 }
                 timeslice_service_at_hook.set(now);
             }
+            let Some(mut scheduler_state) = SchedulerBlockStateLease::try_enter(
+                scheduler_block_busy_hook.as_ref(),
+                kernel_ptr,
+                framebuffer_timeslice_hook,
+            ) else {
+                scheduler_block_access_fault_hook
+                    .set(Some("reentrant scheduler block state access"));
+                let _ = uc.emu_stop();
+                return;
+            };
             // In hookless trampoline mode no code hook exists to run the
             // framebuffer tick and host-input drain; carry them per service
             // point (and per retry while a timeslice is pending).
             if hookless_trampolines_enabled && counter & 0x3f == 0 {
-                if let Err(err) = unsafe { (&mut *framebuffer_timeslice_hook).emulator_tick() } {
+                if let Err(err) = scheduler_state.framebuffer_mut().emulator_tick() {
                     *framebuffer_tick_error_timeslice_hook.borrow_mut() = Some(err);
                     let _ = uc.emu_stop();
                     return;
                 }
+                if scheduler_block_access_fault_hook.get().is_some() {
+                    let _ = uc.emu_stop();
+                    return;
+                }
                 if let Err(err) =
-                    drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
+                    drain_win32_host_input_to_active_window(scheduler_state.kernel_mut())
                 {
                     *framebuffer_tick_error_timeslice_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                if scheduler_block_access_fault_hook.get().is_some() {
                     let _ = uc.emu_stop();
                     return;
                 }
@@ -11085,20 +11181,24 @@ impl UnicornMips {
                 scheduler_timeslice_pending_hook.set(true);
             }
             if live_pump {
-                let has_pending_remote_control = unsafe { &*kernel_ptr }
+                let has_pending_remote_control = scheduler_state.kernel()
                     .remote_server
                     .as_ref()
                     .is_some_and(|server| server.pending_control_count() != 0);
                 if has_pending_remote_control {
                     clear_orphaned_live_blocked_get_message(
                         &blocked_get_message_timeslice_hook,
-                        unsafe { &*kernel_ptr },
+                        scheduler_state.kernel(),
                     );
                     let live_blocked = blocked_get_message_timeslice_hook.borrow().clone();
                     let remote_drained = drain_remote_server_control_messages_for_message_target(
-                        unsafe { &mut *kernel_ptr },
+                        scheduler_state.kernel_mut(),
                         live_blocked,
                     );
+                    if scheduler_block_access_fault_hook.get().is_some() {
+                        let _ = uc.emu_stop();
+                        return;
+                    }
                     if remote_drained != 0 {
                         scheduler_timeslice_pending_hook.set(true);
                     }
@@ -11106,7 +11206,7 @@ impl UnicornMips {
             }
             if !scheduler_timeslice_pending_hook.get() {
                 let active_thread_id = current_thread_id_timeslice_hook.get().0;
-                let kernel_ref = unsafe { &*kernel_ptr };
+                let kernel_ref = scheduler_state.kernel();
                 if blocked_get_message_has_visible_receiver_work(
                     &blocked_guest_thread_timeslice_hook,
                     &displaced_blocked_get_messages_timeslice_hook,
@@ -11169,7 +11269,7 @@ impl UnicornMips {
                     context_pc,
                     no_pending_guest_returns,
                     &parked_child_processes_timeslice_hook.borrow(),
-                    unsafe { &*kernel_ptr },
+                    scheduler_state.kernel(),
                     current_thread_id_timeslice_hook.get().0,
                 ) {
                     let safe_pc_write = uc.reg_write(RegisterMIPS::PC, u64::from(yield_pc));
@@ -11248,7 +11348,7 @@ impl UnicornMips {
                     let mut last_wndproc_returns = last_wndproc_returns_timeslice_hook.borrow_mut();
                     let _ = Self::clear_orphaned_direct_send_callouts_for_context(
                         &mut pending_wndproc_returns,
-                        unsafe { &*kernel_ptr },
+                        scheduler_state.kernel(),
                         unsafe { &*mapped_blobs_ptr },
                         [Some(context_pc), None],
                         [
@@ -11277,7 +11377,7 @@ impl UnicornMips {
                     .is_empty());
             let active_thread_id = current_thread_id_timeslice_hook.get().0;
             if let Some(reason) = pending_guest_thread_return_stale_reason(
-                unsafe { &*kernel_ptr },
+                scheduler_state.kernel(),
                 pending_guest_thread_returns_timeslice_hook.borrow().as_slice(),
                 active_thread_id,
             ) {
@@ -11296,11 +11396,12 @@ impl UnicornMips {
             let Some(context_pc) = context_pc else {
                 return;
             };
-            clear_orphaned_live_blocked_get_message(&blocked_get_message_timeslice_hook, unsafe {
-                &*kernel_ptr
-            });
+            clear_orphaned_live_blocked_get_message(
+                &blocked_get_message_timeslice_hook,
+                scheduler_state.kernel(),
+            );
             if try_resume_blocked_wait_with_active_pc(
-                unsafe { &mut *kernel_ptr },
+                scheduler_state.kernel_mut(),
                 uc,
                 &sealed_host_write_guard_timeslice_hook,
                 native_owner_birth.map(|owner| UnicornPrivateVmMapping {
@@ -11322,7 +11423,7 @@ impl UnicornMips {
                 return;
             }
             if try_resume_blocked_get_message_with_active_pc(
-                unsafe { &mut *kernel_ptr },
+                scheduler_state.kernel_mut(),
                 uc,
                 &sealed_host_write_guard_timeslice_hook,
                 active_thread_id,
@@ -11342,10 +11443,12 @@ impl UnicornMips {
             ) {
                 return;
             }
+            let (scheduler_kernel, scheduler_framebuffer) =
+                scheduler_state.kernel_and_framebuffer_mut();
             if try_resume_blocked_modal_message_box(
-                unsafe { &mut *kernel_ptr },
+                scheduler_kernel,
                 uc,
-                Some(unsafe { &mut *framebuffer_timeslice_hook }),
+                Some(scheduler_framebuffer),
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_modal_message_box_timeslice_hook,
@@ -11359,8 +11462,12 @@ impl UnicornMips {
             ) {
                 return;
             }
+            if scheduler_block_access_fault_hook.get().is_some() {
+                let _ = uc.emu_stop();
+                return;
+            }
             if try_resume_blocked_popup_menu_modal(
-                unsafe { &mut *kernel_ptr },
+                scheduler_state.kernel_mut(),
                 uc,
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
@@ -11375,7 +11482,7 @@ impl UnicornMips {
                 return;
             }
             if try_resume_blocked_send_message_timeout(
-                unsafe { &mut *kernel_ptr },
+                scheduler_state.kernel_mut(),
                 uc,
                 &sealed_host_write_guard_timeslice_hook,
                 active_thread_id,
@@ -11390,7 +11497,7 @@ impl UnicornMips {
                 return;
             }
             if try_resume_blocked_clipboard_data(
-                unsafe { &mut *kernel_ptr },
+                scheduler_state.kernel_mut(),
                 uc,
                 &sealed_host_write_guard_timeslice_hook,
                 mapped_kernel_memory_timeslice_hook.as_ref(),
@@ -11413,7 +11520,7 @@ impl UnicornMips {
             ) {
                 return;
             }
-            if Self::thread_has_receiver_work(active_thread_id, unsafe { &*kernel_ptr }) {
+            if Self::thread_has_receiver_work(active_thread_id, scheduler_state.kernel()) {
                 if uc
                     .reg_write(RegisterMIPS::PC, u64::from(context_pc))
                     .is_err()
@@ -11425,7 +11532,7 @@ impl UnicornMips {
                 return;
             }
             if live_pump {
-                let kernel_ref = unsafe { &*kernel_ptr };
+                let kernel_ref = scheduler_state.kernel();
                 if Self::live_pump_active_should_yield_to_visible_parked_process(
                     &parked_child_processes_timeslice_hook.borrow(),
                     kernel_ref,
@@ -11443,7 +11550,7 @@ impl UnicornMips {
                 }
             }
             if try_timeslice_to_pending_guest_thread_creator(
-                unsafe { &*kernel_ptr },
+                scheduler_state.kernel(),
                 uc,
                 active_thread_id,
                 context_pc,
@@ -11456,7 +11563,7 @@ impl UnicornMips {
                 return;
             }
             let _ = try_timeslice_to_suspended_thread(
-                unsafe { &*kernel_ptr },
+                scheduler_state.kernel(),
                 uc,
                 active_thread_id,
                 context_pc,
@@ -14728,6 +14835,9 @@ impl UnicornMips {
                     .take()
                     .map(Error::Backend)
             });
+        let scheduler_block_access_failure = scheduler_block_access_fault
+            .take()
+            .map(|reason| Error::Backend(reason.to_owned()));
         let slice_run_elapsed = slice_profile.elapsed();
         self.run_slice_generation = self.run_slice_generation.wrapping_add(1);
         let native_requested_pc_stop = limits.stop_pc.filter(|target| {
@@ -14747,7 +14857,8 @@ impl UnicornMips {
                 || matches!(report.raw_stop_pc, AttemptObservation::Error(_)),
             capture_error: native_capture_result.is_err(),
             hook_control_error: native_hook_control_error.borrow().is_some()
-                || immediate_process_sync_failure.is_some(),
+                || immediate_process_sync_failure.is_some()
+                || scheduler_block_access_failure.is_some(),
             count_stop_requested: native_count_stop_requested,
             requested_pc_stop: native_requested_pc_stop.is_some(),
             native_deadline_expired,
@@ -14762,6 +14873,7 @@ impl UnicornMips {
             && native_capture_result.is_ok()
             && native_hook_control_error.borrow().is_none()
             && immediate_process_sync_failure.is_none()
+            && scheduler_block_access_failure.is_none()
             && deferred_process_launch.get()
         {
             deferred_launch_error = run_pending_process_launches(
@@ -14821,6 +14933,7 @@ impl UnicornMips {
         );
         let mut snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         if native_requested_pc_stop.is_none()
+            && scheduler_block_access_failure.is_none()
             && post_run_pc_repair_error.is_none()
             && native_hook_stop_reason.get().is_none()
             && let Some(target) = import_trap_page_target_for_mips_jr_thunk(&uc, snapshot_pc)
@@ -14902,6 +15015,7 @@ impl UnicornMips {
         }
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
         if native_requested_pc_stop.is_none()
+            && scheduler_block_access_failure.is_none()
             && let Some(trap) = self.import_traps.trap_at(snapshot_pc)
         {
             let completed_sent_callout = complete_escaped_get_message_sent_callout(
@@ -15078,6 +15192,7 @@ impl UnicornMips {
             snapshot_context_error = ?snapshot_context_result.as_ref().err(),
             mapped_blob_sync_error = ?mapped_blob_sync_error,
             immediate_process_sync_error = ?immediate_process_sync_failure.as_ref(),
+            scheduler_block_access_error = ?scheduler_block_access_failure.as_ref(),
             native_memory_fault = ?native_memory_fault,
             native_interrupt = ?native_interrupt,
             native_invalid_pc = ?native_invalid_pc,
@@ -15095,6 +15210,7 @@ impl UnicornMips {
             && native_hook_control_error.borrow().is_none()
             && post_run_pc_repair_error.is_none()
             && immediate_process_sync_failure.is_none()
+            && scheduler_block_access_failure.is_none()
             && deferred_launch_error.is_none()
             && deferred_view_sync_error.is_none()
             && mapped_blob_sync_error.is_none()
@@ -15125,6 +15241,13 @@ impl UnicornMips {
                     "private native post-run tail"
                 )
             }};
+        }
+        if let Some(err) = scheduler_block_access_failure {
+            reject_private_attempt!(
+                err,
+                NativeSliceOutcome::BackendError,
+                "scheduler block state access"
+            );
         }
         // A hook that deliberately terminates the attempt may invalidate the
         // native register marker. Report its latched, more specific Backend
@@ -15967,6 +16090,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             last_native_slice_outcome: NativeSliceOutcome::NoAttempt,
             #[cfg(test)]
             native_mixed_jr_stop_probe: None,
+            #[cfg(test)]
+            scheduler_block_busy_probe: None,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
@@ -84074,6 +84199,79 @@ mod unicorn_tests {
                 .host_wall_clock_stop
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn scheduler_block_preseeded_busy_fails_before_machine_state_access() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("scheduler-block-busy.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "scheduler-block-busy.exe")?;
+        assert!(cpu.trampoline_origins_all_direct());
+        let busy = Rc::new(std::cell::Cell::new(true));
+        cpu.scheduler_block_busy_probe = Some(Rc::clone(&busy));
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let frame_before = framebuffer.clone();
+        let process_before = kernel.current_process_id();
+
+        let attempted = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        assert!(matches!(
+            attempted.result,
+            Err(crate::Error::Backend(ref message))
+                if message.contains("reentrant scheduler block state access")
+        ));
+        assert_eq!(
+            attempted.report.failure_operation(),
+            Some("scheduler block state access")
+        );
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::BackendError
+        );
+        assert!(matches!(
+            attempted.report.raw_stop_pc(),
+            super::AttemptObservation::Value(pc) if *pc != 0
+        ));
+        assert_eq!(kernel.current_process_id(), process_before);
+        assert_eq!(framebuffer, frame_before);
+        assert!(
+            busy.get(),
+            "failed entry must not release another owner's guard"
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(cpu.saved_context.is_none());
+
+        let mut unbusy_kernel = phase1_kernel("scheduler-block-unbusy.exe")?;
+        let mut unbusy_cpu = phase1_counter_cpu(0x1000, "scheduler-block-unbusy.exe")?;
+        let unbusy = Rc::new(std::cell::Cell::new(false));
+        unbusy_cpu.scheduler_block_busy_probe = Some(Rc::clone(&unbusy));
+        let mut unbusy_framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let control = unbusy_cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut unbusy_kernel,
+            &mut unbusy_framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 1_000_000,
+                wall_clock_limit_ms: 1,
+                stop_pc: None,
+                live_pump: true,
+            },
+        );
+        control.result?;
+        assert_eq!(control.report.failure_operation(), None);
+        assert_eq!(
+            unbusy_cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::HookStop(super::NativeHookStopReason::HostWallBudget)
+        );
+        assert!(!unbusy.get());
         Ok(())
     }
 
