@@ -242,7 +242,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      return survives native sync/finish. The main run loop owns the slot,
      status/debug show its identity and retained mapped-blob bytes (not RSS),
      and checkpoint save/restore refuse it. A `TerminateProcess` request
-     leaves B live; same-Kernel accepted exit retires its slot and fixed stack.
+     leaves B live; same-Kernel accepted exit retires its slot and fixed stack
+     in the tested native-fault shape. Add a control/fix for the source-audited
+     post-load/pre-native-entry error: it may quarantine an unpoisoned CPU,
+     which the current exit consumer cannot retire. Do not claim general
+     error-path closure until that boundary is sealed.
      The pre-seal a03 broad **2,183/0/9 ignored** is development-only; final
      sealed broad/no-default counts and receipt remain pending. No general
      private VM/file-view exit cleanup or runnable leaf permit follows.

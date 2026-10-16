@@ -14,7 +14,10 @@ original CPU in one non-runnable, generation-checked machine custody slot,
 not the legacy parked tree. B remains Kernel-live and unsignaled; its native
 owner is closed and its unsafe saved continuation is cleared. A
 `TerminateProcess` request alone retains the slot; same-Kernel checked
-accepted exit retires it and the fixed-stack pin. The production run loop
+accepted exit retires it and the fixed-stack pin in this focused fault shape.
+Source audit found a separate post-load/pre-native-entry error could be
+quarantined without the poison bit required by the exit consumer, so general
+error-path closure is not established. The production run loop
 owns custody, monitor save/restore refuse while it exists, and status/debug
 publish slot identity and retained mapped-blob bytes. Those bytes are not a
 measured host RSS peak. The Kernel-minted exit witness carries exact birth,

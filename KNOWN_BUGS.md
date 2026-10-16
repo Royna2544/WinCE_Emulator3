@@ -251,7 +251,12 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       non-runnable machine slot, not the legacy parked tree. Final sealed broad
       receipt/counts are pending. This bounded result does not repair the
       nonempty descendant publication conflict above, other parked/active
-      owner-loss paths, or the public run wrapper's custody bypass. The two
+      owner-loss paths, or the public run wrapper's custody bypass. A
+      source-audited post-load/pre-native-entry error can cross the producer's
+      `child_admitted` flag before private-attempt poisoning, move an
+      unpoisoned CPU into quarantine, and then fail the exit consumer's
+      poison-bit preflight. That edge has no executed control or accepted
+      retirement proof yet; general error-path closure is blocked. The two
       stale route-specific controls were retired; none is a live iNavi result.
     - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
       refuses a preseeded busy block service but does not exclude raw

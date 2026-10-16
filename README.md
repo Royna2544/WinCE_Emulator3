@@ -125,7 +125,10 @@ remote-control HTTP/WebSocket surface.
   real-MIPS controls that keep the original faulted B CPU in non-runnable,
   exact-birth custody after A's staged return and native sync/finish. A
   termination request retains the CPU; same-Kernel accepted exit retires it
-  and B's fixed-stack pin. Final sealed broad/no-default counts and receipt
+  and B's fixed-stack pin in that tested fault shape. A source-audited
+  post-load/pre-native-entry error may quarantine an unpoisoned CPU that the
+  exit consumer refuses to retire; general closure remains open. Final
+  sealed broad/no-default counts and receipt
   are pending; pre-seal a03 **2,183/0/9 ignored** is development evidence.
   Status/debug report retained mapped-blob bytes, not measured RSS. The
   callback-scoped machine-state port, runnable/parked custody, public-run
