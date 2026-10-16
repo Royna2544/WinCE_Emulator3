@@ -101,6 +101,11 @@ remote-control HTTP/WebSocket surface.
   passed release-feature **2,107/0/9 ignored** and no-default **1,511/0/3
   ignored**. This is neither whole-exit atomicity nor full Stage 3, live-iNavi
   or performance acceptance. No app or writable-mount run was made.
+- The bounded [D-011 modal-presence gate](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+  now refuses affected MessageBox/popup state before stopped-exit effects in
+  three red-to-green source controls. The same sealed source passed release
+  **2,137/0/10 ignored** and no-default **1,524/0/3 ignored**; modal-pixel
+  restoration, nonmodal descendant ownership and live acceptance remain open.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

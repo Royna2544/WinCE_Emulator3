@@ -128,6 +128,12 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+- D-011 modal-presence refusal
+  ([receipt](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)):
+  exact-birth stopped exits fail closed before Kernel effects when the affected
+  active/parked subtree contains a MessageBox or popup; modal-bearing parked
+  duplicates are retained. The three expected-red controls turned green;
+  broad suites passed 2,137/0/10 and 1,524/0/3 (19 blocks each).
 - Decoded direct-kernel pseudo self-exit
   ([receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md),
   [broad](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)):

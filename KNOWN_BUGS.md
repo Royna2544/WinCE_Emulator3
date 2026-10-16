@@ -186,18 +186,21 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     pseudo exits remained synchronous compatibility paths. The later bounded
     [decoded self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
     now routes the witnessed direct-kernel pseudo call through the stopped
-    finalizer; raw direct compatibility remains separate. Unpreflighted modal
-    backing is refused rather than restored under the new native path, but
-    requested/natural stopped child completion can still retire a blocked
-    MessageBox or production-reachable rendered popup without a whole-display
-    preflight. The [modal D-011 design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-extension-design-record-not-implemented)
-    scopes a fail-closed source gate; it is not yet an implementation.
+    finalizer; raw direct compatibility remains separate. The bounded
+    [modal-presence refusal gate](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+    now preflights affected exact-birth stopped CPU subtrees and refuses
+    MessageBox/popup disposal before Kernel effects; three preserved reds are
+    green, with release **2,137/0/10 ignored** and no-default **1,524/0/3
+    ignored**. It does not prepare or restore modal pixels, prove compatible
+    retry, or establish every stopped-exit shape. The
+    [D-011 modal design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)
+    retains those later gates.
     A separate 2026-10-16 source audit found that successful natural parked
     completion and initial-child `Exited` can drop nonmodal descendant CPU
     queues, as can active exact-birth tree removal; requested parked and
     initial-child `Completed` instead hoist descendants. This is an untested
-    ownership-loss path, not an attributed live failure, and a modal-presence
-    refusal alone does not repair it.
+    ownership-loss path, not an attributed live failure; the modal-presence
+    refusal does not repair it.
     The `parked_process_handle_exit_code` branch also drops an already-exited
     parked CPU without inspecting its modal state; an earlier external Kernel
     exit cannot be made atomic by this later finalizer preflight. Retention or

@@ -114,10 +114,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      now requires an attempt-local executed JALR/delay-slot witness and exact
      stopped caller/owner before that same finalizer. Raw direct pseudo
      compatibility remains fixture-only and fail-closed; no raw executor is
-     proposed. First fail closed for unpreflighted MessageBox and production-
-     reachable popup modal state on every stopped CPU exit finalizer
-     ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-extension-design-record-not-implemented));
-     then add checked modal-backing restore preparation and handle failures
+     proposed. The bounded
+     [modal-presence refusal gate](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+     now fails closed for affected MessageBox/popup state in tested stopped
+     exit shapes. Next add checked modal-backing restore preparation
+     ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut))
+     and handle failures
      after successful preflight without claiming whole-exit
      atomicity, and settle foreign-link topology under O-G4.
      Separately prove ownership of nonmodal descendant CPU queues on successful
