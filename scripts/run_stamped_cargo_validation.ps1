@@ -13,7 +13,12 @@ param(
 
     [string]$Executable = 'cargo',
 
-    [string]$BaselineRef = ''
+    [string]$BaselineRef = '',
+
+    # Only for the exact release build after a separate successful clean.
+    # The target outputs must be absent before this attempt and are stamped
+    # immediately after Cargo exits successfully.
+    [switch]$CaptureReleaseArtifacts
 )
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +34,32 @@ if (-not (Test-Path -LiteralPath (Split-Path -Parent $rawLog) -PathType Containe
 }
 if ($CargoArguments.Count -eq 0) {
     throw 'CargoArguments must not be empty.'
+}
+$releaseArtifacts = $null
+if ($CaptureReleaseArtifacts) {
+    $releaseBuildArgs = @('build', '--release', '--features',
+        'unicorn,trace,win32-desktop', '-j', '1')
+    if ($Executable -cne 'cargo' -or
+        $CargoArguments.Count -ne $releaseBuildArgs.Count -or
+        -not [string]::IsNullOrEmpty($env:CARGO_TARGET_DIR)) {
+        throw 'Release artifact capture requires the exact Cargo build and this repository target directory.'
+    }
+    for ($i = 0; $i -lt $releaseBuildArgs.Count; $i++) {
+        if ($CargoArguments[$i] -cne $releaseBuildArgs[$i]) {
+            throw 'Release artifact capture requires the exact Cargo build arguments.'
+        }
+    }
+    $releaseArtifacts = @{
+        exe = [System.IO.Path]::GetFullPath(
+            (Join-Path $repoRoot 'target\release\wince_emulation_v3.exe'))
+        pdb = [System.IO.Path]::GetFullPath(
+            (Join-Path $repoRoot 'target\release\wince_emulation_v3.pdb'))
+    }
+    foreach ($path in @($releaseArtifacts.exe, $releaseArtifacts.pdb)) {
+        if (Test-Path -LiteralPath $path) {
+            throw "Release output existed before this build attempt: $path"
+        }
+    }
 }
 $executablePath = $Executable
 $executableHashBefore = $null
@@ -65,6 +96,7 @@ Push-Location -LiteralPath $repoRoot
 $writer = $null
 $commandExitCode = 125
 $runnerError = $null
+$capturedReleaseArtifacts = $null
 try {
     $headBefore = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'Could not read source HEAD.' }
@@ -127,6 +159,19 @@ try {
     $commandExitCode = $LASTEXITCODE
     if ($null -eq $commandExitCode) { $commandExitCode = 125 }
     $ErrorActionPreference = 'Stop'
+    if ($CaptureReleaseArtifacts -and $commandExitCode -eq 0) {
+        foreach ($path in @($releaseArtifacts.exe, $releaseArtifacts.pdb)) {
+            $output = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+            if ($output -isnot [System.IO.FileInfo] -or
+                ($output.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                throw "Fresh release output is missing or redirected: $path"
+            }
+        }
+        $capturedReleaseArtifacts = @{
+            exe = (Get-FileHash -LiteralPath $releaseArtifacts.exe -Algorithm SHA256).Hash.ToUpperInvariant()
+            pdb = (Get-FileHash -LiteralPath $releaseArtifacts.pdb -Algorithm SHA256).Hash.ToUpperInvariant()
+        }
+    }
 } catch {
     $runnerError = $_.Exception.Message
 } finally {
@@ -136,6 +181,12 @@ try {
         }
         $writer.WriteLine('RUN_END_UTC=' + [System.DateTime]::UtcNow.ToString('o'))
         $writer.WriteLine("EXIT_CODE=$commandExitCode")
+        if ($null -ne $capturedReleaseArtifacts) {
+            $writer.WriteLine("BUILD_OUTPUT_EXE_PATH=$($releaseArtifacts.exe)")
+            $writer.WriteLine("BUILD_OUTPUT_PDB_PATH=$($releaseArtifacts.pdb)")
+            $writer.WriteLine("BUILD_OUTPUT_EXE_SHA256=$($capturedReleaseArtifacts.exe)")
+            $writer.WriteLine("BUILD_OUTPUT_PDB_SHA256=$($capturedReleaseArtifacts.pdb)")
+        }
         $headAfter = (& git rev-parse HEAD).Trim()
         $writer.WriteLine("SOURCE_HEAD_AFTER=$headAfter")
         $sourceChanged = $false

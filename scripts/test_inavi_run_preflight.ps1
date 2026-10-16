@@ -34,6 +34,25 @@ function New-SyntheticHash([string]$Label) {
     return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes))
 }
 
+function New-RawLogFact(
+    [int]$Attempt, [string[]]$Argv, [string]$StartUtc, [string]$EndUtc,
+    [object]$SourceFiles, [string]$Head,
+    [bool]$CompiledPackage = $false, [bool]$FinishedRelease = $false
+) {
+    return @{
+        attempt = $Attempt
+        command = 'cargo ' + ($Argv -join ' ')
+        commandArgv = @($Argv)
+        sourceHeadBefore = $Head; sourceHeadAfter = $Head
+        sourceSha256Before = Copy-Fixture $SourceFiles
+        sourceSha256After = Copy-Fixture $SourceFiles
+        sourceChangedDuringRun = $false; exitCode = 0
+        runStartUtc = $StartUtc; runEndUtc = $EndUtc
+        executedTests = 0L
+        compiledPackage = $CompiledPackage; finishedRelease = $FinishedRelease
+    }
+}
+
 function New-Baseline {
     $root = 'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\offline-only'
     $sourceRoot = 'D:\GitHub\Wince_emulation_v3'
@@ -53,7 +72,8 @@ function New-Baseline {
         'scripts/inavi_summary_observer_core.ps1',
         'scripts/test_inavi_summary_observer.ps1',
         'scripts/test_inavi_runner_guard.ps1',
-        'scripts/test_atomic_json_overwrite.ps1'
+        'scripts/test_atomic_json_overwrite.ps1',
+        'scripts/run_stamped_cargo_validation.ps1'
     )
     $sourceFiles = @{}
     foreach ($relative in $discoveredSourcePaths) {
@@ -66,6 +86,15 @@ function New-Baseline {
         patch = (New-SyntheticHash 'fresh source patch')
         seal = (New-SyntheticHash 'external source seal file')
         build = (New-SyntheticHash 'build receipt')
+        validation = (New-SyntheticHash 'source validation receipt')
+        cleanBuild = (New-SyntheticHash 'clean-build receipt')
+        focusedLog = (New-SyntheticHash 'focused raw log')
+        releaseLog = (New-SyntheticHash 'release raw log')
+        noFeatureLog = (New-SyntheticHash 'no-feature raw log')
+        alternateUnicornLog = (New-SyntheticHash 'alternate unicorn raw log')
+        alternateDesktopLog = (New-SyntheticHash 'alternate desktop raw log')
+        cleanLog = (New-SyntheticHash 'clean raw log')
+        buildLog = (New-SyntheticHash 'build raw log')
         exe = (New-SyntheticHash 'fresh executable')
         pdb = (New-SyntheticHash 'fresh PDB')
         registry = (New-SyntheticHash 'registry configuration')
@@ -77,6 +106,14 @@ function New-Baseline {
     $paths = @{
         exe = "$root\fresh.exe"; pdb = "$root\fresh.pdb"
         build = "$root\build-receipt.json"; seal = "$root\source-seal.json"
+        patch = "$root\source-at-seal.patch"
+        validation = "$root\source-validation-receipt.json"
+        cleanBuild = "$root\clean-build-receipt.json"
+        focusedLog = "$root\focused.raw.log"; releaseLog = "$root\release.raw.log"
+        noFeatureLog = "$root\no-feature.raw.log"
+        alternateUnicornLog = "$root\alternate-unicorn.raw.log"
+        alternateDesktopLog = "$root\alternate-desktop.raw.log"
+        cleanLog = "$root\clean.raw.log"; buildLog = "$root\build.raw.log"
         backups = "$root\backup-manifest.json"
         registry = "$root\registry.reg"; devices = "$root\serial_devices.json"
         mounts = "$root\mounts.toml"; app = "$root\app.exe"
@@ -89,7 +126,7 @@ function New-Baseline {
     )
     $seal = @{
         head = '9C302DB35583669FAB435449A5F4515B712583D6'
-        parentHead = '0e06e2c5c662ad224c9b472e7798f4604240a6b6'
+        baselineHead = '0e06e2c5c662ad224c9b472e7798f4604240a6b6'
         sourceRoot = $sourceRoot; sourceFiles = $sourceFiles
         patchSha256 = $hash.patch
         kernelSha256 = $sourceFiles['src/ce/kernel.rs']
@@ -97,10 +134,49 @@ function New-Baseline {
         gweSha256 = $sourceFiles['src/ce/gwe.rs']
         basicSubsystemsSha256 = $sourceFiles['tests/basic_subsystems.rs']
     }
+    $rsds = 'E072B53A-6F13-4C91-B379-2C5E166A419B:1'
+    $validationLogs = @{
+        focused = @(@{ path = $paths.focusedLog; sha256 = $hash.focusedLog })
+        release = @(@{ path = $paths.releaseLog; sha256 = $hash.releaseLog })
+        noFeature = @(@{ path = $paths.noFeatureLog; sha256 = $hash.noFeatureLog })
+        alternateFeatures = @(
+            @{ path = $paths.alternateUnicornLog; sha256 = $hash.alternateUnicornLog },
+            @{ path = $paths.alternateDesktopLog; sha256 = $hash.alternateDesktopLog }
+        )
+    }
+    $parsedValidationReceipt = @{
+        sourceSealSha256 = $hash.seal
+        sourcePatchSha256 = $hash.patch
+        logs = $validationLogs
+    }
+    $parsedCleanBuildReceipt = @{
+        sourceSealSha256 = $hash.seal
+        sourcePatchSha256 = $hash.patch
+        cleanLog = @{ path = $paths.cleanLog; sha256 = $hash.cleanLog }
+        buildLog = @{ path = $paths.buildLog; sha256 = $hash.buildLog }
+        executableSha256 = $hash.exe; pdbSha256 = $hash.pdb; rsds = $rsds
+    }
+    $rawLogFacts = @{}
+    $rawLogFacts[$paths.focusedLog] = New-RawLogFact 1 @('test','--release','--features','unicorn,trace,win32-desktop','--lib','some_filter') '2026-10-15T01:40:00.0000000Z' '2026-10-15T01:41:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.releaseLog] = New-RawLogFact 2 @('test','--release','--features','unicorn,trace,win32-desktop','-j','1') '2026-10-15T01:42:00.0000000Z' '2026-10-15T01:43:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.noFeatureLog] = New-RawLogFact 3 @('test','-j','1') '2026-10-15T01:44:00.0000000Z' '2026-10-15T01:45:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.alternateUnicornLog] = New-RawLogFact 4 @('check','--features','unicorn') '2026-10-15T01:46:00.0000000Z' '2026-10-15T01:47:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.alternateDesktopLog] = New-RawLogFact 5 @('check','--features','unicorn,win32-desktop') '2026-10-15T01:48:00.0000000Z' '2026-10-15T01:49:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.cleanLog] = New-RawLogFact 6 @('clean','--release','-p','wince_emulation_v3') '2026-10-15T01:50:00.0000000Z' '2026-10-15T01:51:00.0000000Z' $sourceFiles $seal.head
+    $rawLogFacts[$paths.buildLog] = New-RawLogFact 7 @('build','--release','--features','unicorn,trace,win32-desktop','-j','1') '2026-10-15T01:52:00.0000000Z' '2026-10-15T01:53:00.0000000Z' $sourceFiles $seal.head $true $true
+    $rawLogFacts[$paths.focusedLog].executedTests = 1L
+    $rawLogFacts[$paths.buildLog].buildOutputExePath = "$sourceRoot\target\release\wince_emulation_v3.exe"
+    $rawLogFacts[$paths.buildLog].buildOutputPdbPath = "$sourceRoot\target\release\wince_emulation_v3.pdb"
+    $rawLogFacts[$paths.buildLog].buildOutputExeSha256 = $hash.exe
+    $rawLogFacts[$paths.buildLog].buildOutputPdbSha256 = $hash.pdb
     $receipt = @{
         path = $paths.build; sha256 = $hash.build; sourceHead = $seal.head
-        sourcePatchSha256 = $seal.patchSha256; wB1cParentHead = $seal.parentHead
+        sourcePatchSha256 = $seal.patchSha256; sourceBaselineHead = $seal.baselineHead
         sourceSealSha256 = $hash.seal
+        kind = 'fresh-local-rebuild'; rustRebuiltForThisReceipt = $true
+        rsds = $rsds
+        sourceValidationReceipt = @{ path = $paths.validation; sha256 = $hash.validation }
+        cleanBuildReceipt = @{ path = $paths.cleanBuild; sha256 = $hash.cleanBuild }
         focusedPassed = $true; releasePassed = $true
         noFeaturePassed = $true; alternateFeaturesPassed = $true
         executableSha256 = $hash.exe; pdbSha256 = $hash.pdb
@@ -110,14 +186,15 @@ function New-Baseline {
     $parsedReceipt = Copy-Fixture $receipt
     $parsedReceipt.Remove('sha256')
     $manifest = @{
-        schemaVersion = 1; runTag = 'offline-fixture-fresh'
+        schemaVersion = 2; runTag = 'offline-fixture-fresh'
         approvalReference = 'call_offline_fresh_approval'
         approvalObservedUtc = '2026-10-15T01:59:00.0000000Z'
         sourceSeal = $seal
         sourceSealFile = @{ path = $paths.seal; sha256 = $hash.seal }
+        sourcePatchFile = @{ path = $paths.patch; sha256 = $hash.patch }
         buildReceipt = $receipt
-        executable = @{ path = $paths.exe; sha256 = $hash.exe; rsds = 'E072B53A-6F13-4C91-B379-2C5E166A419B:1' }
-        pdb = @{ path = $paths.pdb; sha256 = $hash.pdb; rsds = 'E072B53A-6F13-4C91-B379-2C5E166A419B:1' }
+        executable = @{ path = $paths.exe; sha256 = $hash.exe; rsds = $rsds }
+        pdb = @{ path = $paths.pdb; sha256 = $hash.pdb; rsds = $rsds }
         config = @{
             registry = @{ path = $paths.registry; sha256 = $hash.registry }
             devices = @{ path = $paths.devices; sha256 = $hash.devices }
@@ -131,11 +208,17 @@ function New-Baseline {
     $files = @{}
     foreach ($item in @(
         @($paths.exe, $hash.exe), @($paths.pdb, $hash.pdb),
-        @($paths.seal, $hash.seal),
+        @($paths.seal, $hash.seal), @($paths.patch, $hash.patch),
         @($paths.build, $hash.build), @($paths.backups, $hash.backupManifest),
+        @($paths.validation, $hash.validation), @($paths.cleanBuild, $hash.cleanBuild),
         @($paths.registry, $hash.registry), @($paths.devices, $hash.devices),
         @($paths.mounts, $hash.mounts), @($paths.app, $hash.app)
     )) { $files[$item[0]] = $item[1] }
+    foreach ($log in @($validationLogs.focused + $validationLogs.release +
+            $validationLogs.noFeature + $validationLogs.alternateFeatures +
+            @($parsedCleanBuildReceipt.cleanLog, $parsedCleanBuildReceipt.buildLog))) {
+        $files[$log.path] = $log.sha256
+    }
     foreach ($item in $backups) { $files[$item.archivePath] = $item.archiveSha256 }
     $completed = Copy-Fixture $backups
     foreach ($row in $completed) {
@@ -150,6 +233,9 @@ function New-Baseline {
         sourceFileSha256 = Copy-Fixture $sourceFiles
         currentManifestSha256 = New-SyntheticHash 'current external run manifest'
         parsedBuildReceipt = $parsedReceipt
+        parsedSourceValidationReceipt = $parsedValidationReceipt
+        parsedCleanBuildReceipt = $parsedCleanBuildReceipt
+        rawLogFacts = $rawLogFacts
         fileSha256 = $files
         executableRsds = $manifest.executable.rsds
         pdbRsds = $manifest.pdb.rsds
@@ -1159,7 +1245,220 @@ $sample.observed.fileSha256.Remove($oldPath)
 $sample.observed.fileSha256[$sample.manifest.backupManifest.path] = $sample.manifest.backupManifest.sha256
 $cases.Add(@{ name = 'legacy_e37_backup_manifest_path'; data = $sample; accepted = $false; code = 'LEGACY_E37_ARTIFACT' })
 
-if ($cases.Count -ne 127) { throw "Unexpected fixture count: $($cases.Count)" }
+if ($cases.Count -ne 127) { throw "Original fixture count changed: $($cases.Count)" }
+
+# V2 evidence-chain controls below are additional to the original 127 cases.
+$sample = Copy-Fixture $base
+$sample.manifest.schemaVersion = 1
+$cases.Add(@{ name = 'v1_manifest_cannot_authorize_a_fresh_run'; data = $sample; accepted = $false; code = 'SCHEMA_INVALID' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.schemaVersion = 1
+$sample.manifest.sourceSeal.parentHead = $sample.manifest.sourceSeal.baselineHead
+$sample.manifest.sourceSeal.Remove('baselineHead')
+$sample.manifest.Remove('sourcePatchFile')
+$sample.manifest.buildReceipt.wB1cParentHead = $sample.manifest.buildReceipt.sourceBaselineHead
+$sample.manifest.buildReceipt.Remove('sourceBaselineHead')
+$sample.manifest.buildReceipt.Remove('sourceValidationReceipt')
+$sample.manifest.buildReceipt.Remove('cleanBuildReceipt')
+$cases.Add(@{ name = 'historical_a04_shape_is_not_a_v2_rebuild'; data = $sample; accepted = $false; code = 'SCHEMA_MISSING' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.sourceSeal.baselineHead = 'A764019D25F3C2D64BFD926103FEAC8B50890142'
+$cases.Add(@{ name = 'source_baseline_head_mismatch'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.sourcePatchFile.sha256 = New-SyntheticHash 'unlinked source patch'
+$cases.Add(@{ name = 'source_patch_digest_not_linked_to_seal'; data = $sample; accepted = $false; code = 'SOURCE_SEAL_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.sourcePatchFile.path] = New-SyntheticHash 'tampered source patch bytes'
+$cases.Add(@{ name = 'source_patch_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.buildReceipt.kind = 'archived-copy'
+$sample.observed.parsedBuildReceipt.kind = 'archived-copy'
+$cases.Add(@{ name = 'copied_binary_is_not_a_local_rebuild'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.buildReceipt.rustRebuiltForThisReceipt = $false
+$sample.observed.parsedBuildReceipt.rustRebuiltForThisReceipt = $false
+$cases.Add(@{ name = 'false_rebuild_witness'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.manifest.buildReceipt.rustRebuiltForThisReceipt = 'true'
+$sample.observed.parsedBuildReceipt.rustRebuiltForThisReceipt = 'true'
+$cases.Add(@{ name = 'string_rebuild_witness'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.buildReceipt.sourceValidationReceipt.path] = New-SyntheticHash 'tampered source validation receipt bytes'
+$cases.Add(@{ name = 'source_validation_receipt_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedSourceValidationReceipt.sourceSealSha256 = New-SyntheticHash 'wrong validation seal'
+$cases.Add(@{ name = 'source_validation_receipt_wrong_seal'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedSourceValidationReceipt.sourcePatchSha256 = New-SyntheticHash 'wrong validation patch'
+$cases.Add(@{ name = 'source_validation_receipt_wrong_patch'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedSourceValidationReceipt.logs.Remove('noFeature')
+$cases.Add(@{ name = 'missing_no_feature_validation_log'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedSourceValidationReceipt.logs.alternateFeatures = @($sample.observed.parsedSourceValidationReceipt.logs.alternateFeatures[0])
+$cases.Add(@{ name = 'missing_second_alternate_feature_log'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.buildReceipt.cleanBuildReceipt.path] = New-SyntheticHash 'tampered clean-build receipt bytes'
+$cases.Add(@{ name = 'clean_build_receipt_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedCleanBuildReceipt.executableSha256 = New-SyntheticHash 'different clean-build exe'
+$cases.Add(@{ name = 'clean_build_receipt_wrong_executable'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.parsedCleanBuildReceipt.rsds = 'D072B53A-6F13-4C91-B379-2C5E166A419B:1'
+$cases.Add(@{ name = 'clean_build_receipt_wrong_rsds'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.observed.parsedSourceValidationReceipt.logs.focused[0].path] = New-SyntheticHash 'tampered focused raw log bytes'
+$cases.Add(@{ name = 'focused_raw_log_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts.Remove($sample.observed.parsedSourceValidationReceipt.logs.focused[0].path)
+$cases.Add(@{ name = 'focused_raw_log_facts_missing'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.focused[0].path].sourceSha256Before['src/main.rs'] = New-SyntheticHash 'different focused source before'
+$cases.Add(@{ name = 'focused_raw_log_source_before_mismatch'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$argv = @('test','--release','--features','unicorn,trace,win32-desktop','--lib','some_filter','--no-run')
+$sample.observed.rawLogFacts[$focusedPath].commandArgv = $argv
+$sample.observed.rawLogFacts[$focusedPath].command = 'cargo ' + ($argv -join ' ')
+$cases.Add(@{ name = 'focused_no_run_does_not_count_as_test'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$argv = @('test','--release','--features','unicorn,trace,win32-desktop','--lib','some_filter','--','--list')
+$sample.observed.rawLogFacts[$focusedPath].commandArgv = $argv
+$sample.observed.rawLogFacts[$focusedPath].command = 'cargo ' + ($argv -join ' ')
+$cases.Add(@{ name = 'focused_test_list_does_not_count_as_test'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$argv = @('test','--release','--features','unicorn,trace,win32-desktop','--lib','some_filter','--','--ignored')
+$sample.observed.rawLogFacts[$focusedPath].commandArgv = $argv
+$sample.observed.rawLogFacts[$focusedPath].command = 'cargo ' + ($argv -join ' ')
+$cases.Add(@{ name = 'focused_ignored_only_does_not_count_as_test'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$argv = @('test','--release','--features','unicorn,trace,win32-desktop','--lib','some_filter','--','--skip','some_filter')
+$sample.observed.rawLogFacts[$focusedPath].commandArgv = $argv
+$sample.observed.rawLogFacts[$focusedPath].command = 'cargo ' + ($argv -join ' ')
+$cases.Add(@{ name = 'focused_skip_does_not_count_as_test'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$argv = @('test','--release','--features','unicorn,trace,win32-desktop','--test','task_ownership_prerequisites','task_ownership_primary_identity_','--','--nocapture')
+$sample.observed.rawLogFacts[$focusedPath].commandArgv = $argv
+$sample.observed.rawLogFacts[$focusedPath].command = 'cargo ' + ($argv -join ' ')
+$cases.Add(@{ name = 'focused_test_target_with_nocapture_is_valid'; data = $sample; accepted = $true; code = $null })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].sourceSha256After['src/ce/kernel.rs'] = New-SyntheticHash 'different release source after'
+$cases.Add(@{ name = 'release_raw_log_source_after_mismatch'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].command = 'cargo test --release --features unicorn,trace,win32-desktop --lib'
+$cases.Add(@{ name = 'release_raw_log_command_mismatch'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].commandArgv = @('test','--release','--lib')
+$cases.Add(@{ name = 'release_raw_log_argv_mismatch'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].exitCode = 1
+$cases.Add(@{ name = 'release_raw_log_nonzero_exit'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].sourceChangedDuringRun = $true
+$cases.Add(@{ name = 'release_raw_log_source_changed'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedSourceValidationReceipt.logs.release[0].path].attempt = 0
+$cases.Add(@{ name = 'release_raw_log_invalid_attempt_stamp'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.cleanLog.path].commandArgv = @('clean','--release')
+$cases.Add(@{ name = 'clean_raw_log_wrong_package_command'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.cleanLog.path].runEndUtc = '2026-10-15T01:52:30.0000000Z'
+$cases.Add(@{ name = 'clean_finished_after_build_started'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.buildLog.path].compiledPackage = $false
+$cases.Add(@{ name = 'build_without_package_compile_witness'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.buildLog.path].finishedRelease = $false
+$cases.Add(@{ name = 'build_without_finished_release_witness'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.buildLog.path].sourceHeadAfter = 'A764019D25F3C2D64BFD926103FEAC8B50890142'
+$cases.Add(@{ name = 'build_raw_log_head_changed'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.rawLogFacts[$sample.observed.parsedCleanBuildReceipt.buildLog.path].runEndUtc = '2026-10-15T01:51:00.0000000Z'
+$cases.Add(@{ name = 'build_raw_log_end_before_start'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$sample.observed.rawLogFacts[$focusedPath].sourceHeadBefore = 'A764019D25F3C2D64BFD926103FEAC8B50890142'
+$sample.observed.rawLogFacts[$focusedPath].sourceHeadAfter = 'A764019D25F3C2D64BFD926103FEAC8B50890142'
+$cases.Add(@{ name = 'focused_raw_log_wrong_stable_head'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$focusedPath = $sample.observed.parsedSourceValidationReceipt.logs.focused[0].path
+$sample.observed.rawLogFacts[$focusedPath].executedTests = 0L
+$cases.Add(@{ name = 'focused_raw_log_zero_tests'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$buildPath = $sample.observed.parsedCleanBuildReceipt.buildLog.path
+$sample.observed.rawLogFacts[$buildPath].buildOutputExeSha256 = New-SyntheticHash 'wrong build output exe'
+$cases.Add(@{ name = 'build_output_exe_differs_from_preserved_exe'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$buildPath = $sample.observed.parsedCleanBuildReceipt.buildLog.path
+$sample.observed.rawLogFacts[$buildPath].Remove('buildOutputPdbSha256')
+$cases.Add(@{ name = 'build_output_pdb_stamp_absent'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$buildPath = $sample.observed.parsedCleanBuildReceipt.buildLog.path
+foreach ($field in @('buildOutputExePath', 'buildOutputPdbPath',
+        'buildOutputExeSha256', 'buildOutputPdbSha256')) {
+    $sample.observed.rawLogFacts[$buildPath].Remove($field)
+}
+$cases.Add(@{ name = 'historical_unstamped_build_output_log_rejected'; data = $sample; accepted = $false; code = 'BUILD_RECEIPT_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.config.registry.path] = New-SyntheticHash 'changed registry config bytes'
+$cases.Add(@{ name = 'registry_config_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.config.mounts.path] = New-SyntheticHash 'changed mount config bytes'
+$cases.Add(@{ name = 'mount_config_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+$sample = Copy-Fixture $base
+$sample.observed.fileSha256[$sample.manifest.config.app.path] = New-SyntheticHash 'changed guest app bytes'
+$cases.Add(@{ name = 'guest_app_file_hash_mismatch'; data = $sample; accepted = $false; code = 'HASH_MISMATCH' })
+
+if ($cases.Count -ne 171) { throw "Unexpected v2 fixture count: $($cases.Count)" }
 $baselineJson = $cases[0].data | ConvertTo-Json -Depth 24 -Compress
 foreach ($test in $cases) {
     $fixtureJson = $test.data | ConvertTo-Json -Depth 24 -Compress
@@ -1191,6 +1490,13 @@ if ($null -eq (Get-Command Test-InaviRunManifestCore -CommandType Function -Erro
     [Console]::Error.WriteLine('DEPENDENCY_RED: Test-InaviRunManifestCore is absent; no behavioral validator result is claimed')
     exit 2
 }
+if (Test-InaviCoreLogArgv @(
+        'test', '--release', '--features',
+        'unicorn,trace,win32-desktop', '--lib', '--no-run'
+    ) 'focused') {
+    throw 'A focused --no-run command was accepted as executed test evidence.'
+}
+Write-Output 'PASS direct focused --no-run option guard'
 
 $failures = [System.Collections.Generic.List[string]]::new()
 foreach ($test in $cases) {
@@ -1202,7 +1508,7 @@ foreach ($test in $cases) {
         $accepted = [bool]$result.accepted
         $codes = @($result.codes)
         if ($accepted -ne [bool]$test.accepted) {
-            $failures.Add("$($test.name): accepted=$accepted, expected=$($test.accepted)")
+            $failures.Add("$($test.name): accepted=$accepted, expected=$($test.accepted), codes=$($codes -join ',')")
         } elseif (-not $accepted -and $test.code -notin $codes) {
             $failures.Add("$($test.name): missing $($test.code), got $($codes -join ',')")
         } else {

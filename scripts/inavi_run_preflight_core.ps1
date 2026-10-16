@@ -251,6 +251,151 @@ function Test-InaviCoreHashRecord(
     }
 }
 
+function Test-InaviCoreLogArgv([object]$Argv, [string]$Profile) {
+    if ($Argv -isnot [array] -or $Argv.Count -eq 0 -or
+        @($Argv | Where-Object { $_ -isnot [string] }).Count -ne 0) {
+        return $false
+    }
+    $releaseFeatures = @('test', '--release', '--features',
+        'unicorn,trace,win32-desktop')
+    switch ($Profile) {
+        'focused' {
+            if ($Argv.Count -le 4 -or
+                -not (Test-InaviCoreEqual @($Argv[0..3]) $releaseFeatures)) {
+                return $false
+            }
+            $tail = @($Argv[4..($Argv.Count - 1)])
+            $next = 1
+            if ($tail[0] -ceq '--test') {
+                if ($tail.Count -le $next -or
+                    $tail[$next] -cnotmatch '^[A-Za-z0-9_-]+$') {
+                    return $false
+                }
+                $next++
+            } elseif ($tail[0] -cne '--lib') {
+                return $false
+            }
+            if ($next -lt $tail.Count -and $tail[$next] -cne '--') {
+                if ($tail[$next] -cnotmatch '^[A-Za-z0-9_][A-Za-z0-9_:.+-]*$') {
+                    return $false
+                }
+                $next++
+            }
+            if ($next -eq $tail.Count) { return $true }
+            # Only a display option may cross the libtest argument boundary.
+            # --no-run, --list, --ignored and --skip can exit zero without
+            # executing the focused test and are not evidence of a pass.
+            return $tail.Count -eq ($next + 2) -and
+                $tail[$next] -ceq '--' -and
+                $tail[$next + 1] -ceq '--nocapture'
+        }
+        'release' {
+            return Test-InaviCoreEqual $Argv @(
+                'test', '--release', '--features',
+                'unicorn,trace,win32-desktop', '-j', '1')
+        }
+        'noFeature' { return Test-InaviCoreEqual $Argv @('test', '-j', '1') }
+        'alternateUnicorn' {
+            return Test-InaviCoreEqual $Argv @('check', '--features', 'unicorn')
+        }
+        'alternateDesktop' {
+            return Test-InaviCoreEqual $Argv @(
+                'check', '--features', 'unicorn,win32-desktop')
+        }
+        'clean' {
+            return Test-InaviCoreEqual $Argv @(
+                'clean', '--release', '-p', 'wince_emulation_v3')
+        }
+        'build' {
+            return Test-InaviCoreEqual $Argv @(
+                'build', '--release', '--features',
+                'unicorn,trace,win32-desktop', '-j', '1')
+        }
+    }
+    return $false
+}
+
+function Test-InaviCoreStampedLog(
+    [object]$Record,
+    [string]$Profile,
+    [object]$Observed,
+    [object]$SourceFiles,
+    [object]$SourceRoot,
+    [string]$ExpectedHead,
+    [System.Collections.Generic.List[string]]$Codes
+) {
+    if (-not (Test-InaviCoreMap $Record) -or
+        -not (Test-InaviCoreField $Record 'path') -or
+        -not (Test-InaviCoreField $Record 'sha256') -or
+        -not (Test-InaviCoreEvidencePath $Record.path $SourceRoot)) {
+        Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+        return
+    }
+    Test-InaviCoreHashRecord $Record $Observed.fileSha256 $Codes
+    $facts = if ((Test-InaviCoreMap $Observed.rawLogFacts) -and
+        $Observed.rawLogFacts.Contains($Record.path)) {
+        $Observed.rawLogFacts[$Record.path]
+    } else { $null }
+    if (-not (Test-InaviCoreMap $facts)) {
+        Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+        return
+    }
+    foreach ($field in @('attempt', 'command', 'commandArgv',
+            'sourceHeadBefore', 'sourceHeadAfter', 'sourceSha256Before',
+            'sourceSha256After', 'sourceChangedDuringRun', 'exitCode',
+            'runStartUtc', 'runEndUtc', 'compiledPackage', 'finishedRelease')) {
+        if (-not (Test-InaviCoreField $facts $field)) {
+            Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+            return
+        }
+    }
+    $start = ConvertTo-InaviCoreUtc $facts.runStartUtc
+    $end = ConvertTo-InaviCoreUtc $facts.runEndUtc
+    if (-not (Test-InaviCoreInteger $facts.attempt) -or $facts.attempt -le 0 -or
+        -not (Test-InaviCoreLogArgv $facts.commandArgv $Profile) -or
+        $facts.command -isnot [string] -or
+        $facts.command -cne ('cargo ' + ($facts.commandArgv -join ' ')) -or
+        -not (Test-InaviCoreCommit $facts.sourceHeadBefore) -or
+        $facts.sourceHeadBefore -cne $ExpectedHead -or
+        $facts.sourceHeadBefore -cne $facts.sourceHeadAfter -or
+        -not (Test-InaviCoreEqual $facts.sourceSha256Before $SourceFiles) -or
+        -not (Test-InaviCoreEqual $facts.sourceSha256After $SourceFiles) -or
+        $facts.sourceChangedDuringRun -isnot [bool] -or
+        $facts.sourceChangedDuringRun -or
+        -not (Test-InaviCoreInteger $facts.exitCode) -or
+        $facts.exitCode -ne 0 -or
+        $null -eq $start -or $null -eq $end -or $end -le $start -or
+        $facts.compiledPackage -isnot [bool] -or
+        $facts.finishedRelease -isnot [bool] -or
+        ($Profile -eq 'build' -and
+            (-not $facts.compiledPackage -or -not $facts.finishedRelease))) {
+        Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+    }
+    if ($Profile -eq 'focused' -and
+        (-not (Test-InaviCoreField $facts 'executedTests') -or
+         -not (Test-InaviCoreInteger $facts.executedTests) -or
+         $facts.executedTests -lt 1)) {
+        Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+    }
+    if ($Profile -eq 'build') {
+        foreach ($field in @('buildOutputExePath', 'buildOutputPdbPath',
+                'buildOutputExeSha256', 'buildOutputPdbSha256')) {
+            if (-not (Test-InaviCoreField $facts $field)) {
+                Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+                return
+            }
+        }
+        $targetExe = Join-Path $SourceRoot 'target\release\wince_emulation_v3.exe'
+        $targetPdb = Join-Path $SourceRoot 'target\release\wince_emulation_v3.pdb'
+        if (-not (Test-InaviCoreSamePath $facts.buildOutputExePath $targetExe) -or
+            -not (Test-InaviCoreSamePath $facts.buildOutputPdbPath $targetPdb) -or
+            -not (Test-InaviCoreHash $facts.buildOutputExeSha256) -or
+            -not (Test-InaviCoreHash $facts.buildOutputPdbSha256)) {
+            Add-InaviCoreCode $Codes 'BUILD_RECEIPT_MISMATCH'
+        }
+    }
+}
+
 function Test-InaviRunManifestCore {
     [CmdletBinding()]
     param(
@@ -269,7 +414,8 @@ function Test-InaviRunManifestCore {
 
     foreach ($field in @('schemaVersion', 'runTag', 'approvalReference',
             'approvalObservedUtc',
-            'sourceSeal', 'sourceSealFile', 'buildReceipt', 'executable', 'pdb', 'config',
+            'sourceSeal', 'sourceSealFile', 'sourcePatchFile', 'buildReceipt',
+            'executable', 'pdb', 'config',
             'backupManifest', 'backups', 'caps')) {
         if (-not (Test-InaviCoreField $Manifest $field)) {
             Add-InaviCoreCode $codes 'SCHEMA_MISSING'
@@ -284,7 +430,7 @@ function Test-InaviRunManifestCore {
     $receipt = $Manifest.buildReceipt
     $config = $Manifest.config
     $caps = $Manifest.caps
-    foreach ($map in @($seal, $Manifest.sourceSealFile, $receipt,
+    foreach ($map in @($seal, $Manifest.sourceSealFile, $Manifest.sourcePatchFile, $receipt,
             $Manifest.executable, $Manifest.pdb,
             $config, $Manifest.backupManifest, $caps)) {
         if (-not (Test-InaviCoreMap $map)) {
@@ -293,23 +439,24 @@ function Test-InaviRunManifestCore {
     }
     if ($codes.Count -gt 0) { return New-InaviCoreResult $codes }
 
-    foreach ($field in @('head', 'parentHead', 'sourceRoot', 'sourceFiles',
+    foreach ($field in @('head', 'baselineHead', 'sourceRoot', 'sourceFiles',
             'patchSha256', 'kernelSha256', 'remoteSha256', 'gweSha256',
             'basicSubsystemsSha256')) {
         if (-not (Test-InaviCoreField $seal $field)) {
             Add-InaviCoreCode $codes 'SCHEMA_MISSING'
         }
     }
-    foreach ($field in @('path', 'sha256', 'sourceHead', 'sourcePatchSha256',
-            'sourceSealSha256',
-            'wB1cParentHead', 'focusedPassed', 'releasePassed',
-            'noFeaturePassed', 'alternateFeaturesPassed', 'executableSha256',
-            'pdbSha256')) {
+    foreach ($field in @('path', 'sha256', 'kind', 'rustRebuiltForThisReceipt',
+            'sourceHead', 'sourceBaselineHead', 'sourcePatchSha256',
+            'sourceSealSha256', 'sourceValidationReceipt', 'cleanBuildReceipt',
+            'focusedPassed', 'releasePassed', 'noFeaturePassed',
+            'alternateFeaturesPassed', 'executableSha256', 'pdbSha256', 'rsds')) {
         if (-not (Test-InaviCoreField $receipt $field)) {
             Add-InaviCoreCode $codes 'SCHEMA_MISSING'
         }
     }
-    foreach ($record in @($Manifest.sourceSealFile, $Manifest.executable, $Manifest.pdb,
+    foreach ($record in @($Manifest.sourceSealFile, $Manifest.sourcePatchFile,
+            $Manifest.executable, $Manifest.pdb,
             $Manifest.backupManifest)) {
         foreach ($field in @('path', 'sha256')) {
             if (-not (Test-InaviCoreField $record $field)) {
@@ -342,7 +489,7 @@ function Test-InaviRunManifestCore {
     if ($codes.Count -gt 0) { return New-InaviCoreResult $codes }
 
     if (-not (Test-InaviCoreInteger $Manifest.schemaVersion) -or
-        $Manifest.schemaVersion -ne 1 -or
+        $Manifest.schemaVersion -ne 2 -or
         $Manifest.runTag -isnot [string] -or
         $Manifest.runTag -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$' -or
         $Manifest.approvalReference -isnot [string] -or
@@ -358,9 +505,8 @@ function Test-InaviRunManifestCore {
         Add-InaviCoreCode $codes 'APPROVAL_MISSING'
     }
     if (-not (Test-InaviCoreCommit $seal.head) -or
-        -not (Test-InaviCoreCommit $seal.parentHead) -or
-        $seal.parentHead -ne '0e06e2c5c662ad224c9b472e7798f4604240a6b6' -or
-        $seal.head -eq $seal.parentHead) {
+        -not (Test-InaviCoreCommit $seal.baselineHead) -or
+        $seal.head -eq $seal.baselineHead) {
         Add-InaviCoreCode $codes 'SOURCE_SEAL_MISMATCH'
     }
     foreach ($field in @('patchSha256', 'kernelSha256', 'remoteSha256',
@@ -368,6 +514,10 @@ function Test-InaviRunManifestCore {
         if (-not (Test-InaviCoreHash $seal[$field])) {
             Add-InaviCoreCode $codes 'SOURCE_SEAL_MISMATCH'
         }
+    }
+    if (-not (Test-InaviCoreEvidencePath $Manifest.sourcePatchFile.path $seal.sourceRoot) -or
+        $Manifest.sourcePatchFile.sha256 -ne $seal.patchSha256) {
+        Add-InaviCoreCode $codes 'SOURCE_SEAL_MISMATCH'
     }
     $requiredSourceFiles = if ($null -eq $DiscoveredSourcePaths) {
         @(Get-InaviRequiredSourceFiles)
@@ -404,13 +554,18 @@ function Test-InaviRunManifestCore {
     }
     if (-not (Test-InaviCorePath $receipt.path) -or
         -not (Test-InaviCoreCommit $receipt.sourceHead) -or
-        -not (Test-InaviCoreCommit $receipt.wB1cParentHead) -or
+        -not (Test-InaviCoreCommit $receipt.sourceBaselineHead) -or
         $receipt.sourceHead -ne $seal.head -or
         $receipt.sourcePatchSha256 -ne $seal.patchSha256 -or
         $receipt.sourceSealSha256 -ne $Manifest.sourceSealFile.sha256 -or
-        $receipt.wB1cParentHead -ne $seal.parentHead -or
+        $receipt.sourceBaselineHead -ne $seal.baselineHead -or
+        $receipt.kind -cne 'fresh-local-rebuild' -or
+        $receipt.rustRebuiltForThisReceipt -isnot [bool] -or
+        -not $receipt.rustRebuiltForThisReceipt -or
         $receipt.executableSha256 -ne $Manifest.executable.sha256 -or
         $receipt.pdbSha256 -ne $Manifest.pdb.sha256 -or
+        $receipt.rsds -ne $Manifest.executable.rsds -or
+        $receipt.rsds -ne $Manifest.pdb.rsds -or
         $receipt.focusedPassed -isnot [bool] -or -not $receipt.focusedPassed -or
         $receipt.releasePassed -isnot [bool] -or -not $receipt.releasePassed -or
         $receipt.noFeaturePassed -isnot [bool] -or -not $receipt.noFeaturePassed -or
@@ -433,7 +588,8 @@ function Test-InaviRunManifestCore {
     }
     foreach ($field in @('currentSourceSeal', 'parsedSourceSeal',
             'currentSourceRoot', 'sourceFileSha256', 'currentManifestSha256',
-            'parsedBuildReceipt',
+            'parsedBuildReceipt', 'parsedSourceValidationReceipt',
+            'parsedCleanBuildReceipt', 'rawLogFacts',
             'fileSha256', 'executableRsds', 'pdbRsds',
             'writableMountRoots', 'verifiedBackupManifest',
             'existingEvidenceTags')) {
@@ -464,13 +620,15 @@ function Test-InaviRunManifestCore {
     } else {
         # `sha256` is the externally computed digest of the receipt file;
         # demanding that value inside the parsed file would be circular.
-        foreach ($field in @('path', 'sourceHead',
+        foreach ($field in @('path', 'kind', 'rustRebuiltForThisReceipt',
+                'sourceHead', 'sourceBaselineHead', 'rsds',
                 'sourceSealSha256',
-                'sourcePatchSha256', 'wB1cParentHead', 'focusedPassed',
+                'sourcePatchSha256', 'sourceValidationReceipt',
+                'cleanBuildReceipt', 'focusedPassed',
                 'releasePassed', 'noFeaturePassed', 'alternateFeaturesPassed',
                 'executableSha256', 'pdbSha256')) {
             if (-not (Test-InaviCoreField $Observed.parsedBuildReceipt $field) -or
-                $receipt[$field] -ne $Observed.parsedBuildReceipt[$field]) {
+                -not (Test-InaviCoreEqual $receipt[$field] $Observed.parsedBuildReceipt[$field])) {
                 Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
             }
         }
@@ -478,12 +636,116 @@ function Test-InaviRunManifestCore {
 
     $fileHashes = $Observed.fileSha256
     Test-InaviCoreHashRecord $Manifest.sourceSealFile $fileHashes $codes
+    Test-InaviCoreHashRecord $Manifest.sourcePatchFile $fileHashes $codes
     Test-InaviCoreHashRecord $receipt $fileHashes $codes
     Test-InaviCoreHashRecord $Manifest.executable $fileHashes $codes
     Test-InaviCoreHashRecord $Manifest.pdb $fileHashes $codes
     Test-InaviCoreHashRecord $Manifest.backupManifest $fileHashes $codes
     foreach ($name in @('registry', 'devices', 'mounts', 'app')) {
         Test-InaviCoreHashRecord $config[$name] $fileHashes $codes
+    }
+
+    $seenLogs = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $validation = $Observed.parsedSourceValidationReceipt
+    $cleanBuild = $Observed.parsedCleanBuildReceipt
+    foreach ($record in @($receipt.sourceValidationReceipt,
+            $receipt.cleanBuildReceipt)) {
+        if (-not (Test-InaviCoreMap $record) -or
+            -not (Test-InaviCoreField $record 'path') -or
+            -not (Test-InaviCoreEvidencePath $record.path $seal.sourceRoot)) {
+            Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+        } else {
+            Test-InaviCoreHashRecord $record $fileHashes $codes
+        }
+    }
+    if (-not (Test-InaviCoreMap $validation) -or
+        -not (Test-InaviCoreField $validation 'sourceSealSha256') -or
+        -not (Test-InaviCoreField $validation 'sourcePatchSha256') -or
+        $validation.sourceSealSha256 -ne $Manifest.sourceSealFile.sha256 -or
+        $validation.sourcePatchSha256 -ne $seal.patchSha256 -or
+        -not (Test-InaviCoreField $validation 'logs') -or
+        -not (Test-InaviCoreMap $validation.logs)) {
+        Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+    } else {
+        foreach ($profile in @('focused', 'release', 'noFeature',
+                'alternateFeatures')) {
+            $rows = $validation.logs[$profile]
+            if ($rows -isnot [array] -or $rows.Count -lt 1 -or
+                ($profile -eq 'alternateFeatures' -and $rows.Count -ne 2)) {
+                Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+                continue
+            }
+            for ($i = 0; $i -lt $rows.Count; $i++) {
+                $row = $rows[$i]
+                if (-not (Test-InaviCoreMap $row) -or
+                    -not (Test-InaviCoreField $row 'path') -or
+                    -not $seenLogs.Add([string]$row.path)) {
+                    Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+                    continue
+                }
+                $expected = if ($profile -eq 'alternateFeatures') {
+                    if ($i -eq 0) { 'alternateUnicorn' } else { 'alternateDesktop' }
+                } else { $profile }
+                Test-InaviCoreStampedLog $row $expected $Observed `
+                    $seal.sourceFiles $seal.sourceRoot $seal.head $codes
+            }
+        }
+    }
+    if (-not (Test-InaviCoreMap $cleanBuild) -or
+        -not (Test-InaviCoreField $cleanBuild 'sourceSealSha256') -or
+        -not (Test-InaviCoreField $cleanBuild 'sourcePatchSha256') -or
+        -not (Test-InaviCoreField $cleanBuild 'cleanLog') -or
+        -not (Test-InaviCoreField $cleanBuild 'buildLog') -or
+        -not (Test-InaviCoreField $cleanBuild 'executableSha256') -or
+        -not (Test-InaviCoreField $cleanBuild 'pdbSha256') -or
+        -not (Test-InaviCoreField $cleanBuild 'rsds') -or
+        $cleanBuild.sourceSealSha256 -ne $Manifest.sourceSealFile.sha256 -or
+        $cleanBuild.sourcePatchSha256 -ne $seal.patchSha256 -or
+        $cleanBuild.executableSha256 -ne $Manifest.executable.sha256 -or
+        $cleanBuild.pdbSha256 -ne $Manifest.pdb.sha256 -or
+        $cleanBuild.rsds -ne $receipt.rsds -or
+        -not (Test-InaviCoreMap $cleanBuild.cleanLog) -or
+        -not (Test-InaviCoreMap $cleanBuild.buildLog) -or
+        $cleanBuild.cleanLog.path -eq $cleanBuild.buildLog.path) {
+        Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+    } else {
+        if ((Test-InaviCoreMap $validation) -and
+            (Test-InaviCoreMap $validation.logs)) {
+            foreach ($row in @($cleanBuild.cleanLog, $cleanBuild.buildLog)) {
+                if ((Test-InaviCoreField $row 'path') -and
+                    -not $seenLogs.Add([string]$row.path)) {
+                    Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+                }
+            }
+        }
+        Test-InaviCoreStampedLog $cleanBuild.cleanLog 'clean' $Observed `
+            $seal.sourceFiles $seal.sourceRoot $seal.head $codes
+        Test-InaviCoreStampedLog $cleanBuild.buildLog 'build' $Observed `
+            $seal.sourceFiles $seal.sourceRoot $seal.head $codes
+        $cleanFacts = if ((Test-InaviCoreMap $Observed.rawLogFacts) -and
+            $Observed.rawLogFacts.Contains($cleanBuild.cleanLog.path)) {
+            $Observed.rawLogFacts[$cleanBuild.cleanLog.path]
+        } else { $null }
+        $buildFacts = if ((Test-InaviCoreMap $Observed.rawLogFacts) -and
+            $Observed.rawLogFacts.Contains($cleanBuild.buildLog.path)) {
+            $Observed.rawLogFacts[$cleanBuild.buildLog.path]
+        } else { $null }
+        if (-not (Test-InaviCoreMap $cleanFacts) -or
+            -not (Test-InaviCoreMap $buildFacts) -or
+            $null -eq (ConvertTo-InaviCoreUtc $cleanFacts.runEndUtc) -or
+            $null -eq (ConvertTo-InaviCoreUtc $buildFacts.runStartUtc) -or
+            (ConvertTo-InaviCoreUtc $cleanFacts.runEndUtc) -ge
+                (ConvertTo-InaviCoreUtc $buildFacts.runStartUtc)) {
+            Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+        }
+        if (-not (Test-InaviCoreMap $buildFacts) -or
+            -not (Test-InaviCoreField $buildFacts 'buildOutputExeSha256') -or
+            -not (Test-InaviCoreField $buildFacts 'buildOutputPdbSha256') -or
+            $buildFacts.buildOutputExeSha256 -ne $Manifest.executable.sha256 -or
+            $buildFacts.buildOutputPdbSha256 -ne $Manifest.pdb.sha256) {
+            Add-InaviCoreCode $codes 'BUILD_RECEIPT_MISMATCH'
+        }
     }
 
     $rsdsPattern = '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}:[1-9][0-9]*$'
@@ -632,7 +894,8 @@ function Test-InaviRunManifestCore {
 
     $provenancePaths = @($Manifest.runTag, $Manifest.executable.path,
         $Manifest.pdb.path, $Manifest.sourceSealFile.path,
-        $Manifest.buildReceipt.path, $Manifest.backupManifest.path,
+        $Manifest.sourcePatchFile.path, $Manifest.buildReceipt.path,
+        $Manifest.backupManifest.path,
         $config.registry.path, $config.devices.path, $config.mounts.path,
         $config.app.path)
     if ($Manifest.backups -is [array]) {

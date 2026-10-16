@@ -20,6 +20,7 @@ $definitions = @($ast.FindAll({ param($node)
 }, $true))
 foreach ($name in @('Assert-InaviWorkerClaim', 'New-InaviUseEvent',
         'Get-InaviPdbRsds', 'Get-Sha256', 'Get-ByteSha256',
+        'Get-InaviStampedLogFacts',
         'Add-JsonLine', 'Invoke-GetCapture', 'Read-InaviJson',
         'Assert-InaviCurrentMountInventory',
         'Get-InaviLedgerEvidenceHashes', 'Get-InaviReconciliationProofHashes',
@@ -373,6 +374,15 @@ Assert-Guard ($reservedAt -ge 0 -and $abortRecheckAt -gt $reservedAt -and
     $abortRecheckAt -lt $spawnAt) 'monitor rechecks abort after reservation before spawn'
 $watchdogDefinition = @($definitions | Where-Object Name -eq 'Invoke-Watchdog')
 $watchdogActionDefinition = @($definitions | Where-Object Name -eq 'Get-InaviWatchdogAction')
+$watchdogText = $watchdogDefinition[0].Extent.Text
+$manifestReadAt = $watchdogText.IndexOf('$manifest = Read-InaviJson $ManifestPath', [StringComparison]::Ordinal)
+$sealedPathAt = $watchdogText.IndexOf('Assert-InaviEvidenceFilePath $manifest.executable.path', [StringComparison]::Ordinal)
+$sealedHashAt = $watchdogText.IndexOf('Test-ExpectedHash ([string]$manifest.executable.path)', [StringComparison]::Ordinal)
+$watchdogReadyAt = $watchdogText.IndexOf('Write-AtomicJsonFile $readyPath', [StringComparison]::Ordinal)
+Assert-Guard ($manifestReadAt -ge 0 -and $sealedPathAt -gt $manifestReadAt -and
+    $sealedHashAt -gt $sealedPathAt -and $watchdogReadyAt -gt $sealedHashAt -and
+    -not $watchdogText.Contains('telemetry-a03-wince_emulation_v3.exe')) `
+    'watchdog verifies the current sealed executable before publishing readiness'
 Assert-Guard ($watchdogDefinition.Count -eq 1 -and
     $watchdogActionDefinition.Count -eq 1 -and
     $watchdogDefinition[0].Extent.Text.Contains('prelaunch-mount-content-scan.json') -and
@@ -400,6 +410,23 @@ Assert-Guard ($source.Contains('([string]$_.CommandLine).Contains($mountConfig)'
     'concurrent-emulator mount path matching treats wildcard brackets literally'
 Assert-Guard ($source.Contains('$rawLogBytes += (Get-Item -LiteralPath $streamPath).Length') -and
     $source.Contains('if ($rawLogBytes -gt 512MB)')) 'monitor caps combined raw-log bytes'
+$stampSource = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run_stamped_cargo_validation.ps1'))
+$stampTokens = $null; $stampErrors = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput(
+    $stampSource, [ref]$stampTokens, [ref]$stampErrors)
+Assert-Guard ($stampErrors.Count -eq 0 -and
+    $stampSource.Contains('[switch]$CaptureReleaseArtifacts') -and
+    $stampSource.Contains("Join-Path `$repoRoot 'target\release\wince_emulation_v3.exe'") -and
+    $stampSource.Contains("Join-Path `$repoRoot 'target\release\wince_emulation_v3.pdb'") -and
+    $stampSource.Contains('Release output existed before this build attempt')) `
+    'stamped wrapper refuses preexisting exact release outputs'
+$commandAt = $stampSource.IndexOf('& $executablePath @CargoArguments', [StringComparison]::Ordinal)
+$outputHashAt = $stampSource.IndexOf('Get-FileHash -LiteralPath $releaseArtifacts.exe', $commandAt, [StringComparison]::Ordinal)
+$outputStampAt = $stampSource.IndexOf('BUILD_OUTPUT_EXE_SHA256=', $outputHashAt, [StringComparison]::Ordinal)
+Assert-Guard ($commandAt -ge 0 -and $outputHashAt -gt $commandAt -and
+    $outputStampAt -gt $outputHashAt -and
+    $stampSource.Contains('BUILD_OUTPUT_PDB_SHA256=')) `
+    'stamped wrapper records post-build EXE and PDB hashes'
 $coreSource = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'inavi_run_preflight_core.ps1'))
 $coreTokens = $null; $coreErrors = $null
 $coreAst = [System.Management.Automation.Language.Parser]::ParseInput(
@@ -423,7 +450,8 @@ $fixtureSourcePaths = @(
     'scripts/inavi_bounded_e22.ps1',
     'scripts/inavi_run_preflight_core.ps1',
     'scripts/backup_rw_mounts.ps1',
-    'scripts/test_inavi_runner_guard.ps1'
+    'scripts/test_inavi_runner_guard.ps1',
+    'scripts/run_stamped_cargo_validation.ps1'
 )
 $requiredFiles = @(Get-InaviRequiredSourceFiles -DiscoveredPaths $fixtureSourcePaths)
 $ordinalSortedFiles = [string[]]$requiredFiles.Clone()
@@ -437,6 +465,7 @@ Assert-Guard ($source.Contains('foreach ($relative in (Get-InaviRequiredSourceFi
     'src/emulator/stub.rs' -in $requiredFiles -and
     'src/error.rs' -in $requiredFiles -and
     'vendor/unicorn-engine-sys/build.rs' -in $requiredFiles -and
+    'scripts/run_stamped_cargo_validation.ps1' -in $requiredFiles -and
     [string]::Join("`n", $requiredFiles) -ceq [string]::Join("`n", $ordinalSortedFiles)) `
     'worker and validator share an ordered tracked-plus-untracked source inventory'
 Assert-Reject {
@@ -447,6 +476,49 @@ Assert-Reject {
 } 'source inventory rejects path traversal'
 
 $repository = 'D:\GitHub\Wince_emulation_v3'
+$trailerFixture = Join-Path $repository ('evidence\stamped-trailer-offline-' +
+    [Guid]::NewGuid().ToString('N') + '.raw.log')
+$trailerLines = [string[]]@(
+    'ATTEMPT=1',
+    'COMMAND=cargo build --release',
+    'COMMAND_ARGV_JSON=["build","--release"]',
+    'SOURCE_HEAD_BEFORE=9C302DB35583669FAB435449A5F4515B712583D6',
+    ('SOURCE_SHA256_BEFORE=src/main.rs ' + ('A' * 64)),
+    'RUN_START_UTC=2026-10-17T01:00:00Z',
+    'RUN_END_UTC=2026-10-17T01:01:00Z',
+    'EXIT_CODE=0',
+    'BUILD_OUTPUT_EXE_PATH=D:\GitHub\Wince_emulation_v3\target\release\wince_emulation_v3.exe',
+    'BUILD_OUTPUT_PDB_PATH=D:\GitHub\Wince_emulation_v3\target\release\wince_emulation_v3.pdb',
+    ('BUILD_OUTPUT_EXE_SHA256=' + ('B' * 64)),
+    ('BUILD_OUTPUT_PDB_SHA256=' + ('C' * 64)),
+    'SOURCE_HEAD_AFTER=9C302DB35583669FAB435449A5F4515B712583D6',
+    ('SOURCE_SHA256_AFTER=src/main.rs ' + ('A' * 64)),
+    'SOURCE_CHANGED_DURING_RUN=False'
+)
+try {
+    Assert-Guard ($trailerLines.Count -eq 15) 'synthetic wrapper trailer shape is exact'
+    [System.IO.File]::WriteAllLines($trailerFixture, $trailerLines,
+        [System.Text.UTF8Encoding]::new($false))
+    $validTrailerHash = (Get-FileHash -LiteralPath $trailerFixture -Algorithm SHA256).Hash
+    $validTrailer = Get-InaviStampedLogFacts $trailerFixture $validTrailerHash
+    Assert-Guard ($validTrailer.buildOutputExeSha256 -eq ('B' * 64) -and
+        $validTrailer.buildOutputPdbSha256 -eq ('C' * 64)) `
+        'parser accepts wrapper-owned post-exit build output stamps'
+
+    $forgedTrailer = [string[]]$trailerLines.Clone()
+    $forgedTrailer[6] = $trailerLines[8]
+    $forgedTrailer[8] = $trailerLines[6]
+    [System.IO.File]::WriteAllLines($trailerFixture, $forgedTrailer,
+        [System.Text.UTF8Encoding]::new($false))
+    $forgedTrailerHash = (Get-FileHash -LiteralPath $trailerFixture -Algorithm SHA256).Hash
+    Assert-Reject {
+        Get-InaviStampedLogFacts $trailerFixture $forgedTrailerHash
+    } 'parser rejects build output echoed before wrapper exit stamp'
+} finally {
+    if (Test-Path -LiteralPath $trailerFixture) {
+        Remove-Item -LiteralPath $trailerFixture -Force
+    }
+}
 $emptyProofs = Get-InaviReconciliationProofHashes @(@{ state = 'reserved' }) $repository
 Assert-Guard ($emptyProofs.Count -eq 0) 'unreconciled events require no proof-file read'
 $emptyHistorical = Get-InaviHistoricalRunEvidenceHashes @(@{ state = 'legacy-deny' }) $repository

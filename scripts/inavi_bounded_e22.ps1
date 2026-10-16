@@ -83,6 +83,167 @@ function Test-ExpectedHash([string]$Path, [string]$Expected) {
     }
 }
 
+function Assert-InaviEvidenceFilePath([object]$Path, [string]$Repository) {
+    if (-not (Test-InaviCoreEvidencePath $Path $Repository)) {
+        throw "Run evidence path is outside this checkout: $Path"
+    }
+    $evidenceRoot = [System.IO.Path]::GetFullPath(
+        (Join-Path $Repository 'evidence')).TrimEnd('\')
+    $resolved = [System.IO.Path]::GetFullPath([string]$Path)
+    $cursor = Get-Item -LiteralPath $resolved -Force -ErrorAction Stop
+    if ($cursor -isnot [System.IO.FileInfo]) {
+        throw "Run evidence path is not a file: $Path"
+    }
+    $sawRoot = $false
+    while ($null -ne $cursor) {
+        if ($cursor.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            throw "Run evidence path contains a reparse point: $Path"
+        }
+        if ($cursor.FullName.Equals($evidenceRoot,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            $sawRoot = $true
+            break
+        }
+        $cursor = if ($cursor -is [System.IO.FileInfo]) {
+            $cursor.Directory
+        } else { $cursor.Parent }
+    }
+    if (-not $sawRoot) {
+        throw "Run evidence path does not resolve through this checkout: $Path"
+    }
+    return $resolved
+}
+
+function Assert-InaviGitSourceLineage([object]$Seal, [string]$Repository) {
+    if (-not (Test-InaviCoreMap $Seal) -or
+        -not (Test-InaviCoreCommit $Seal.head) -or
+        -not (Test-InaviCoreCommit $Seal.baselineHead) -or
+        $Seal.head -eq $Seal.baselineHead) {
+        throw 'Run source seal lacks a distinct valid baseline and HEAD.'
+    }
+    foreach ($commit in @([string]$Seal.baselineHead, [string]$Seal.head)) {
+        $kind = & git -C $Repository cat-file -t $commit 2>$null
+        if ($LASTEXITCODE -ne 0 -or $kind -cne 'commit') {
+            throw "Run source seal references a missing Git commit: $commit"
+        }
+    }
+    & git -C $Repository merge-base --is-ancestor `
+        ([string]$Seal.baselineHead) ([string]$Seal.head) 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Run source baseline is not an ancestor of the sealed HEAD.'
+    }
+    $currentHead = & git -C $Repository rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -ne 0 -or
+        [string]$currentHead -cne [string]$Seal.head) {
+        throw 'Current checkout HEAD differs from the run source seal.'
+    }
+}
+
+function Get-InaviStampedLogFacts([string]$Path, [string]$ExpectedHash) {
+    $file = [System.IO.FileInfo]::new($Path)
+    if ($file.Length -gt 64MB) {
+        throw "Stamped validation log exceeds 64 MiB: $Path"
+    }
+    $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ((Get-ByteSha256 $bytes) -ne $ExpectedHash) {
+        throw "Stamped validation log hash mismatch: $Path"
+    }
+    $raw = $strictUtf8.GetString($bytes)
+    if ($raw.Contains([char]0)) { throw "Stamped log contains NUL: $Path" }
+    $stamps = @{}
+    $stampPositions = @{}
+    $before = @{}
+    $after = @{}
+    $lineNumber = 0
+    foreach ($line in ($raw -split '\r?\n')) {
+        $lineNumber++
+        if ($line -cmatch '^SOURCE_SHA256_(BEFORE|AFTER)=([A-Za-z0-9._/-]+) ([0-9A-Fa-f]{64})$') {
+            $target = if ($Matches[1] -ceq 'BEFORE') { $before } else { $after }
+            if ($target.ContainsKey($Matches[2])) {
+                throw "Duplicate source hash stamp in log: $Path"
+            }
+            $target[$Matches[2]] = $Matches[3].ToUpperInvariant()
+            continue
+        }
+        if ($line -cmatch '^(ATTEMPT|COMMAND|COMMAND_ARGV_JSON|SOURCE_HEAD_BEFORE|SOURCE_HEAD_AFTER|SOURCE_CHANGED_DURING_RUN|EXIT_CODE|RUN_START_UTC|RUN_END_UTC|BUILD_OUTPUT_EXE_PATH|BUILD_OUTPUT_PDB_PATH|BUILD_OUTPUT_EXE_SHA256|BUILD_OUTPUT_PDB_SHA256)=(.*)$') {
+            if ($stamps.ContainsKey($Matches[1])) {
+                throw "Duplicate required stamp in log: $Path"
+            }
+            $stamps[$Matches[1]] = $Matches[2]
+            $stampPositions[$Matches[1]] = $lineNumber
+        }
+        if ($line -cmatch '^RUNNER_ERROR=') {
+            throw "Stamped log contains runner error: $Path"
+        }
+    }
+    foreach ($key in @('ATTEMPT', 'COMMAND', 'COMMAND_ARGV_JSON',
+            'SOURCE_HEAD_BEFORE', 'SOURCE_HEAD_AFTER',
+            'SOURCE_CHANGED_DURING_RUN', 'EXIT_CODE', 'RUN_START_UTC',
+            'RUN_END_UTC')) {
+        if (-not $stamps.ContainsKey($key)) {
+            throw "Stamped log lacks $key`: $Path"
+        }
+    }
+    $outputKeys = @('BUILD_OUTPUT_EXE_PATH', 'BUILD_OUTPUT_PDB_PATH',
+        'BUILD_OUTPUT_EXE_SHA256', 'BUILD_OUTPUT_PDB_SHA256')
+    $presentOutputKeys = @($outputKeys | Where-Object { $stamps.ContainsKey($_) })
+    if ($presentOutputKeys.Count -ne 0 -and
+        $presentOutputKeys.Count -ne $outputKeys.Count) {
+        throw "Stamped build output trailer is incomplete: $Path"
+    }
+    if ($stampPositions['RUN_END_UTC'] + 1 -ne $stampPositions['EXIT_CODE']) {
+        throw "Stamped log lacks the wrapper's exit trailer: $Path"
+    }
+    $expectedHeadLine = $stampPositions['EXIT_CODE'] + 1
+    if ($presentOutputKeys.Count -ne 0) {
+        foreach ($key in $outputKeys) {
+            if ($stampPositions[$key] -ne $expectedHeadLine) {
+                throw "Stamped build output $key is at line $($stampPositions[$key]), expected $expectedHeadLine`: $Path"
+            }
+            $expectedHeadLine++
+        }
+    }
+    if ($stampPositions['SOURCE_HEAD_AFTER'] -ne $expectedHeadLine) {
+        throw "Stamped log source HEAD is not in the wrapper trailer: $Path"
+    }
+    if ($stamps.ATTEMPT -cnotmatch '^[1-9][0-9]*$' -or
+        $stamps.EXIT_CODE -cnotmatch '^[0-9]+$' -or
+        $stamps.SOURCE_CHANGED_DURING_RUN -cnotin @('False', 'True')) {
+        throw "Stamped log has malformed numeric/boolean fields: $Path"
+    }
+    $argv = ConvertFrom-Json -InputObject $stamps.COMMAND_ARGV_JSON `
+        -NoEnumerate -ErrorAction Stop
+    if ($argv -isnot [array]) { throw "Stamped argv is not an array: $Path" }
+    $executedTests = 0L
+    foreach ($result in [regex]::Matches($raw,
+            '(?m)^test result: ok\. ([0-9]+) passed; [0-9]+ failed;')) {
+        $count = [long]::Parse($result.Groups[1].Value,
+            [System.Globalization.CultureInfo]::InvariantCulture)
+        $executedTests = [Math]::Add($executedTests, $count)
+    }
+    return @{
+        attempt = [long]$stamps.ATTEMPT
+        command = [string]$stamps.COMMAND
+        commandArgv = @($argv)
+        sourceHeadBefore = [string]$stamps.SOURCE_HEAD_BEFORE
+        sourceHeadAfter = [string]$stamps.SOURCE_HEAD_AFTER
+        sourceSha256Before = $before
+        sourceSha256After = $after
+        sourceChangedDuringRun = [bool]::Parse($stamps.SOURCE_CHANGED_DURING_RUN)
+        exitCode = [long]$stamps.EXIT_CODE
+        runStartUtc = [string]$stamps.RUN_START_UTC
+        runEndUtc = [string]$stamps.RUN_END_UTC
+        executedTests = $executedTests
+        buildOutputExePath = $stamps['BUILD_OUTPUT_EXE_PATH']
+        buildOutputPdbPath = $stamps['BUILD_OUTPUT_PDB_PATH']
+        buildOutputExeSha256 = $stamps['BUILD_OUTPUT_EXE_SHA256']
+        buildOutputPdbSha256 = $stamps['BUILD_OUTPUT_PDB_SHA256']
+        compiledPackage = ($raw -cmatch '(?m)^\s*Compiling wince_emulation_v3(?:\s|$)')
+        finishedRelease = ($raw -cmatch '(?m)^\s*Finished `release` profile(?:\s|$)')
+    }
+}
+
 function Assert-NoReparseMounts([object[]]$Backups) {
     # The guest path mapper joins names lexically. A junction in any writable
     # root could move guest writes outside the three archived trees.
@@ -384,16 +545,56 @@ function Get-InaviRunObservation(
     $sealPath = [string]$Manifest.sourceSealFile.path
     $receiptPath = [string]$Manifest.buildReceipt.path
     $backupPath = [string]$Manifest.backupManifest.path
+    foreach ($record in @($Manifest.sourceSealFile,
+            $Manifest.sourcePatchFile, $Manifest.buildReceipt,
+            $Manifest.executable, $Manifest.pdb, $Manifest.backupManifest)) {
+        [void](Assert-InaviEvidenceFilePath $record.path $Repository)
+    }
     $seal = Read-InaviJson $sealPath
+    Assert-InaviGitSourceLineage $seal $Repository
     $receipt = Read-InaviJson $receiptPath
     $backupManifest = Read-InaviJson $backupPath
+    foreach ($record in @($receipt.sourceValidationReceipt,
+            $receipt.cleanBuildReceipt)) {
+        [void](Assert-InaviEvidenceFilePath $record.path $Repository)
+    }
+    $sourceValidation = Read-InaviJson ([string]$receipt.sourceValidationReceipt.path)
+    $cleanBuild = Read-InaviJson ([string]$receipt.cleanBuildReceipt.path)
+    $logRecords = [System.Collections.Generic.List[object]]::new()
+    foreach ($profile in @('focused', 'release', 'noFeature',
+            'alternateFeatures')) {
+        if ($sourceValidation.logs -isnot [hashtable] -or
+            $sourceValidation.logs[$profile] -isnot [array]) {
+            throw "Source validation receipt lacks $profile log records."
+        }
+        foreach ($record in $sourceValidation.logs[$profile]) {
+            $logRecords.Add($record)
+        }
+    }
+    foreach ($record in @($cleanBuild.cleanLog, $cleanBuild.buildLog)) {
+        $logRecords.Add($record)
+    }
+    $rawLogFacts = @{}
+    foreach ($record in $logRecords) {
+        if ($record -isnot [hashtable] -or
+            -not (Test-InaviCoreHash $record.sha256)) {
+            throw 'A source/build validation log record lacks a valid SHA-256.'
+        }
+        $logPath = Assert-InaviEvidenceFilePath $record.path $Repository
+        if ($rawLogFacts.ContainsKey($logPath)) {
+            throw "A source/build validation log path is duplicated: $logPath"
+        }
+        $rawLogFacts[$logPath] = Get-InaviStampedLogFacts $logPath $record.sha256
+    }
     Assert-InaviBackupComplete $Manifest $backupManifest
     $sourceFiles = @{}
     foreach ($relative in (Get-InaviRequiredSourceFiles)) {
         $sourceFiles[$relative] = Get-Sha256 (Join-Path $Repository $relative)
     }
     $fileHashes = @{}
-    foreach ($record in @($Manifest.sourceSealFile, $Manifest.buildReceipt,
+    foreach ($record in @($Manifest.sourceSealFile, $Manifest.sourcePatchFile,
+            $Manifest.buildReceipt, $receipt.sourceValidationReceipt,
+            $receipt.cleanBuildReceipt,
             $Manifest.executable, $Manifest.pdb, $Manifest.backupManifest,
             $Manifest.config.registry, $Manifest.config.devices,
             $Manifest.config.mounts, $Manifest.config.app)) {
@@ -401,6 +602,9 @@ function Get-InaviRunObservation(
     }
     foreach ($row in $Manifest.backups) {
         $fileHashes[[string]$row.archivePath] = Get-Sha256 ([string]$row.archivePath)
+    }
+    foreach ($record in $logRecords) {
+        $fileHashes[[string]$record.path] = Get-Sha256 ([string]$record.path)
     }
     $roots = @(Get-InaviWritableMountRoots ([string]$Manifest.config.mounts.path))
     $verified = $backupManifest.Clone()
@@ -410,7 +614,11 @@ function Get-InaviRunObservation(
             currentSourceSeal = $seal; parsedSourceSeal = $seal
             currentSourceRoot = $Repository; sourceFileSha256 = $sourceFiles
             currentManifestSha256 = Get-Sha256 $ManifestPath
-            parsedBuildReceipt = $receipt; fileSha256 = $fileHashes
+            parsedBuildReceipt = $receipt
+            parsedSourceValidationReceipt = $sourceValidation
+            parsedCleanBuildReceipt = $cleanBuild
+            rawLogFacts = $rawLogFacts
+            fileSha256 = $fileHashes
             executableRsds = Get-InaviExecutableRsds ([string]$Manifest.executable.path)
             pdbRsds = Get-InaviPdbRsds ([string]$Manifest.pdb.path)
             writableMountRoots = $roots; verifiedBackupManifest = $verified
@@ -600,7 +808,8 @@ function Assert-InaviManifestPreflight(
     }
     $evidencePrefix = [System.IO.Path]::GetFullPath(
         (Join-Path $Repository 'evidence')) + '\'
-    foreach ($record in @($manifest.sourceSealFile, $manifest.buildReceipt,
+    foreach ($record in @($manifest.sourceSealFile, $manifest.sourcePatchFile,
+            $manifest.buildReceipt,
             $manifest.executable, $manifest.pdb, $manifest.backupManifest)) {
         if (-not [System.IO.Path]::GetFullPath([string]$record.path).StartsWith(
                 $evidencePrefix, [StringComparison]::OrdinalIgnoreCase)) {
@@ -1574,12 +1783,16 @@ function Invoke-Watchdog([string]$Directory) {
         $ApprovalReference $LaunchNonce
     $manifest = Read-InaviJson $ManifestPath
     if ([string]$manifest.runTag -cne [string]$claim.runTag -or
-        [string]$manifest.executable.path -cne
-            'D:\GitHub\Wince_emulation_v3\evidence\stage3-live-evidence-20261015\telemetry-a03-wince_emulation_v3.exe' -or
+        -not (Test-InaviCoreMap $manifest.executable) -or
+        -not (Test-InaviCoreHash $manifest.executable.sha256) -or
         [int]$manifest.caps.rssMiB -ne 2048 -or
         [int]$manifest.caps.rawLogMiB -ne 512) {
         throw 'Independent watchdog has a mismatched run tag, executable or resource cap.'
     }
+    [void](Assert-InaviEvidenceFilePath $manifest.executable.path `
+        'D:\GitHub\Wince_emulation_v3')
+    Test-ExpectedHash ([string]$manifest.executable.path) `
+        ([string]$manifest.executable.sha256)
     $self = Get-Process -Id $PID -ErrorAction Stop
     $selfStartUtcTicks = $self.StartTime.ToUniversalTime().Ticks
     $readyPath = Join-Path $Directory 'watchdog-worker-ready.json'
