@@ -4,6 +4,21 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 bounded scheduler-block self-reentry fence
+
+The [source/test receipt](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256 `f93d755705095d464bb7e91c9f67cddc75a3b54281a20166ae61941730221277`.
+Its real-MIPS preseeded-busy scheduler service returned typed Backend with a
+nonzero stop PC, unchanged selected PID and full virtual framebuffer, and a
+closed native owner; the unbusy control passed. The same-source complete
+release-feature and no-default suites passed **2,176/0/10 ignored** and
+**1,539/0/2 ignored** over 19 blocks each, with three feature checks exit 0.
+An initial sandboxed release attempt failed 45 socket/remote tests with
+Windows `10013`; the identical source and command passed when loopback was
+allowed. This is a scheduler-block-family diagnostic only: natural reentry,
+other raw hook aliases, the whole-attempt port, and O-T7 CPU custody remain
+unproved. No live app or writable mount was run.
+
 ## 2026-10-17 bounded exact-primary stopped-exit gate
 
 The [v4 source/test receipt](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)

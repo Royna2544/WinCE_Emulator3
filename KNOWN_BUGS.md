@@ -243,6 +243,13 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       route-specific controls were retired.
       The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
       must cover it alongside the tested borrow conflict.
+    - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+      refuses a preseeded busy block service but does not exclude raw
+      code/import/memory-hook aliases or prove natural nested callbacks.
+      Source order permits modal framebuffer restoration to consume a wait and
+      publish pixels before a hypothetical nested fault is observed.
+      Whole-attempt access, partial-effects recovery, and the admitted-child
+      native-fault CPU drop remain open.
     - The historical [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
       is fixed for the bounded Kernel query path by the
       [canonical birth gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).

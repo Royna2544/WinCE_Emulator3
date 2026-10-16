@@ -214,6 +214,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [current-source pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
      enumerates the remaining raw-loan sites and the native-fault CPU-drop
      path; it is source inventory, not a port implementation.
+      The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+      routes that callback's 19 Kernel and two framebuffer dereferences
+      through one guarded raw adapter and rejects a preseeded busy service
+      point. Its fresh per-attempt flag is shared by no other hook family;
+      next move an actual import/block cross-family entry behind one machine-
+      state busy flag and test real reentry. Preserve the whole-attempt
+      setup/tail, selected-birth, modal partial-effects, A-to-B handoff and
+      native-fault CPU-custody gates; do not count this as the port.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import

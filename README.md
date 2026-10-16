@@ -132,6 +132,11 @@ remote-control HTTP/WebSocket surface.
   **1,539/0/2 ignored** across 19 blocks each. The earlier 16-failure broad
   attempt is retained as failed evidence; these tests do not resolve general
   CPU custody, Stage 3, or live-app acceptance.
+- The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+   passes a real-MIPS preseeded-busy control and sealed 19-block release and
+   no-default suites (**2,176/0/10** and **1,539/0/2 ignored**). It refuses a
+   preseeded-busy scheduler service with a typed error; natural self-reentry,
+   other hook aliases, cross-hook reentry and machine-owned CPU custody remain open.
 - A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate
