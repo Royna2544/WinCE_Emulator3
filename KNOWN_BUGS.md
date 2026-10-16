@@ -1,6 +1,6 @@
 # Known Bugs And Risks
 
-Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
+Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entries are removed (history: docs/evidence/ledger.md and git).
 
 ## Open Issues
 
@@ -89,7 +89,9 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   execution custody or a pending launch or canonical Kernel Task record is
   retained, even if that record has stopped. The bounded
   [canonical-map lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
-  prevents duplicate births but does not relineage the whole machine. A
+  prevents duplicate births and its seven formerly ignored controls now pass
+  as ordinary tests in [both full suites](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md),
+  but it does not relineage the whole machine. A
   D-011 stopped-exit hold therefore has no safe in-session rewind today;
   recovery requires quit, repair and restart. This is a safety limitation,
   not a successful live-checkpoint implementation.
@@ -186,9 +188,11 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
       without a host panic, but it drops the local A+B CPU owners. This is
       ownership loss on a borrow-invariant violation, not recoverable parking;
       Stage 4 needs a machine-owned child owner. The separate `Completed`
-      path still uses unconditional `borrow_mut`. A custom framebuffer
-      reentering that queue while its mutable borrow is held is unsupported;
-      current framebuffer implementations do not do so. The first-slice
+      path still uses unconditional `borrow_mut`. The
+      [current-source offline control](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+      reproduces a `RefCell` panic and survivor-owner loss when a custom
+      framebuffer reenters that borrowed queue; current framebuffer
+      implementations have not been shown to do so. The first-slice
       candidate also lacks a separate exact live primary-thread-birth gate.
       A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
       executes an admitted synthetic MIPS child through its first native

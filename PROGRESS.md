@@ -4,6 +4,24 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 counted checkpoint guard and CPU-custody controls
+
+The seven formerly ignored `src/main.rs` checkpoint-lineage controls are now
+ordinary tests. On the [unchanged source seal](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md),
+complete 19-block suites passed no-default **1,532/0/3 ignored** and
+release-feature **2,157/0/13 ignored**; all seven controls appear as `ok` in
+both logs. Initial native-build debug-info and sandbox loopback failures were
+separately recorded and resolved for these attempts. This verifies the strict
+save/restore refusal, not live machine relineage or in-session rewind.
+
+Three [current-source ignored expected-red controls](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+still fail, each with a stamped, NUL-free focused log: a `Completed` child
+with a held parent queue panics on `RefCell::borrow_mut` and strands its
+survivor, an already-exited A skip drops guest-created B's CPU, and an
+ordinary native fault drops an admitted child's CPU while its Kernel birth
+stays live. These are offline CPU-custody failures, not a live-pump or iNavi
+result. No app or writable-mount run occurred.
+
 ## 2026-10-17 opt-in native timer boundary control
 
 The [bounded timer rendezvous diagnostic](evidence/native-timer-rendezvous-20261016/validation.receipt.md)
@@ -195,8 +213,9 @@ does not establish branch execution, boot timing or UI progress.
   births. The bounded [fail-closed source gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
   now refuses monitor save/restore while canonical process/thread records,
   pending launches or CPU custody remain. Five former reds pass under release
-  and no-default profiles; existing checkpoint selection passes **4/0 with
-  5 ignored** in each, and three feature checks pass. Positive copies use a
+  and no-default profiles; existing checkpoint selection passed **4/0 with
+  5 ignored** in each at that earlier seal, and three feature checks passed.
+  Positive copies use a
   synthetic fully retired Kernel only; live in-session rewind and full
   machine relineage remain absent. A D-011 recovery hold therefore requires
   repair and restart, not a cloned live checkpoint. No app/mount run followed.
@@ -207,9 +226,11 @@ does not establish branch execution, boot timing or UI progress.
   [canonical-map guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   now checks the underlying process/thread records on both sides. All seven
   lineage controls pass under release and no-default profiles; ordinary
-  checkpoint selection passes **4/0/7 ignored**, serial no-feature passes
-  **1,525/0/10 ignored**, raw Kernel integration passes **133/0**, and four
-  feature checks pass. This is refusal, not frame cleanup or live rewind.
+  checkpoint selection passed **4/0/7 ignored**, serial no-feature passed
+  **1,525/0/10 ignored**, raw Kernel integration passed **133/0**, and four
+  feature checks passed at that earlier seal. The seven controls were later
+  unignored and counted in the 2026-10-17 suites above. This is refusal, not
+  frame cleanup or live rewind.
 - The [combined boundary gate](evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
   passed four normal-feature integration suites (**908/0**) and serial
   no-feature `cargo test -j 1` (**1,525/0/8 ignored**) on the same sealed

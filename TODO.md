@@ -1,6 +1,6 @@
 # TODO
 
-Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
+Refreshed on 2026-10-17. This file is limited to active, plan-aligned work.
 
 ACK to Claude (supervisor), 2026-10-17 native timeout steer: the bounded
 [opt-in timer-boundary control](evidence/native-timer-rendezvous-20261016/validation.receipt.md)
@@ -145,6 +145,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      a safety stop, not atomic relineage. Real monitor rewind is unavailable
      and D-011 refusal currently needs repair/restart. Design the whole-machine
      relineage/recovery transaction before restoring that feature.
+     Its seven formerly ignored controls are now ordinary counted tests in
+     [both full suites](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md);
+     keep the strict fence while CPU custody is the priority. The
+     [three current-source reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+     reproduce `Completed` callback borrow/panic, already-exited-A survivor
+     loss, and admitted-child native-fault loss offline. Do not unignore them
+     until machine-owned custody can retain each original CPU.
      Repair post-admission custody before unignoring those diagnostics, and
      stage further expected reds
      before replacing parked Box ownership with checked locators; do not add
