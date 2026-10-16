@@ -87,6 +87,32 @@ same rotation policy. E-29 was a pre-fix, splash-only bounded app run.
 - Every publication carries `SnapshotEpoch` and its actual owner/frame. Native start,
   native end, post-repair context and later selected process are distinct boundaries.
 
+### Candidate callback loan at native entry (not implemented)
+
+The [runtime-control port](runtime-control.md#candidate-callback-scoped-machine-state-port-not-implemented)
+and [Task/custody design](tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists)
+refine the anchor's one-leaf execution rule. A backend native-engine lease
+owns hooks and native mappings; it is not permission to execute a Task or
+borrow Kernel/framebuffer state. Backend entry requires the machine's exact
+active-leaf permit and checked task/frame/address-space owner. Hook callbacks
+receive only a fallible, short machine-state operation qualified by that
+permit. No mutable Kernel, custody-directory or framebuffer loan may span the
+enclosing `emu_start` call, a nested child run or a reentrant host callback;
+a callback's own short loan ends before native execution resumes.
+
+The present `run_with_unicorn_attempt` instead holds `&mut CeKernel` and a
+framebuffer reference across native entry and passes raw pointers into several
+hook families. The [test-only live-pump fixed-stack witness](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+executes an unmapped-page first touch in global-hook and default hookless
+modes; it does not prove safe reentry, a callback counter, or CPU custody.
+Porting only that fault hook would leave the shared alias boundary intact.
+For each family, specify the exact loan/claim and publication point, make
+same-state reentry or a stale/wrong leaf a typed stop, and retain the actual
+native attempt/fault evidence. A failed callback must not resume guest code
+through an invented mapping, API return or alternate actor. Validate nested
+parent-to-child transfer, framebuffer reentry and error cleanup separately
+before calling the native lease a whole-machine lease.
+
 ## CPU state and lifetime rules
 
 - Save checked native CPU Context at the actual transfer boundary, with raw native PC

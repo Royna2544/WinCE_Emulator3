@@ -2250,21 +2250,75 @@ that custody failure remains current. CPU slots, a callback-scoped
 machine-state port, live-pump later-slice survivor behavior, Stage 5 policy
 and live iNavi acceptance are unproved. No app or writable mount was run.
 
-## Direct first-slice Completed empty-descendant gate (2026-10-17, validation pending)
+## Direct first-slice Completed empty-descendant gate (2026-10-17, executed offline)
 
-The stamped [attempt 01 expected red](../../evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
+The [bounded receipt](../../evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+seals HEAD `0fb3bc0eaabb64fc153c1b62248cb2f3d6189561`, `unicorn.rs`
+SHA-256 `0dcf5c5d04d0e632cbe405554bfc7029b7eea654070d4ca1fbdc3070ac136d06`,
+and an empty source patch. The stamped
+[attempt 01 expected red](../../evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
 executed a direct pseudo-exit MIPS child through window-backing restoration
 and first-slice `Completed`. A test framebuffer held a parent-queue read
 borrow; the old unconditional `borrow_mut` panicked even though the child had
 no parked descendants. The current source skips that empty publication and
 uses `try_borrow_mut`/`try_reserve` for nonempty descendants. A nonempty
 conflict is reported as typed terminal `Backend` after committed exit effects
-and can still lose descendant CPU custody. Focused green and broad receipt
-are pending; this is not a nonempty-survivor, later-slice or live-app result.
+and can still lose descendant CPU custody.
+
+[Attempt 05 focused](../../evidence/stage3-completed-borrow-20261017/attempt05-sealed-focused.raw.log)
+passed **1/0** (closed-log SHA-256
+`8c2d284d7ad9d3588e2923cd86c816df29e5725886536c9866eba56049197adb`).
+[Attempt 04 release](../../evidence/stage3-completed-borrow-20261017/attempt04-final-broad-release.raw.log)
+passed 19 blocks, **2,162/0/11 ignored** (SHA-256
+`1572c11aae63bff3f1c10b970316ecfdf8da14864b95e2277d2abd73787bc48d`),
+and [attempt 06 no-default](../../evidence/stage3-completed-borrow-20261017/attempt06-final-broad-no-default.raw.log)
+passed 19 blocks, **1,532/0/3 ignored** (SHA-256
+`0c6e6ae48b478f1db5f26ebad4cf20e0afc60b518df5e53bf835421358df7428`).
+Attempt 03 used an earlier source hash and is superseded. Attempt 04 crossed
+a backup-commit HEAD change, but `unicorn.rs` SHA stayed unchanged before
+and after; attempts 05–07 used the final HEAD and the same source hash.
 The two old ignored `Completed`/A→B fixture implementations were retired
 because A13 reruns 16/17 missed their post-deferral preconditions; their
 earlier red logs remain historical evidence. The admitted-child native-fault
-control remains ignored and current. No app or writable mount was run.
+control remains ignored and current:
+[attempt 07](../../evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+exited 101 at the child-CPU-custody assertion (SHA-256
+`52df312df7b39ba3ba58bcbbc786604f7f480dc8bf2354dcb2e0702609b387e4`).
+This is not a nonempty-survivor, later-slice or live-app result. No app or
+writable mount was run.
+
+## Live-pump fixed-stack fault-hook witness (2026-10-17, test-only)
+
+The [bounded receipt](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+seals test-only `unicorn.rs` SHA-256
+`ff0bce3c3976c5f71bbcddbb2e35d182dd7d221552223529ed49b9eac720abd0`.
+Real MIPS `SW`/`LW` first-touches an uncommitted fixed-stack page under
+`live_pump:true`; the exact-birth page pin, stored bytes, progress registers
+and nonzero saved PC are checked. One ordinary test uses an explicit PC stop
+and global code hook; the second uses `stop_pc:None` with default hookless
+count-limited execution. The production memory-fault repair route is inferred
+from source exclusivity, not counted callback entry. Focused release passed
+**2/0**; [broad release attempt 03](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/attempt03-broad-release.raw.log)
+passed 19 blocks **2,164/0/11 ignored** (closed-log SHA-256
+`1cd2c2f9bff7a3861390e8a447939d2dfbe6fe39b02ce4a468418fae7f3e2c1b`);
+[no-default attempt 04](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/attempt04-broad-no-default.raw.log)
+passed 19 blocks **1,532/0/3 ignored** (SHA-256
+`1a0ce9a1aa6f59761768c62593e7ff2a85842a0d57ae072e4affe12e537b0df8`).
+No production Kernel/framebuffer loan, callback reentry or CPU-custody fix
+was made. No iNavi, GPS or writable-mount run occurred.
+
+## Pending-launch primary-identity red (2026-10-17, process-free)
+
+The [stamped current-source receipt](../../evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
+reruns the existing ignored Stage 3 prerequisite explicitly. The one control
+failed at its intended still-live child primary-TID assertion after 129 newer
+launch records evicted the 128-entry diagnostic ring (`EXIT_CODE=101`, closed
+raw-log SHA-256 `fd4a26674c12bd582993a196ddc7222af72e13b509fd597ca5fb65cd2ed4ff41`).
+The source HEAD and three selected file hashes were unchanged during the
+attempt. Production drains Kernel's entire pending launch queue before child
+execution, so primary lookup can fall back to that diagnostic ring. This is
+evidence for a connected exact-birth Kernel/launcher claim cut, not its fix or
+a guest-app observation. No iNavi or mount run occurred.
 
 ## Shipped iNavi process-launch REA check (2026-10-16, static artifact)
 
@@ -2305,6 +2359,28 @@ one failed-link log remain preserved without success claims. The probe is
 opt-in; no production timeout or C path changed. This non-reproduction neither
 explains earlier full-suite AVs nor establishes race freedom, iNavi timing or
 footprint.
+
+## Canonical primary and v2 prelaunch gates (2026-10-17)
+
+The [current-source primary red](../../evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
+failed after pending-launch drain and diagnostic-ring eviction. The bounded
+[canonical-primary gate](../../evidence/stage3-primary-canonical-green-20261017/validation.receipt.md)
+now stores an exact primary thread birth on each canonical process and passes
+five focused controls, plus stable 19-block release **2,169/0/10 ignored** and
+no-default **1,537/0/2 ignored**. Its first broad release attempt had a
+mid-run validation-wrapper source change and is explicitly invalidated. The
+[dumped COREDLL REA evidence](../../evidence/ce6-rea-primary-thread-20261017/findings.md)
+supports durable main-thread identity but is static, not a live-app witness.
+Exit reconstruction, full CPU custody and boot-main enumeration remain open.
+The [current-source native-fault red](../../evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+again fails with a Kernel-live admitted child and no parked CPU owner; it is
+process-free and does not implicate the real iNavi image.
+
+The [v2 offline preflight receipt](../../evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
+passes **171/171** source/build-chain controls and **83/83** runner guards.
+It rejects historical a04 provenance and requires wrapper-owned post-build
+EXE/PDB hash stamps, a matching current HEAD and executed focused tests.
+No new clean rebuild or mounted run was performed.
 
 ## Chat-project validation notes (not in this repository)
 

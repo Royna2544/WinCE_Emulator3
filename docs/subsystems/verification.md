@@ -140,6 +140,42 @@ Read-only project `sources/SYSTEM.TXT:5-9` reports CE 6.0, one MIPS type-4000 CP
 These device fields are not host RSS/private/virtual or total guest commit; `live_guest_stable_page_budget_used_bytes` is a narrow charge that excludes boot reservation and other backings.
 The run recipe's `t0` is emulator process launch, not full device OS boot; splash does not prove map readiness. Numeric launch-to-map, input-lag and footprint budgets remain unreviewed under [Stage 7](../PLAN.md).
 
+### Current-source prelaunch provenance gate (v2 offline-tested contract)
+
+The historical a04 script-only bridge reuses an earlier clean-built EXE/PDB;
+its four passing booleans and hashes of older Markdown receipts do not prove a
+rebuild of the present source. A new run must reject that schema. Its source
+seal binds every tracked and non-ignored untracked build/script input in the
+single D: checkout, a real baseline and seal HEAD, and the preserved patch
+bytes. At prelaunch, independently re-enumerate and hash those files, the
+patch, exact EXE/PDB pair and RSDS identity, registry/devices/mount config and
+guest image. Neither a claimed Git HEAD nor a matching patch digest replaces
+the full current-file comparison.
+
+A fresh-build receipt must identify a same-seal clean/release build, not merely
+set `rustRebuiltForThisReceipt=true`. Require structured, hash-linked clean
+and build logs and focused/release/no-default/alternate validation logs.
+Independently rehash each named raw log and check its stamped command/arguments,
+sealed Git HEAD, source hashes before and after, stable attempt identity, exit
+code, at least one executed focused test, and actual package compilation after
+the clean step. The build wrapper must find the repo-target EXE/PDB absent
+before the build, then stamp their post-build hashes in its own trailer; those
+hashes must match the preserved EXE/PDB and their checked RSDS identity. A
+changed or missing evidence byte,
+unrecognized command, failed test/build, or source drift refuses launch.
+Structured receipts and their logs are retained under `evidence/` outside
+disposable `target/`; the runner checks each new path before opening it.
+This is a provenance gate, not proof of guest boot, map readiness or
+performance. It does not grant a run: approval is a separate, single-use
+human decision followed by fresh adjacent, SHA-verified ZIP backups of all
+three writable mounts and the existing dual-ledger, mount, endpoint and
+watchdog checks.
+
+The [v2 offline receipt](../../evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
+passes 171 process-free preflight controls and 83 runner guards. It does not
+include a fresh Cargo rebuild or authorize a guest run; earlier a04 build
+artifacts have no wrapper-owned output-hash witness and remain rejected.
+
 ### Proposed bounded iNavi measurement contract (a04 historical)
 
 The historical [a04 validation receipt](../../evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-validation-receipt.md)

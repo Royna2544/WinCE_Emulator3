@@ -29,9 +29,21 @@ The subsequent direct-MIPS first-slice `Completed` empty-descendant cut has a
 window restoration held a parent-queue read borrow and the old unconditional
 borrow panicked. Current source skips an empty descendant publication and
 uses fallible borrow/reservation for nonempty descendants; the latter can
-still lose CPU custody after committed exit effects. Its final green/broad
-seal is pending. The old two ignored held-borrow/A→B fixtures were retired as
+still lose CPU custody after committed exit effects. The
+[bounded receipt](../../evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+seals focused **1/0**, 19-block release **2,162/0/11 ignored**, and
+no-default **1,532/0/3 ignored** on `unicorn.rs` SHA-256
+`0DCF5C5D…136D06`. A sealed-source ignored native-fault rerun remains red
+(exit 101). The old two ignored held-borrow/A→B fixtures were retired as
 stale after missing post-deferral preconditions; their receipts remain.
+The subsequent [test-only live-pump fixed-stack witness](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+executes real-MIPS first-touch `SW`/`LW` in both explicit-PC/global-hook and
+default hookless/count-limited modes. Its focused **2/0**, 19-block release
+**2,164/0/11 ignored**, and no-default **1,532/0/3 ignored** gates confirm
+the checked page state and guest progress on the production run path; source
+exclusivity attributes the memory-fault hook, not a callback counter. It does
+not replace the raw Kernel pointer, prove callback reentry safety or admit
+machine-owned CPU slots.
 
 ## Responsibility and scope
 
@@ -44,7 +56,7 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - [ThreadSystem](../../src/ce/thread.rs) owns TLS, LastError, kernel-mode flags and globally allocated numeric TIDs; it is not a task state manager.
 - [HandleTable](../../src/ce/object.rs) stores canonical thread records with checked `ThreadBirthKey`, frozen production creation owner, public aliases, execution-live and registered-wait references. `ThreadRecord` now owns the mutable active finite-Sleep phase (`Blocked` or `Completing`) and checked frame generation. Its mutable `ThreadObject` still carries entry/parameter, priority, suspend count and exit/signaled fields; this is not yet a general Task/Frame dispatch directory.
 - Its public-handle allocator advances unchecked; ThreadSystem TID and Kernel child PID allocators saturate. Checked incarnation alone cannot prevent an exhausted public handle number from colliding with an existing alias.
-- [CeKernel](../../src/ce/kernel.rs) still has separate selected-PID, priority/suspend fallback and quantum maps. Boot PID1/TID1 has an aliasless canonical birth; child-primary identity is recorded at birth, but some primary/diagnostic fallback paths remain and full boot enumeration is unproved.
+- [CeKernel](../../src/ce/kernel.rs) still has separate selected-PID, priority/suspend fallback and quantum maps. Boot PID1/TID1 has an aliasless canonical birth. The bounded [canonical-primary query gate](../../evidence/stage3-primary-canonical-green-20261017/validation.receipt.md) stores an exact child-primary birth on the canonical process, independent of launch/trace records; process-exit reconstruction still uses older launch/handle witnesses and full boot enumeration is unproved.
 - Thread/process `DuplicateHandle` aliases now share canonical mutable records; O-K3 separately keeps execution-live births and exact registered Thread/Process wait pins after public-alias closure. The [E-26](../evidence/ledger.md) one-pass/twelve-ignored result and twelve explicit reds are historical pre-fix baselines. Later bounded [alias](../../evidence/stage3-alias-20261014/validation.receipt.md), [owner](../../evidence/stage3-owner-20261014/validation.receipt.md), [pin](../../evidence/stage3-pins-20261015/validation.receipt.md) and [wait-preparation](../../evidence/stage3-waitprep-20261015/validation.receipt.md) gates turned their named controls green, including the E-11 pin controls. Boot-main enumeration, full primary completion, public-ID exhaustion, machine clone relineage and generic object aliases are not thereby accepted.
 - [Scheduler](../../src/ce/scheduler.rs) stores waits through one [TaskWaitStore](../../src/ce/task_wait.rs), keyed by exact `Birth(ThreadBirthKey)` or explicit `LegacyUnknownTid(u32)` compatibility owner. Finite-Sleep waits carry an immutable `TaskFrameRef` and select only the exact active blocked frame; other waits preserve their compatibility selection/subscription behavior. Wait IDs are locators, not a second authority.
 - [UnicornMips](../../src/emulator/unicorn.rs) keeps a frame-addressed native register payload for finite Sleep alongside numerous compatibility pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
@@ -645,6 +657,101 @@ even if CPU owner-loss reds turn green. In any remaining nested in-hook path,
 A's native owner may remain open while its callback is paused, but only the
 checked leaf permit grants guest execution to B.
 
+##### Callback-scoped machine-state port cut (proposed, not implemented)
+
+The first connected port cut changes the *whole native attempt's* access
+boundary, not only the missing-page hook. A candidate `MachineKernelPort<'m>`
+borrows the one Kernel and framebuffer together for the duration of an
+attempt, with a fallible short-loan operation such as
+`try_with_kernel(&AttemptAuthority, closure)` or
+`try_with_state(&AttemptAuthority, closure)`. The closure receives a temporary
+`&mut CeKernel` (and, for the joint form, `&mut dyn Framebuffer`); its
+higher-ranked loan lifetime prevents either reference escaping. A shared
+single-thread borrow cell can enforce this without creating another Kernel or
+Task registry. The authority argument is a checked view of the current exact
+process/thread/frame and attempt, not a replacement lifecycle record. A busy
+loan, stale authority or unexpected reentry returns a typed conflict, stops
+the native attempt and records the failure; it is never a CE API success or a
+scheduler yield. All direct setup, callback and tail Kernel/framebuffer use
+must go through the same port while it exists. Merely wrapping the current
+long-lived `&mut CeKernel` while continuing to dereference `kernel_ptr` would
+retain the alias defect.
+
+The connected signature changes, shown as responsibilities rather than
+compiled Rust APIs, are:
+
+| Current entry | Required private boundary |
+| --- | --- |
+| `run_until_import_trap_with_framebuffer_limits_report(&mut self, &mut CeKernel, &mut dyn Framebuffer, limits)` | Keep a compatibility outer entry temporarily, but construct one port and pass it to a private `run_until_import_trap_with_port(&mut self, &MachineKernelPort, &AttemptAuthority, limits)`. The caller cannot use its two mutable references again until native hooks have closed. |
+| `run_with_unicorn` and `run_with_unicorn_attempt` with long-lived mutable Kernel/framebuffer arguments | Accept that same port and captured attempt authority. All code, scoped-code, block, import, pre/post-dispatch and memory-fault callbacks borrow through it, including the scheduler-block wait-resume path. One callback adapter converts a loan failure into `emu_stop` plus the attempt's typed terminal error; callbacks whose native signature returns `bool` must not silently turn conflict into `false` without the error record. |
+| `run_pending_process_launches(parent_uc, &mut CeKernel, ..., &mut dyn Framebuffer, ...)` | Accept the port and checked parent authority, perform each preparation/selection/completion under separate short loans, release them before the child runs through the private port entry, then classify and restore through checked transitions. Do not call the public outer entry from a Kernel loan. |
+| `repair_missing_virtual_page_for_fault(&mut CeKernel, ...)` and existing `&mut CeKernel` wait/import helpers | They may keep their local signatures only when called *inside* one short port closure. Preserve the fault's live exact-birth VM lookup and native map-before-canonical-pin commit; neither an eager snapshot nor a presumed PC restart is an equivalent replacement. |
+
+`NativeEngineLease<'a>` currently accepts hook closures with lifetime `'a`
+and destroys their callback boxes after native hook teardown/owner close. This
+makes a borrowed port plausible, but the implementation must prove the port
+outlives every installed callback on every finish/abort/error path; the
+fresh-owner close proof does not automatically accept the opt-in persistent
+mode. No port guard may span `emu_start`, nested child execution or a host
+callback allowed to mutate machine state. A native mapping or framebuffer
+operation performed during a short loan needs an explicit reentry audit: an
+unexpected reentrant machine access fails closed, while permitted host
+observations are queued outside Kernel/custody/topology mutation. An exit
+transaction fences those events until the exact preflight/commit result is
+known; an effect already applied before refusal requires partial-effects
+quarantine, not invented rollback.
+
+The deferred `CreateProcessW` handoff needs a checked selected-process token,
+not the current blind save/set/restore of module fields and
+`CurrentProcessState`. It captures the parent's exact birth, selected-state
+version and staged nonzero return context, then selects B under a short loan
+and relinquishes that loan before B's native entry. The parent's executable
+leaf must be suspended while B owns the sole leaf; once O-T7 slots land, B
+must be classified into durable custody before the token may resume A.
+Restoration checks the original parent birth and selection lineage rather
+than accepting a reused PID or whichever process was selected last. Token
+drop may latch a stopped failure, but cannot claim successful restoration.
+This token and the O-T7 `ParentSuspension` are one target handoff contract,
+not two independent selectors. A port-only cut can validate selection and
+non-overlapping native entry but cannot claim the slot/leaf/custody portion.
+
+Test-first acceptance for this port is narrower than CPU-custody or Stage 4
+acceptance:
+
+1. Preserve the two ordinary real-MIPS live-pump fixed-stack first-touch
+   controls as positive fault-path witnesses. Add a deliberate busy-port
+   fault control: typed stop, nonzero guest PC, no canonical page publication
+   or pin, no host panic, and no replay as an ordinary unmapped guest error.
+2. Exercise loan conflicts and exact-authority mismatch in code/block,
+   import/HLE and framebuffer paths, including a nested host callback. Each
+   must stop through the same terminal attempt record without consuming a
+   different birth's wait or returning a fabricated API value. Check native
+   hook finish/abort teardown before the outer mutable references are reused.
+3. Execute a post-native real-MIPS A-to-B launch with no open parent Kernel or
+   framebuffer loan. Check B's exact birth, A's staged return PC,
+   non-overlapping A/B native execution and checked parent selection restoration;
+   inject PID reuse or changed selection lineage and require a stopped
+   refusal, not blind restoration. Test queued host observations during an
+   exit transaction and a reentrant mutation refusal without using undefined
+   raw-pointer aliasing. The exact single-leaf permit and retained B custody
+   are later O-T7 controls, not port-only acceptance.
+4. Review every hook family and require no remaining raw Kernel/framebuffer
+   dereference in the normal attempt. A source inventory supports, but does
+   not replace, the executed controls. Keep `unicorn`-only, desktop/no-trace,
+   release and no-default gates separate where feature boundaries differ.
+
+A pre-CPU exact-birth claim/return cut in Kernel's existing pending-launch
+queue can be independently correct before this port, and its retry/tail-order
+controls should precede nested execution. A memory-fault-only port cut cannot
+make the normal attempt sound while other raw hooks and the caller's mutable
+references remain. Conversely, a complete port can establish machine-state
+loan safety before CPU slots, but cannot preserve the admitted child currently
+dropped on ordinary native error or nonempty `Completed` publication conflict.
+Those require the connected O-T7 custody cut, its active-leaf run gate and
+non-runnable quarantine; the existing ignored native-fault red must stay red
+until that ownership changes. No callback port, selector token, custody slot
+or exit event fence described here exists in production source today.
+
 The historical 2026-10-17 pre-deferral read-only callback inventory is for
 `unicorn.rs` SHA-256
 `F102058948DCA07E745BA98FF8E482B32E72995B6924D76A8FDCD3911859857B`;
@@ -663,6 +770,21 @@ created at `:9755` (11 total source lines including its declaration).
 | Import loader/HLE/launch (`13280–13679`) | 10 | 2 | HLE dispatch and then-immediate child run |
 | Import post-dispatch (`13680–13807`) | 6 | 0 | Callout and wait/GetMessage resume |
 | Memory-fault hook (`13970–14013`) | 1 | 0 | Missing-page repair |
+
+The later test-only fixed-stack witness reaches the production live-pump
+missing-page repair path in both explicit-stop/global-hook and default
+hookless/count-limited configurations. This narrows a Step 2 fixture, but
+does not make the raw `kernel_ptr` loan sound or cover reentry into that hook.
+The read-only follow-up found no safe hook-only port: the caller keeps
+`&mut CeKernel`/framebuffer through `emu_start`, and the other raw-pointer hook
+families can access the same machine state. Repair consults live exact-birth
+VM state and publishes a prepared native page mapping before committing the
+canonical pin; an eager snapshot would change that ordering. Deferring the
+fault until after native stop is not established either: the current error
+tail poisons the continuation, and a MIPS delay-slot fault cannot be assumed
+restartable from the scalar PC. Port all callback families under one checked
+machine-state loan/leaf contract; use this first-touch witness as its positive
+fault control, not as proof of the port.
 
 At that historical source seal, non-live-pump `CreateProcessW` ran the child
 immediately from the import hook at `:13569–13579`; its HLE dispatch loan had

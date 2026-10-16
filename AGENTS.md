@@ -238,9 +238,10 @@ final source passed release **2,147/0/10 ignored** and no-default
 [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
 at its earlier source seal executed guest `CreateProcessW`: A exited `0x63`,
 B stayed Kernel-live, but its original CPU was dropped by the already-exited A
-skip after rotation. The
-fixture remains ignored; this does not exercise the live-pump route. The
-separate [post-admission native-fault red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+skip after rotation. That fixture was ignored at its earlier seal and later
+retired after missing the post-deferral route; this does not exercise the
+live-pump route. The separate
+[post-admission native-fault red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
 at its earlier seal executed a synthetic child into `READ_UNMAPPED`; Kernel
 left it live but the ordinary first-slice error dropped its CPU. It too remains
 ignored. The
@@ -270,18 +271,40 @@ empty descendant queue and a held parent-queue read borrow; the old source
 panicked there. The current source skips that unnecessary borrow and uses
 fallible borrow/reservation for nonempty descendants, where failure remains
 terminal after committed exit effects and can lose descendant CPU custody.
-Its final validation is pending. Rerun 18 still loses an admitted child's CPU
-on native fault and remains ignored.
+Its [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256 `0dcf5c5d04d0e632cbe405554bfc7029b7eea654070d4ca1fbdc3070ac136d06`:
+focused **1/0**, 19-block release-feature **2,162/0/11 ignored**, and
+no-default **1,532/0/3 ignored**. The current-source ignored native-fault
+rerun still loses an admitted child's CPU and remains red (exit 101).
 This is not a CPU slot/Task port, Stage 5 scheduling gate or live result. The
+later [test-only live-pump fixed-stack witness](evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256
+`ff0bce3c3976c5f71bbcddbb2e35d182dd7d221552223529ed49b9eac720abd0`:
+real-MIPS first-touch `SW`/`LW` passed explicit-PC/global-hook and default
+hookless/count-limited modes (focused **2/0**, 19-block release-feature
+**2,164/0/11 ignored**, no-default **1,532/0/3 ignored**). Source exclusivity
+attributes the production memory-fault hook; no independent callback counter,
+raw Kernel-pointer port, reentry safety or CPU custody is claimed. The
 shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
 identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
 analysis does not establish their runtime frequency. The
 dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
 and local CE6 source further distinguish loader completion, process waits,
 termination requests and accepted exit; the ROM kernel exit body is unknown.
-Current-route reachability of a nonempty `Completed` descendant publication
-conflict, exact primary birth, later-slice survivor behavior, other framebuffer
-reentry and exit paths remain open.
+The [canonical-primary query gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md)
+now keeps the exact primary thread birth on the canonical process instead of
+the drained launch queue/128-entry trace ring (release **2,169/0/10 ignored**,
+no-default **1,537/0/2 ignored**). The dumped COREDLL
+[REA check](evidence/ce6-rea-primary-thread-20261017/findings.md) supports
+durable main-thread identity, not full exit semantics. Current-route
+reachability of a nonempty `Completed` descendant publication conflict,
+exit reconstruction from that primary birth, later-slice survivor behavior,
+other framebuffer reentry and exit paths remain open. The
+[latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+still loses its only CPU owner despite a live Kernel child. The
+[v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
+passes 171 source/build-chain controls and 83 runner guards; it requires a
+future fresh output-hash-stamped rebuild and does not authorize a run.
 No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),

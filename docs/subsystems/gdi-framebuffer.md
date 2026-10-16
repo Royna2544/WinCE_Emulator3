@@ -32,6 +32,17 @@ Keep ABI dispatch as a thin adapter. A drawing request resolves a legitimate DC/
 
 Guest caret/timer changes use machine-supplied guest time; host video pacing uses the host contract. Presenting more frequently must not advance guest timers or create extra guest execution. The future shared snapshot contract couples published frame/window provenance; a PNG encoding timestamp today is not that guarantee.
 
+The proposed [callback-scoped machine-state port](runtime-control.md#candidate-callback-scoped-machine-state-port-not-implemented)
+also governs hook-origin framebuffer work. A tick, draw or stopped-exit restore
+obtains a short, fallible loan under the checked active-leaf or exit authority;
+it cannot retain a mutable framebuffer pointer across nested guest execution
+or let a reentrant presenter mutate a partially committed exit. Validate the
+destination and all selected backing stores under one held display transaction
+before irreversible restoration. A conflicting or stale loan fails closed;
+published frames are owned immutable copies made after a valid machine
+boundary, not another live framebuffer owner. This is a target contract, not a
+description of the current raw-pointer hooks.
+
 ## Failure and resource lifetime
 
 Track selected-object references, save-stack references, bitmap-bit ownership, mapped-section references and backing stores explicitly before extracting the service. DeleteDC/DeleteObject/window destruction/process termination/checkpoint disposal need one release path per owned object; selecting a stock or borrowed object is not allocation ownership. Do not copy current bitmap `bits_owned` into an assumed process-heap policy without resolving its real allocation/backing contract.
@@ -89,8 +100,10 @@ extents; `rendered && backing_store.is_none()` is un-restorable. Popup
 rendering needs owned backing/restore or a defined redraw contract, not a
 silent dismissal. A compatible prepared restore may apply only after
 whole-display preflight under the same destination lease. An unexpected
-commit failure remains terminal, not a completed exit; checkpoint restore is
-the recovery path.
+commit failure remains terminal, not a completed exit. The current
+[live-checkpoint lineage guard](../../evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
+precludes an in-session live rewind after this hold; repair the cause and
+restart until whole-machine relineage exists.
 
 Further expected-red controls should cover rendered MessageBox and popup
 state in active and parked completions, a later GWE-plus-modal target in one

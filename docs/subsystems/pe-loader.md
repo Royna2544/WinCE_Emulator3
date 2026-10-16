@@ -153,14 +153,25 @@ Production migration must preserve
 the finalized relocation/import/trampoline bytes while replacing **one**
 copy-backed family at a time with AddressSpace-owned, stable private pages.
 The sealed main-image R/RX runs and their generation/pin checks remain intact.
+Per [D-012](../DECISIONS.md), the ordinary EXE/DLL production paths must stay
+copy-backed until O-M3 establishes CE6 physical-page provenance and guest-budget
+charge timing. The opt-in synthetic gates below may proceed before that decision;
+they do not authorize an unclassified, uncharged production pin.
 
 1. Prepare an exact `(process birth, module identity, load generation, page)`
    plan after final loader patching. Check region overlap, final protection,
    page provenance, budget decision and native-write destinations before
    publishing any module pointer or IAT binding. Keep the old live module
    untouched on a failed candidate; do not reuse a same-VA generation.
-2. Complete writable **main-image** production integration as the first
-   connected source/test cut.
+2. Complete the remaining synthetic host-write, restore/rebind and exact
+   module-retirement fences, then close [O-M3](../DECISIONS.md) with evidence
+   of actual ROM/XIP versus RAM image provenance and charge timing. For each
+   proven case, test boot/load/write/unload `GlobalMemoryStatus` deltas and
+   low-budget rollback. Preserve a separately reported host-RSS/native-map
+   profile; do not call source tests an iNavi memory or speed improvement.
+   Until this gate passes, retain the current production copy path.
+3. Complete writable **main-image** production integration as the first
+   production source/test cut.
    The VM must own bytes before execution; native owners pin/reconcile that
    backing, and neither a parked blob nor outbound readback may overwrite it.
    Preserve IAT writes through a checked VM/loader transaction. Validate
@@ -179,7 +190,7 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    activation. The [H-W1 host-origin write authority design](guest-memory.md#h-w1-host-origin-native-write-authority-design-record-not-implemented)
    inventories current native writers and preflight/failure rules; it is not
    an implemented guard.
-3. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
+4. Move **preloaded DLLs**, then **runtime DLLs**, through the same authority.
    Dynamic mapping, import refresh, attach/detach, unload/reload and parked
    process restoration must reconcile exact generation/pins before returning
    to guest code. A live return frame prevents premature unmap; a failed
@@ -191,13 +202,6 @@ The sealed main-image R/RX runs and their generation/pin checks remain intact.
    test the actual unload/reload lifetime before claiming reclamation. Check
    direct `uc.mem_write`, restore and rebind sites explicitly;
    guest RX permissions alone do not constrain host writes.
-4. Close [O-M3](../DECISIONS.md) with evidence of actual ROM/XIP versus RAM
-   image provenance and charge timing before claiming guest-budget or live
-   acceptance. For each proven case, test boot/load/write/unload
-   `GlobalMemoryStatus` deltas and low-budget rollback. Preserve a separately
-   reported host-RSS/native-map profile; do not call source tests an iNavi
-   memory or speed improvement.
-
 The configured iNavi EXE is an SD-mounted file, not a demonstrated XIP ROM
 page. `\Windows` is a virtual mount without a host root; a DLL found in
 `DUMPPLZ\Windows` through search paths is not therefore proven ROM-backed.

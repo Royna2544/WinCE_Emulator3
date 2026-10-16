@@ -199,8 +199,11 @@ skip dropped B; and a post-admission native error dropped the child's CPU.
 Two old fixture implementations were subsequently retired because they miss
 the post-native route; their historical receipts remain. A new direct-MIPS
 first-slice `Completed` fixture reaches the empty-descendant borrow hazard,
-but neither nonempty descendant preservation nor later-slice A→B survival is
-proved. The native-fault custody red remains ignored.
+and its [bounded source/test gate](../evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+passed focused **1/0**, 19-block release **2,162/0/11 ignored**, and
+no-default **1,532/0/3 ignored**. Neither nonempty descendant preservation
+nor later-slice A→B survival is proved; a sealed-source ignored native-fault
+rerun still exits 101 at the child-CPU-custody assertion.
 The checkpoint refusal's seven former ignores are now
 [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
 in complete release and no-default suites. This does not change the staging
@@ -214,6 +217,9 @@ not an implemented owner. Stage its connected source cut in this order:
    stale-generation/PID-reuse and live-custody checkpoint-refusal controls.
    Distinguish real CE zero-slice creation completion from retryable failure;
    neither may lose an already-published exact-birth launch.
+   An exact-birth claim/return in Kernel's existing pending-launch queue may
+   be implemented as a separate pre-CPU ownership cut. It does not confer a
+   child run permit or make an admitted CPU safe on error.
 2. Settle the callback-scoped machine-state port before claiming a sound
    lease. Successful `CreateProcessW` now stops A's native attempt at its
    staged return PC and runs B post-native, rather than through A's raw hook
@@ -224,6 +230,28 @@ not an implemented owner. Stage its connected source cut in this order:
    fallible, leaf-permit-qualified short loans, checked selected-process
    restoration and an exit-transaction event fence. A second guest-executable
    permit or a panicking `RefCell` conflict is a failed control, not a yield.
+   A [test-only real-MIPS fixed-stack witness](../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+   covers the live-pump memory-fault route in both explicit-PC/global-hook
+   and default hookless/count-limited modes. It identifies the callback path
+   by source exclusivity rather than a callback counter; no production raw
+   pointer, reentry or custody boundary has moved. Use it as a narrow
+   fixture for the port, not as Step 2 acceptance.
+   The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
+   specifies one borrowed Kernel/framebuffer port for the entire native
+   attempt, fallible short loans tied to exact attempt/leaf authority, and a
+   checked selected-process/parent-suspension token. Implement its connected
+   signature migration through the public run wrapper, private native attempt,
+   **all** code/block/import/memory hooks and post-native child helper; the
+   callback teardown must end before the outer mutable references are reused.
+   No Kernel/framebuffer guard may span `emu_start` or B's nested run. A
+   memory-fault-only wrapper leaves the other raw hook aliases and is not an
+   accepted production port. Before this cut, stage the busy-port fault,
+   import/block and framebuffer reentry negatives, exact selected-birth/PID
+   reuse, exit-event fence and hook finish/abort lifetime controls. Any
+   callback conflict must produce a typed stopped attempt, never guest API
+   success, an ordinary guest unmapped fault or a scheduling yield. Independent
+   review and executed feature-appropriate suites gate the port; even a green
+   port leaves O-T7 CPU custody open.
 3. Admit boot and child CPU payloads into one machine-owned slot directory;
    review private stable per-slot cells with short directory borrowing and
    closure-scoped fallible payload loans. Gate backend entry on the exact
