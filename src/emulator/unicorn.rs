@@ -20789,17 +20789,31 @@ fn run_pending_process_launches_with_custody<D>(
                     if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
                         // This exact reservation was created above, and
                         // recursive child launches use different births.
-                        // A failure is a broken internal invariant, not a
-                        // recoverable return that may drop the CPU payload.
-                        directory
-                            .quarantine_reserved(key, launch_birth, child)
-                            .expect("authentic reserved child CPU custody transfer");
+                        // A failure is a broken internal invariant. Report
+                        // terminal ownership loss explicitly instead of
+                        // panicking or claiming a recoverable child stop.
+                        if let Err((failure, original_cpu)) =
+                            directory.quarantine_reserved(key, launch_birth, child)
+                        {
+                            drop(original_cpu);
+                            kernel.restore_pending_process_launches(launches.into());
+                            return Err(Error::Backend(format!(
+                                "reserved child CPU custody transfer refused: {failure}; terminal CPU ownership loss"
+                            )));
+                        }
                         *quarantined_child_fault = true;
                     }
                 } else if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                    directory
-                        .cancel_reservation(key, launch_birth)
-                        .expect("authentic unadmitted child custody reservation");
+                    if let Err(cancel) = directory.cancel_reservation(key, launch_birth) {
+                        return Err(restore_pre_cpu_launch_error(
+                            kernel,
+                            &mut launches,
+                            Some(launch),
+                            Error::Backend(format!(
+                                "cancel unadmitted child CPU custody reservation: {cancel}"
+                            )),
+                        ));
+                    }
                 }
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildError",
