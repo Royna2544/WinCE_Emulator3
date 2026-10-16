@@ -2195,11 +2195,23 @@ predicate: an exited, aliasless thread could retain a finite-Sleep frame
 while both lists appeared empty, and save/restore copied its original birth.
 The [canonical-map green receipt](../../evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
 seals a direct process/thread-record guard. The seven lineage controls passed
-under release and no-default profiles; ordinary checkpoint selection passed
-4/0/7 ignored, serial no-feature passed **1,525/0/10 ignored**, raw Kernel
-integration **133/0**, and four feature checks passed. It does not clean up
+under release and no-default profiles; at that earlier seal ordinary
+checkpoint selection passed 4/0/7 ignored, serial no-feature passed
+**1,525/0/10 ignored**, raw Kernel integration **133/0**, and four feature
+checks passed. It does not clean up
 the synthetic orphan, make live rewind safe, or establish whole-machine
 checkpoint relineage. No app or mount run occurred.
+
+The later [counted checkpoint receipt](../../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
+unignored those seven `src/main.rs` controls without changing other tested
+source. Its complete 19-block no-default suite passed **1,532/0/3 ignored**
+and release-feature suite **2,157/0/13 ignored**; all seven controls were
+counted green. Failed native-build and sandbox-loopback attempts remain
+separately hash-preserved. This does not lift the live save/restore fence.
+Three [current-source offline expected reds](../../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+then reproduced the `Completed` held-queue `RefCell` panic/survivor loss,
+already-exited-A dropping B's original CPU, and admitted-child native-fault
+CPU loss. All three remain ignored; no app or writable mount was run.
 
 Separately, the earlier [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
 used the same four-file source seal for five stamped attempts. The four

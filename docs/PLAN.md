@@ -185,6 +185,15 @@ the outer launch handler. Live-pump defers the child launch and needs its own
 later-slice survivor fixture. Neither source gate grants live-app
 acceptance or a writable-mount run.
 
+The [2026-10-17 current-source rerun](../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+confirms three still-ignored offline reds on one seal: `Completed` panics on
+a held parent-queue borrow and strands B, the already-exited-A skip drops B,
+and a post-admission native error drops the child's CPU. The checkpoint
+refusal's seven former ignores are now [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
+in complete release and no-default suites. This does not change the staging
+order: inventory and migrate the callback-scoped Kernel/framebuffer port by
+production reentry family (step 2), then admit CPU slots (step 3).
+
 O-T7 is now a [reviewable candidate contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists),
 not an implemented owner. Stage its connected source cut in this order:
 

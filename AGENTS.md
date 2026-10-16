@@ -140,7 +140,7 @@ cargo run --release --features unicorn,trace,win32-desktop -- `
 | `tests/` | raw-API and subsystem tests, PE fixtures (`tests/test_progs`) |
 | `host_progs/` | host-side helper programs (not part of the emulator build) |
 
-## Current architecture status (refreshed 2026-10-16)
+## Current architecture status (refreshed 2026-10-17)
 
 The user authorized the scheduler-core rewrite with plan-first/common-anchor
 dependency gates. The reviewed docs describe target contracts and staged
@@ -250,14 +250,22 @@ now refuses save/restore for retained canonical Kernel Task/launch authority
 or CPU custody. A real monitor session cannot currently rewind; D-011
 recovery requires repairing the cause and restarting until whole-machine
 relineage exists. The gate is not general checkpoint acceptance. The
+[counted checkpoint validation](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
+passes 19-block no-default **1,532/0/3 ignored** and release-feature
+**2,157/0/13 ignored** with all seven former ignores now ordinary green tests.
+The [three current-source offline reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+still reproduce `Completed` borrow/panic, already-exited A dropping B, and
+native-fault child CPU loss; they remain ignored and do not establish live
+failure. The
 shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
 identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
 analysis does not establish their runtime frequency. The
 dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
 and local CE6 source further distinguish loader completion, process waits,
 termination requests and accepted exit; the ROM kernel exit body is unknown.
-The separate `Completed` borrow, exact primary birth, framebuffer reentry and
-other exit paths remain open. No app or mount run was made.
+Repair of the reproduced `Completed` borrow/reentry failure, exact primary
+birth, other framebuffer reentry and exit paths remain open. No app or mount
+run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
 but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL
