@@ -125,6 +125,13 @@ remote-control HTTP/WebSocket surface.
   custody is the next connected Stage 3/4 source cut, not yet implemented.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
+- The bounded [exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+  authenticates the canonical primary birth before tested stopped child/boot
+  exits, and requests recovery when a stopped boot exit loses that birth.
+  Its sealed source passed release **2,175/0/10 ignored** and no-feature
+  **1,539/0/2 ignored** across 19 blocks each. The earlier 16-failure broad
+  attempt is retained as failed evidence; these tests do not resolve general
+  CPU custody, Stage 3, or live-app acceptance.
 - A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate

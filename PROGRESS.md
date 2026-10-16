@@ -4,6 +4,28 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 bounded exact-primary stopped-exit gate
+
+The [v4 source/test receipt](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256
+`1edeb353bfa618c760f02cf5397b3d3f4703c4a2a726225e496f237fd1916347`.
+The tested stopped child/boot exit paths require a matching canonical primary
+thread birth and CPU witness; a stopped boot exit lacking that authority
+requests typed recovery, while an ordinary non-exit stop is not promoted to
+an exit. Final-source focused boot recovery passed **1/0**; complete 19-block
+release-feature and no-default suites passed **2,175/0/10 ignored** and
+**1,539/0/2 ignored**. Feature checks for Unicorn alone, Unicorn plus
+desktop, and the normal feature set all exited 0.
+
+The earlier [a10 broad release attempt](evidence/stage3-primary-exit-birth-20261017/broad-release-a10.raw.log)
+failed **1,144/16/7 ignored** (exit 101); it was not a gate pass. The later
+[v2 focused guest-thread-stack selection](evidence/stage3-primary-exit-birth-v2-20261017/focused-guest-thread-stack-a01.raw.log)
+passed **133/0/2 ignored**, but was not a complete broad gate. These are
+separate source snapshots and remain in the validation lineage. Bounded
+primary-exit checks do not establish general exit reconstruction, Task/Frame
+authority, O-T7 CPU custody, CE6 parity or live iNavi behavior. No app or
+writable mount was run.
+
 ## 2026-10-17 test-only live-pump fixed-stack fault-hook witness
 
 The [bounded receipt](evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
@@ -288,7 +310,8 @@ does not establish branch execution, boot timing or UI progress.
   The first broad release attempt was invalidated by mid-run validation-script
   churn and was rerun. The [dumped COREDLL REA check](evidence/ce6-rea-primary-thread-20261017/findings.md)
   supports durable identity but not complete exit semantics. Boot-main
-  enumeration, exit reconstruction and CPU custody remain open; no app ran.
+  enumeration, broader exit reconstruction and CPU custody remained open at
+  that gate; the later bounded stopped-exit gate is recorded above. No app ran.
 - A [current-source ignored native-fault rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
   remains expected red (exit 101): a real-MIPS child faults on its first
   admitted native slice, remains Kernel-live and has zero parked CPU owners.

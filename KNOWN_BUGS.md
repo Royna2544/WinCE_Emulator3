@@ -155,7 +155,9 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   - Boot-main Toolhelp enumeration remains ignored (ledger E-8, E-11, E-26).
     The child-primary queue/trace-ring red is now green through the
     [canonical-primary source gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md),
-    but exit reconstruction has not migrated to that canonical birth.
+    and a later [bounded stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+    verifies that birth for tested child/boot exits. Other exit consumers and
+    rollback/publication states are not thereby accepted.
   - CE caller wait/timeout behavior is not implemented. An old-MIPS
     direct-kernel real-handle continuation fails closed, the root process has
     no owned child-launch handoff for real-handle requests, and the
@@ -219,8 +221,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       fallible borrow/reservation: on conflict, the child exit effects are
       already committed and the typed terminal error can still lose descendant
       CPU custody. No current-route nonempty survivor or live-pump later-slice
-      control closes that gap. The first-slice
-      candidate also lacks a separate exact live primary-thread-birth gate.
+      control closes that gap. The later bounded
+      [exact-primary stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+      covers its tested child/boot birth checks, not this descendant-publication
+      or later-slice CPU-custody gap.
       A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
       at its earlier seal executed an admitted synthetic MIPS child through its
       first native slice. Its injected `READ_UNMAPPED` returned an ordinary
@@ -242,8 +246,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
     - The historical [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
       is fixed for the bounded Kernel query path by the
       [canonical birth gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).
-      Still open: exit reconstruction may lose its launch/handle witness,
-      and unpublished-thread rollback has no explicit publication-state bit.
+      The [v4 stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+      also fails closed on missing primary authority in its tested shapes.
+      Still open: other launch/handle-dependent exit consumers and
+      unpublished-thread rollback without an explicit publication-state bit.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.

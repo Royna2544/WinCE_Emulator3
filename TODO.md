@@ -147,9 +147,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      own an admitted child through DLL load, native execution or error.
      The [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
      is now covered by the [canonical-primary query gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).
-     Next use that canonical birth in exit reconstruction, without numeric-TID
-     fallback, and prove rollback publication state. This remains separate
-     from O-T7 admitted-CPU custody.
+     The later bounded [exact-primary stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+     now verifies the canonical birth for its tested child/boot exit shapes;
+     the v4 broad release and no-default suites pass. Next prove unpublished
+     rollback/publication state and the remaining exit consumers without
+     promoting a recycled numeric TID or an old launch/handle witness. This
+     remains separate from O-T7 admitted-CPU custody and general Task/Frame
+     authority.
      The [bounded live-checkpoint guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
      refuses retained Task/launch and CPU custody on save and restore; it is
      a safety stop, not atomic relineage. Real monitor rewind is unavailable
