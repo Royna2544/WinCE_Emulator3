@@ -126,8 +126,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      now preserves tested nonmodal foreign CPU descendants on natural parked
      and requested-active exits, and refuses a foreign saved context without
      its matching execution-live current thread birth before exit effects.
+     The bounded [first-slice `Exited` source gate](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
+     adds synthetic production-helper A→B preservation and a terminal
+     held-parent-queue-borrow control; it does not execute the guest classifier.
      Extend the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
-     to first-slice `Exited`, other active exits, requested parked siblings,
+     to a real-MIPS first-slice fixture, other active exits, requested parked siblings,
      already-exited skips and generic duplicate pruning. Prove foreign CPUs
      without saved context and PC resumability separately; no ROM kernel exit
      body was identified by the [CE6/REA check](evidence/ce6-rea-exit-20261016/findings.md),

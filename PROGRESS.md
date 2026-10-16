@@ -133,6 +133,16 @@ found per-process thread/handle cleanup and distinct dumped-COREDLL
 `TerminateProcess`/`CloseHandle` wrappers. It did not locate the dumped
 kernel's exit body or establish live child-process behavior. The current
 parked CPU tree is not process-lifetime authority.
+- Bounded first-slice child `Exited` survivor source gate
+  ([receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)):
+  production-helper synthetic A→B controls move the original nonmodal B CPU,
+  saved context and blocked wait to the parent queue after A's accepted exit;
+  mismatched saved B ownership refuses before Kernel effects. A held parent
+  queue borrow refuses A's exit before effects, then the production publication
+  path returns a typed terminal error without a host panic. That error drops
+  the local A+B CPU tree; it is not a recovery hold. These controls do not run
+  guest MIPS or establish first-slice classifier reachability, full Stage 3 or
+  live-app behavior. No app or writable-mount run was made.
 - Bounded parked-survivor and saved-CPU-owner source gate
   ([receipt](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)):
   natural parked and requested-active stopped exits preserve the original
@@ -143,7 +153,7 @@ parked CPU tree is not process-lifetime authority.
   representative TID is not CPU authority. Four focused release controls
   passed; the combined sealed source passed release **2,144/0/10 ignored**
   and no-default **1,524/0/3 ignored**, each across 19 result blocks.
-  Earlier a09 passed on a superseded source. First-slice `Exited`, other
+  Earlier a09 passed on a superseded source. Other first-slice shapes, other
   active exits, requested parked siblings, already-exited cleanup, generic
   duplicate pruning, foreign CPUs without saved context and PC resumability
   remain unproved. No live app or writable-mount run was made.

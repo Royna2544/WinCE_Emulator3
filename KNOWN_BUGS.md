@@ -150,13 +150,24 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     - Modal pixels are neither prepared nor restored, and compatible retry is
       unproved; the modal-presence gate only refuses MessageBox/popup disposal
       ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)).
-    - First-slice child `Exited`, other active exits, requested parked
-      siblings, already-exited skips and generic duplicate pruning can still
-      lose nonmodal foreign CPU descendants. Foreign CPUs without saved
+    - The synthetic first-slice child `Exited` A→B source gate now hoists the
+      tested nonmodal foreign CPU tree, but real-MIPS classifier reachability,
+      other active exits, requested parked siblings, already-exited skips and
+      generic duplicate pruning remain unproved. Foreign CPUs without saved
       context and PC resumability remain unproved. The bounded
       [parked-survivor/saved-CPU-owner gate](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
-      covers only tested natural-parked and requested-active stopped exits.
+      covers only tested natural-parked and requested-active stopped exits;
+      [first-slice receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md).
       This source-audited risk is not an attributed live-app failure.
+    - If the parent parked queue is already borrowed, first-slice `Exited`
+      refuses before Kernel exit and the fallback returns terminal `Backend`
+      without a host panic, but it drops the local A+B CPU owners. This is
+      ownership loss on a borrow-invariant violation, not recoverable parking;
+      Stage 4 needs a machine-owned child owner. The separate `Completed`
+      path still uses unconditional `borrow_mut`. A custom framebuffer
+      reentering that queue while its mutable borrow is held is unsupported;
+      current framebuffer implementations do not do so. The first-slice
+      candidate also lacks a separate exact live primary-thread-birth gate.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.
