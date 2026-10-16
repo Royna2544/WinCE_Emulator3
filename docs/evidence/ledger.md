@@ -2208,7 +2208,7 @@ source. Its complete 19-block no-default suite passed **1,532/0/3 ignored**
 and release-feature suite **2,157/0/13 ignored**; all seven controls were
 counted green. Failed native-build and sandbox-loopback attempts remain
 separately hash-preserved. This does not lift the live save/restore fence.
-Three [current-source offline expected reds](../../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+Three [pre-deferral offline expected reds](../../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
 then reproduced the `Completed` held-queue `RefCell` panic/survivor loss,
 already-exited-A dropping B's original CPU, and admitted-child native-fault
 CPU loss. All three remain ignored; no app or writable mount was run.
@@ -2220,6 +2220,30 @@ normal-feature integration suites passed **908/0**, and serial no-feature
 verified against the receipt. This earlier seal predates the direct-map
 checkpoint guard and does not execute the ignored post-admission owner-loss
 reds, a full release-feature suite, or the mounted app.
+
+## Deferred CreateProcessW post-native source gate (2026-10-17, executed)
+
+The [bounded receipt](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+seals `src/emulator/unicorn.rs` SHA-256 `4BE7F3F2…EAB69D`. Successful guest
+`CreateProcessW` now stages the parent's nonzero return PC and defers child
+launch until after the native attempt in both non-live and live-pump modes.
+Non-live normal rotation may choose B before A resumes. On that source, the
+focused non-live selection passed **5/0**, and one two-mode file-view reseed
+control passed **1/0**. Complete release-feature and no-default suites each
+finished 19 result blocks: **2,161/0/13 ignored** and **1,532/0/3 ignored**,
+respectively. The file-view control checked canonical host mapping bytes
+after reseed, not a guest-visible post-lease read.
+
+Three ignored final-source reruns have distinct meanings:
+[attempt 16](../../evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
+and [attempt 17](../../evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
+exited 101 at unmet pre-deferral fixture preconditions, so neither
+reproduces nor repairs the old `Completed`/A-exit failures.
+[Attempt 18](../../evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
+exited 101 at the sole-child-CPU assertion after an ordinary native fault;
+that custody failure remains current. CPU slots, a callback-scoped
+machine-state port, live-pump later-slice survivor behavior, Stage 5 policy
+and live iNavi acceptance are unproved. No app or writable mount was run.
 
 ## Shipped iNavi process-launch REA check (2026-10-16, static artifact)
 

@@ -184,15 +184,18 @@ controlled fixture for the `Exited` classifier remains separate: the real-MIPS
 non-live A→B shape rotated and pruned A first, then returned B as `Parked` to
 the outer launch handler. At that seal only live-pump deferred the child;
 the current source defers successful `CreateProcessW` in both modes after
-staging the parent's return PC, pending its own final source/test gate.
-Live-pump still needs its own later-slice survivor fixture. Neither historical
-source gate grants live-app acceptance or a writable-mount run.
+staging the parent's return PC. Its bounded
+[source/test gate](../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+passed focused and complete release/no-default suites. Live-pump still needs
+its own later-slice survivor fixture; this gate does not provide O-T7 CPU
+custody, live-app acceptance or a writable-mount run.
 
 The [2026-10-17 pre-deferral rerun](../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
 confirmed three still-ignored offline reds on one earlier seal: `Completed`
 panicked on a held parent-queue borrow and stranded B; the already-exited-A
-skip dropped B; and a post-admission native error dropped the child's CPU. The checkpoint
-refusal's seven former ignores are now [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
+skip dropped B; and a post-admission native error dropped the child's CPU.
+The checkpoint refusal's seven former ignores are now
+[ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
 in complete release and no-default suites. This does not change the staging
 order: inventory and migrate the callback-scoped Kernel/framebuffer port by
 production reentry family (step 2), then admit CPU slots (step 3).
@@ -235,9 +238,10 @@ not an implemented owner. Stage its connected source cut in this order:
    destination before effects, then move original locators infallibly after
    accepted exit. Native/load/publication failures retain non-runnable CPU
    custody; a late post-effect failure quarantines it and reports partial
-   effects. Turn the held-borrow, native-error and real-MIPS A-exits/B-live
-   expected reds green, then cover `Completed`, numeric duplicate pruning,
-   framebuffer reentry and post-effect injection.
+   effects. Turn the current native-error red green; first rebuild or retire
+   the stale held-borrow and real-MIPS A-exits/B-live fixtures after checking
+   their post-native reachability. Then cover `Completed`, numeric duplicate
+   pruning, framebuffer reentry and post-effect injection.
 5. Separately prove controlled first-slice `Exited` classification, B's later
    PC resumability and the live-pump later-slice deferred-launch/exit route. Keep
    live iNavi/frame/footprint acceptance behind a newly sealed build and its

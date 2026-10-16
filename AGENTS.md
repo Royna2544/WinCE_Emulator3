@@ -257,21 +257,24 @@ passes 19-block no-default **1,532/0/3 ignored** and release-feature
 **2,157/0/13 ignored** with all seven former ignores now ordinary green tests.
 The [three pre-deferral offline reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
 reproduced `Completed` borrow/panic, already-exited A dropping B, and
-native-fault child CPU loss at that earlier seal; they remain ignored and do
-not establish current-source or live failure. Successful `CreateProcessW` in
-the current D: source now stages a nonzero parent return PC and launches the
-child post-native in both modes, pending a final source/test gate. Non-live
-rotation may select the child before the parent resumes. This is not a CPU
-slot/Task port or Stage 5 scheduling gate. The shipped PE
-[REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
+native-fault child CPU loss at that earlier seal. The later
+[deferred `CreateProcessW` source/test gate](evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+stages a nonzero parent return PC and launches the child post-native in both
+modes; non-live rotation may select the child before the parent resumes.
+Its 19-block release-feature **2,161/0/13 ignored** and no-default
+**1,532/0/3 ignored** suites passed. Ignored current-source reruns 16/17
+missed their old fixture preconditions, so they neither reproduced nor fixed
+those failures; rerun 18 still loses an admitted child's CPU on native fault.
+This is not a CPU slot/Task port, Stage 5 scheduling gate or live result. The
+shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
 identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
 analysis does not establish their runtime frequency. The
 dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
 and local CE6 source further distinguish loader completion, process waits,
 termination requests and accepted exit; the ROM kernel exit body is unknown.
-Repair of the reproduced `Completed` borrow/reentry failure, exact primary
-birth, other framebuffer reentry and exit paths remain open. No app or mount
-run was made.
+Current-route reachability of the earlier `Completed` borrow/reentry failure,
+exact primary birth, other framebuffer reentry and exit paths remain open.
+No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
 but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL

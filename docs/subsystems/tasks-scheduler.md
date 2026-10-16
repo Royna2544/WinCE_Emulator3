@@ -15,6 +15,16 @@ it is not general nested-send authority. The separate bounded
 passed release-feature 2,052/0/9 ignored and no-default 1,482/0/3 ignored;
 it does not convert GetMessage or modal waits into canonical frames.
 
+The bounded [deferred CreateProcessW source/test gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+passed focused non-live **5/0**, two-mode file-view reseed **1/0**, and
+19-block release-feature **2,161/0/13 ignored** and no-default **1,532/0/3
+ignored** suites on `unicorn.rs` SHA-256 `4BE7F3F2…EAB69D`. This removes the
+successful non-live immediate in-hook child run and stages the parent's
+nonzero return PC before post-native launch in both modes. The file-view
+control checks canonical host bytes, not a guest-visible post-lease read.
+Machine-owned CPU custody, callback-scoped machine-state access, live-pump
+later-slice survival, Stage 5 scheduling and live-app acceptance remain open.
+
 ## Responsibility and scope
 
 CeMachine owns scheduling across all AddressSpaces. Its machine-owned HandleTable is the target single canonical directory: Stage 2 introduces process-birth records and process-handle aliases there, and Stage 3 extends that same authority for Tasks/objects. The scheduler selects canonical tasks and continuation frames; a process CPU/native engine is an execution resource, not a second Task registry. Kernel shims and native hooks request transitions through that authority.
@@ -30,7 +40,7 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - Thread/process `DuplicateHandle` aliases now share canonical mutable records; O-K3 separately keeps execution-live births and exact registered Thread/Process wait pins after public-alias closure. The [E-26](../evidence/ledger.md) one-pass/twelve-ignored result and twelve explicit reds are historical pre-fix baselines. Later bounded [alias](../../evidence/stage3-alias-20261014/validation.receipt.md), [owner](../../evidence/stage3-owner-20261014/validation.receipt.md), [pin](../../evidence/stage3-pins-20261015/validation.receipt.md) and [wait-preparation](../../evidence/stage3-waitprep-20261015/validation.receipt.md) gates turned their named controls green, including the E-11 pin controls. Boot-main enumeration, full primary completion, public-ID exhaustion, machine clone relineage and generic object aliases are not thereby accepted.
 - [Scheduler](../../src/ce/scheduler.rs) stores waits through one [TaskWaitStore](../../src/ce/task_wait.rs), keyed by exact `Birth(ThreadBirthKey)` or explicit `LegacyUnknownTid(u32)` compatibility owner. Finite-Sleep waits carry an immutable `TaskFrameRef` and select only the exact active blocked frame; other waits preserve their compatibility selection/subscription behavior. Wait IDs are locators, not a second authority.
 - [UnicornMips](../../src/emulator/unicorn.rs) keeps a frame-addressed native register payload for finite Sleep alongside numerous compatibility pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
-- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. This is a source-path cut, not machine-owned CPU custody, a callback-scoped Kernel/Task port, Stage 5 scheduling or live-app acceptance.
+- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. This [bounded source-path gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md) is not machine-owned CPU custody, a callback-scoped Kernel/Task port, Stage 5 scheduling or live-app acceptance.
 - Persistent process engines are an experiment (ledger E-2) deferred to Stage 8; Task migration proceeds on the fresh-engine lifetime ([D-003](../DECISIONS.md)). Exact-scalar-key native snapshots are an initial migration, not full per-task native contexts.
 
 ### Bounded exact-birth wait-owner gate (source-tested)
@@ -679,6 +689,17 @@ CPU before the outer launch handler sees A's exited handle. Its
 it to the parent (queue length zero, expected one). This is a CPU-custody red,
 not merely a missing `initial_child_exit` trace label; it predates the current
 post-native launch cut and is not its validation result.
+
+At the final deferred-source seal, ignored reruns
+[16](../../evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
+and [17](../../evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
+exit 101 at stale fixture preconditions, before their old failure sites;
+neither proves those failures fixed or reproduced on the new route. Determine
+whether the `Completed` parent-queue borrow remains reachable after deferral,
+including a live-pump later slice, then rebuild or retire those controls.
+[Attempt 18](../../evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
+still exits 101 at the admitted child's sole-CPU-owner assertion after an
+ordinary native fault. All three remain ignored.
 
 Acceptance rechecks that historical red and the held-borrow red, plus the
 separately staged [injected first-slice native-error control](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md).
