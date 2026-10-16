@@ -2407,6 +2407,21 @@ they do not establish every exit route, Task/Frame authority, O-T7 CPU
 custody, live-pump later-slice survival or CE6 parity. No app, GPS or writable
 mount was run.
 
+## Bounded scheduler-block self-reentry fence (2026-10-17)
+
+The [sealed receipt](../../evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+records `unicorn.rs` SHA-256 `F93D7557…221277`. Its real-MIPS scheduler
+service with a **preseeded** busy flag refused with typed Backend/nonzero PC,
+unchanged selected PID/framebuffer and closed native owner. Complete
+loopback-enabled release-feature and no-default suites passed
+**2,176/0/10 ignored** and **1,539/0/2 ignored** over 19 blocks each; all
+three Unicorn feature checks exited 0. The initial sandboxed release attempt
+failed 45 socket/remote cases with Windows `10013` and remains preserved;
+the same sealed source passed when loopback was allowed. This guard catches
+scheduler-block self-reentry only. Natural or cross-hook reentry, modal
+partial-effects recovery, whole-attempt port and O-T7 CPU custody are open.
+No live app or mount run was made.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

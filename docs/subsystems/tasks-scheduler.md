@@ -786,6 +786,21 @@ restartable from the scalar PC. Port all callback families under one checked
 machine-state loan/leaf contract; use this first-touch witness as its positive
 fault control, not as proof of the port.
 
+The [current-source pointer delta audit](../../evidence/stage3-machine-port-inventory-20261017/findings.md)
+is separate from the historical 133/10 inventory above. On the later
+`unicorn.rs` source, the [scheduler-block fence](../../evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+replaced that callback's 19 direct Kernel and two separate framebuffer raw
+dereferences with one `SchedulerBlockStateLease` unsafe adapter. Its guard
+spans this callback only; the executed real-MIPS test **preseeded** busy and
+did not trigger natural nested reentry. Code/import/memory hooks still hold
+raw aliases, the outer mutable references span `emu_start`, and post-native
+A-to-B child execution still lacks the checked shared leaf. Source order
+permits a modal restore to publish pixels after consuming a wait before a
+hypothetical nested fault is observed; this gate did not execute that case.
+This is not a sound machine-state loan or Step 2 acceptance; share the busy
+flag with the next hook family and stage an actual cross-family witness before
+claiming broader exclusion.
+
 At that historical source seal, non-live-pump `CreateProcessW` ran the child
 immediately from the import hook at `:13569–13579`; its HLE dispatch loan had
 ended, but `run_pending_process_launches(&mut CeKernel)` retained a mutable

@@ -306,6 +306,10 @@ corrected and superseded; no live iNavi run followed. Current-route
 reachability of a nonempty `Completed` descendant publication conflict,
 general exit reconstruction, later-slice survivor behavior, other framebuffer
 reentry and exit paths remain open. The
+[bounded scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+passes a real-MIPS preseeded-busy control and 19-block release/no-default
+suites (**2,176/0/10** and **1,539/0/2 ignored**), but has no cross-hook
+exclusion or whole-attempt port. The
 [latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
 still loses its only CPU owner despite a live Kernel child. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)

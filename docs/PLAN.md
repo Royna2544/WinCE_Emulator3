@@ -241,6 +241,14 @@ not an implemented owner. Stage its connected source cut in this order:
    by source exclusivity rather than a callback counter; no production raw
    pointer, reentry or custody boundary has moved. Use it as a narrow
    fixture for the port, not as Step 2 acceptance.
+   The [bounded scheduler-block fence](../evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+   routes that callback's raw Kernel/framebuffer uses through a guarded
+   adapter. Its real-MIPS **preseeded** busy control stops with a typed error;
+   full release/no-default suites pass on the sealed source. Production's
+   flag only excludes scheduler-block self-reentry, not another hook family,
+   and no natural nested call was exercised. This does not promote Step 2;
+   next share the flag with an import/block cross-family witness, then finish
+   the connected whole-attempt port and modal partial-effects gates.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the entire native
    attempt, fallible short loans tied to exact attempt/leaf authority, and a
