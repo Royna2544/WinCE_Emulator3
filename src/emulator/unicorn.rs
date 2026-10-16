@@ -11371,10 +11371,10 @@ impl UnicornMips {
         let worker_exit_birth_import_hook = Rc::clone(&worker_exit_birth);
 
         // ── Import trap hook: CE API dispatch (all PCs in the import trap page) ──
-        // A successful live-pump CreateProcessW must return to guest code before
-        // its child is allowed to consume this Unicorn instance's native timeout.
-        // Otherwise the parent remains parked on the import trap and replays the
-        // launch on the next slice.
+        // A successful CreateProcessW stops at its import return in both run
+        // modes. The child is loaded after this native attempt closes but
+        // before the parent executes another guest instruction; this also
+        // prevents an in-hook child run through raw Kernel/framebuffer aliases.
         let deferred_process_launch = Rc::new(Cell::new(false));
         let deferred_process_launch_hook = Rc::clone(&deferred_process_launch);
         let pseudo_self_exit_intent = Rc::new(Cell::new(None::<StoppedPseudoSelfExit>));
@@ -13566,36 +13566,6 @@ impl UnicornMips {
                         && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
                         && result != 0
                 });
-                if successful_create_process && !live_pump {
-                    let sync_result = run_pending_process_launches(
-                        memory.uc,
-                        unsafe { &mut *kernel_ptr },
-                        native_owner_pid,
-                        &sealed_host_write_guard_import,
-                        unsafe { &mut *framebuffer_ptr },
-                        limits,
-                        &process_dll_search_dirs,
-                        &parked_child_processes_hook,
-                    )
-                    .and_then(|()| {
-                        sync_file_mapping_views_to_unicorn_guarded(
-                            memory.uc,
-                            unsafe { &*kernel_ptr },
-                            native_owner_pid,
-                            &sealed_host_write_guard_import,
-                        )
-                    });
-                    if let Err(err) = sync_result {
-                        let err = match memory.uc.emu_stop() {
-                            Ok(()) => err,
-                            Err(stop_err) => Error::Backend(format!(
-                                "immediate process view sync failed: {err}; stop native attempt: {stop_err:?}"
-                            )),
-                        };
-                        *immediate_process_sync_error_hook.borrow_mut() = Some(err);
-                        return;
-                    }
-                }
                 if let Some(trap) = trap.as_ref() {
                     let trace_import =
                         should_trace_import_by_default(trap) || import_trace_all_enabled;
@@ -13758,12 +13728,37 @@ impl UnicornMips {
                 if let Some(v1) = import_return.v1 {
                     let _ = memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1));
                 }
-                if successful_create_process && live_pump {
-                    let _ = memory
-                        .uc
-                        .reg_write(RegisterMIPS::PC, u64::from(raw_caller_pc));
-                    deferred_process_launch_hook.set(true);
-                    let _ = memory.uc.emu_stop();
+                // CreateProcess has published the child's handle and output
+                // words, but the parent must not execute its next guest
+                // instruction before child loading finishes. End this native
+                // attempt at the import return; both run modes use the
+                // post-native launch and file-view synchronization path.
+                // In particular, no child run may borrow Kernel/framebuffer
+                // from this parent import callback's raw hook pointers.
+                if successful_create_process {
+                    let stop = (|| -> Result<()> {
+                        if raw_caller_pc == 0 {
+                            return Err(Error::Backend(
+                                "CreateProcessW has no nonzero import return PC".to_owned(),
+                            ));
+                        }
+                        memory
+                            .uc
+                            .reg_write(RegisterMIPS::PC, u64::from(raw_caller_pc))
+                            .map_err(|err| Error::Backend(format!(
+                                "stage CreateProcessW return PC: {err:?}"
+                            )))?;
+                        memory.uc.emu_stop().map_err(|err| {
+                            Error::Backend(format!("stop CreateProcessW native attempt: {err:?}"))
+                        })
+                    })();
+                    match stop {
+                        Ok(()) => deferred_process_launch_hook.set(true),
+                        Err(error) => {
+                            *immediate_process_sync_error_hook.borrow_mut() = Some(error);
+                            let _ = memory.uc.emu_stop();
+                        }
+                    }
                     return;
                 }
                 if pending_wndproc_returns_hook.borrow().is_empty() {
@@ -72093,6 +72088,16 @@ mod unicorn_tests {
         bytes
     }
 
+    fn tiny_mips_create_process_then_spin_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_create_process_then_return_pe();
+        // Preserve the real ordinal-493 IAT call and its PROCESS_INFORMATION
+        // output, but leave the creator live after the import return.
+        write_vec_u32(&mut bytes, 0x200 + 18 * 4, 0x2411_55aa); // addiu s1,zero,0x55aa
+        write_vec_u32(&mut bytes, 0x200 + 19 * 4, 0x1000_ffff); // safety spinner
+        write_vec_u32(&mut bytes, 0x200 + 20 * 4, 0);
+        bytes
+    }
+
     fn tiny_mips_create_process_then_pseudo_exit_pe() -> Vec<u8> {
         let mut bytes = tiny_mips_create_process_then_return_pe();
         // Keep the real CreateProcessW IAT call above, but follow it with the
@@ -80139,164 +80144,269 @@ mod unicorn_tests {
 
     #[test]
     fn public_file_view_store_survives_deferred_create_process_reseed() -> crate::Result<()> {
-        const WRITTEN: u32 = 0xaabb_ccdd;
-        const SECOND_PAGE: u32 = 0x5566_7788;
+        fn run_case(live_pump: bool) -> crate::Result<()> {
+            const WRITTEN: u32 = 0xaabb_ccdd;
+            const SECOND_PAGE: u32 = 0x5566_7788;
+            let test_root = create_process_timeout_test_root();
+            let _cleanup = TestDirectoryCleanup(test_root.clone());
+            std::fs::create_dir_all(&test_root).unwrap();
+            let parent_path = test_root.join("parent.exe");
+            let child_path = test_root.join("child.exe");
+
+            let view_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
+            let create_trap = view_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
+            let mut bytes = tiny_mips_spinner_pe();
+            write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
+            let words = [
+                0x3c19_0000 | (view_trap >> 16),    // lui t9,MapViewOfFile trap high
+                0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,trap low
+                0x0320_f809,                        // jalr t9
+                0,                                  // delay-slot nop
+                0x0040_8021,                        // addu s0,v0,zero: retain view base
+                0x3c09_aabb,                        // lui t1,0xaabb
+                0x3529_ccdd,                        // ori t1,t1,0xccdd
+                0xae09_0000,                        // sw t1,0(s0): fault-map page 0
+                0x8e0b_0000,                        // lw t3,0(s0): guest pre-import witness
+                0x3c19_0000 | (create_trap >> 16),  // lui t9,CreateProcessW trap high
+                0x3739_0000 | (create_trap & 0xffff), // ori t9,t9,trap low
+                0x0320_f809,                        // jalr t9: deferred launch and re-seed
+                0,                                  // delay-slot nop
+                0x1000_ffff,                        // bounded safety spinner
+                0,
+            ];
+            for (index, word) in words.into_iter().enumerate() {
+                write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+            }
+            std::fs::write(&parent_path, &bytes).unwrap();
+            std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+
+            let mut kernel = phase1_kernel("parent.exe")?;
+            kernel.set_process_module_base(0x0040_0000);
+            kernel.set_process_module_path("\\Test\\parent.exe".to_owned());
+            kernel.set_process_module_host_path(parent_path.clone());
+            let birth = kernel.current_process_birth_key().expect("boot birth");
+            let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
+            let image = crate::pe::PeImage::inspect(&parent_path)?;
+            let mut cpu = super::UnicornMips::new()?;
+            cpu.load_pe_image(&image)?;
+            let entry = cpu.entry.expect("fixture PE entry");
+            for (address, ordinal, name) in [
+                (
+                    view_trap,
+                    crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE,
+                    "MapViewOfFile",
+                ),
+                (
+                    create_trap,
+                    crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W,
+                    "CreateProcessW",
+                ),
+            ] {
+                cpu.import_traps
+                    .insert(crate::emulator::imports::ImportTrap {
+                        address,
+                        module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
+                        module_name: "COREDLL.dll".to_owned(),
+                        ordinal: Some(ordinal),
+                        name: Some(name.to_owned()),
+                        iat_va: 0,
+                    });
+            }
+            super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
+
+            let sp = cpu.stack_top.expect("loaded guest stack") - 0x1000;
+            let application_ptr = sp + 0x100;
+            let process_information_ptr = sp + 0x200;
+            let application = "child.exe"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            write_guest_fixture_stack_bytes(&cpu, &mut kernel, application_ptr, &application);
+            for (index, value) in [0, 0, 0, 0, 0, process_information_ptr]
+                .into_iter()
+                .enumerate()
+            {
+                write_guest_fixture_stack_bytes(
+                    &cpu,
+                    &mut kernel,
+                    sp + 16 + index as u32 * 4,
+                    &value.to_le_bytes(),
+                );
+            }
+            let mut regs = super::MipsGuestContext::zero();
+            regs.regs[4] = mapping_handle;
+            regs.regs[29] = sp;
+            cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
+            stamp_synthetic_saved_context(&mut cpu, &kernel);
+            cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
+            let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+            let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 64,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: Some(entry + 0x10),
+                    live_pump: false,
+                },
+            );
+            first.result?;
+            assert_eq!(first.report.start_process_birth(), Some(birth));
+            assert_eq!(first.report.end_process_birth(), Some(birth));
+            let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
+            assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
+            assert!(cpu.native_engine_identity_for_test().is_none());
+            assert!(kernel.memory.shared_mapping_write(
+                mapping_handle,
+                0x1000,
+                &SECOND_PAGE.to_le_bytes()
+            ));
+            // CreateProcessW's a0 differs from MapViewOfFile's a0, while v0 still
+            // carries the view base for the first guest instruction in slice two.
+            cpu.saved_context.as_mut().expect("saved parent").regs.regs[4] = application_ptr;
+
+            let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 64,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump,
+                },
+            );
+            second.result?;
+            assert_eq!(second.report.start_process_birth(), Some(birth));
+            assert!(
+                kernel
+                    .recent_process_ops()
+                    .iter()
+                    .any(|record| record.op == "CreateProcessWQueued")
+            );
+            assert!(
+                cpu.parked_child_process_count() > 0
+                    || kernel.current_process_id() != birth.process_id()
+            );
+            let mut canonical = [0; 4];
+            assert!(
+                kernel
+                    .memory
+                    .shared_mapping_read(mapping_handle, 0, &mut canonical)
+            );
+            assert_eq!(canonical, WRITTEN.to_le_bytes());
+            assert!(
+                kernel
+                    .memory
+                    .shared_mapping_read(mapping_handle, 0x1000, &mut canonical)
+            );
+            assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
+            assert!(cpu.native_engine_identity_for_test().is_none());
+            Ok(())
+        }
+
+        run_case(true)?;
+        run_case(false)
+    }
+
+    #[test]
+    fn non_live_create_process_defers_child_before_parent_resume() -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
         std::fs::create_dir_all(&test_root).unwrap();
         let parent_path = test_root.join("parent.exe");
-        let child_path = test_root.join("child.exe");
-
-        let view_trap = crate::emulator::imports::IMPORT_TRAP_BASE;
-        let create_trap = view_trap + crate::emulator::imports::IMPORT_TRAP_STRIDE;
-        let mut bytes = tiny_mips_spinner_pe();
-        write_vec_u32(&mut bytes, 0x178 + 8, 0x200);
-        let words = [
-            0x3c19_0000 | (view_trap >> 16),    // lui t9,MapViewOfFile trap high
-            0x3739_0000 | (view_trap & 0xffff), // ori t9,t9,trap low
-            0x0320_f809,                        // jalr t9
-            0,                                  // delay-slot nop
-            0x0040_8021,                        // addu s0,v0,zero: retain view base
-            0x3c09_aabb,                        // lui t1,0xaabb
-            0x3529_ccdd,                        // ori t1,t1,0xccdd
-            0xae09_0000,                        // sw t1,0(s0): fault-map page 0
-            0x8e0b_0000,                        // lw t3,0(s0): guest pre-import witness
-            0x3c19_0000 | (create_trap >> 16),  // lui t9,CreateProcessW trap high
-            0x3739_0000 | (create_trap & 0xffff), // ori t9,t9,trap low
-            0x0320_f809,                        // jalr t9: deferred launch and re-seed
-            0,                                  // delay-slot nop
-            0x1000_ffff,                        // bounded safety spinner
-            0,
-        ];
-        for (index, word) in words.into_iter().enumerate() {
-            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
-        }
-        std::fs::write(&parent_path, &bytes).unwrap();
+        let child_path = test_root.join("survivor.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
         std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
 
         let mut kernel = phase1_kernel("parent.exe")?;
-        kernel.set_process_module_base(0x0040_0000);
-        kernel.set_process_module_path("\\Test\\parent.exe".to_owned());
         kernel.set_process_module_host_path(parent_path.clone());
-        let birth = kernel.current_process_birth_key().expect("boot birth");
-        let mapping_handle = kernel.handles.create_file_mapping(None, 0x2000, 0x04, None);
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
         let image = crate::pe::PeImage::inspect(&parent_path)?;
+        assert!(matches!(
+            image.imports[0].imports[0].import,
+            crate::pe::ImportBy::Ordinal(493)
+        ));
         let mut cpu = super::UnicornMips::new()?;
         cpu.load_pe_image(&image)?;
-        let entry = cpu.entry.expect("fixture PE entry");
-        for (address, ordinal, name) in [
-            (
-                view_trap,
-                crate::ce::coredll_ordinals::ORD_MAP_VIEW_OF_FILE,
-                "MapViewOfFile",
-            ),
-            (
-                create_trap,
-                crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W,
-                "CreateProcessW",
-            ),
-        ] {
-            cpu.import_traps
-                .insert(crate::emulator::imports::ImportTrap {
-                    address,
-                    module_kind: crate::emulator::imports::ImportModuleKind::Coredll,
-                    module_name: "COREDLL.dll".to_owned(),
-                    ordinal: Some(ordinal),
-                    name: Some(name.to_owned()),
-                    iat_va: 0,
-                });
-        }
-        super::refresh_import_trap_page_blob(&mut cpu.mapped_blobs, &cpu.import_traps);
-
-        let sp = cpu.stack_top.expect("loaded guest stack") - 0x1000;
-        let application_ptr = sp + 0x100;
-        let process_information_ptr = sp + 0x200;
-        let application = "child.exe"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .flat_map(u16::to_le_bytes)
-            .collect::<Vec<_>>();
-        write_guest_fixture_stack_bytes(&cpu, &mut kernel, application_ptr, &application);
-        for (index, value) in [0, 0, 0, 0, 0, process_information_ptr]
-            .into_iter()
-            .enumerate()
-        {
-            write_guest_fixture_stack_bytes(
-                &cpu,
-                &mut kernel,
-                sp + 16 + index as u32 * 4,
-                &value.to_le_bytes(),
-            );
-        }
-        let mut regs = super::MipsGuestContext::zero();
-        regs.regs[4] = mapping_handle;
-        regs.regs[29] = sp;
-        cpu.saved_context = Some(super::SavedCpuContext { pc: entry, regs });
-        stamp_synthetic_saved_context(&mut cpu, &kernel);
-        cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
+        let entry = cpu.entry.expect("parent entry");
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
 
         let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
-            super::UnicornRunLimits {
-                instruction_limit: 64,
-                wall_clock_limit_ms: 500,
-                stop_pc: Some(entry + 0x10),
-                live_pump: false,
-            },
+            limits,
         );
         first.result?;
-        assert_eq!(first.report.start_process_birth(), Some(birth));
-        assert_eq!(first.report.end_process_birth(), Some(birth));
-        let view_base = cpu.saved_context.as_ref().expect("import result").regs.regs[2];
-        assert_ne!(view_base, 0, "public MapViewOfFile returned a view");
-        assert!(cpu.native_engine_identity_for_test().is_none());
-        assert!(kernel.memory.shared_mapping_write(
-            mapping_handle,
-            0x1000,
-            &SECOND_PAGE.to_le_bytes()
-        ));
-        // CreateProcessW's a0 differs from MapViewOfFile's a0, while v0 still
-        // carries the view base for the first guest instruction in slice two.
-        cpu.saved_context.as_mut().expect("saved parent").regs.regs[4] = application_ptr;
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        let saved = cpu.saved_context.as_ref().expect("parent return context");
+        assert_eq!(saved.pc, entry + 18 * 4, "stop at import return PC");
+        assert_eq!(saved.regs.regs[2], 1, "CreateProcessW BOOL return");
+        assert_eq!(saved.regs.regs[17], 0, "parent has not run past return");
+
+        let queued: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessWQueued")
+            .collect();
+        assert_eq!(queued.len(), 1, "one guest CreateProcessW call");
+        let launch = queued[0];
+        let expected = [
+            launch.process_handle.expect("process handle"),
+            launch.thread_handle.expect("thread handle"),
+            launch.process_id.expect("child PID"),
+            launch.thread_id.expect("child TID"),
+        ];
+        let process_info_ptr = saved.regs.regs[29] + 0x80;
+        let page = kernel
+            .memory
+            .private_page_pin(parent_birth, process_info_ptr & !0xfff)
+            .expect("parent PROCESS_INFORMATION page");
+        let mut output = [0_u8; 16];
+        page.read_bytes((process_info_ptr & 0xfff) as usize, &mut output)
+            .expect("read PROCESS_INFORMATION after native close");
+        let actual = std::array::from_fn(|index| {
+            u32::from_le_bytes(output[index * 4..index * 4 + 4].try_into().unwrap())
+        });
+        assert_eq!(actual, expected, "parent-visible process information");
+        assert!(!kernel.has_pending_process_launches());
+        assert!(kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessChildParked" && record.process_id == Some(expected[2])
+        }));
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
 
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
-            super::UnicornRunLimits {
-                instruction_limit: 64,
-                wall_clock_limit_ms: 500,
-                stop_pc: None,
-                live_pump: true,
-            },
+            limits,
         );
         second.result?;
-        assert_eq!(second.report.start_process_birth(), Some(birth));
-        assert!(
+        assert_eq!(second.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            cpu.saved_context
+                .as_ref()
+                .expect("resumed parent")
+                .regs
+                .regs[17],
+            0x55aa,
+            "parent executed its next instruction after child publication"
+        );
+        assert_eq!(
             kernel
                 .recent_process_ops()
                 .iter()
-                .any(|record| record.op == "CreateProcessWQueued")
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1,
+            "parent must not replay CreateProcessW"
         );
-        assert!(
-            cpu.parked_child_process_count() > 0
-                || kernel.current_process_id() != birth.process_id()
-        );
-        let mut canonical = [0; 4];
-        assert!(
-            kernel
-                .memory
-                .shared_mapping_read(mapping_handle, 0, &mut canonical)
-        );
-        assert_eq!(canonical, WRITTEN.to_le_bytes());
-        assert!(
-            kernel
-                .memory
-                .shared_mapping_read(mapping_handle, 0x1000, &mut canonical)
-        );
-        assert_eq!(canonical, SECOND_PAGE.to_le_bytes());
-        assert!(cpu.native_engine_identity_for_test().is_none());
         Ok(())
     }
 
@@ -84893,8 +85003,7 @@ mod unicorn_tests {
         let exited: Vec<_> = trace
             .iter()
             .filter(|record| {
-                record.op == "CreateProcessExited"
-                    && record.process_id == Some(first.process_id)
+                record.op == "CreateProcessExited" && record.process_id == Some(first.process_id)
             })
             .collect();
         assert_eq!(exited.len(), 1, "A's decoded exit must commit exactly once");
@@ -84911,7 +85020,11 @@ mod unicorn_tests {
                     && record.application.as_deref() == Some("survivor.exe")
             })
             .collect();
-        assert_eq!(queued_survivors.len(), 1, "guest IAT call must queue B once");
+        assert_eq!(
+            queued_survivors.len(),
+            1,
+            "guest IAT call must queue B once"
+        );
         let survivor_pid = queued_survivors[0].process_id.expect("survivor PID");
         let survivor_handle = queued_survivors[0].process_handle.expect("survivor handle");
         let survivor_tid = queued_survivors[0].thread_id.expect("survivor TID");
@@ -84920,7 +85033,11 @@ mod unicorn_tests {
             .process_birth_key_for_handle(survivor_handle)
             .expect("survivor exact birth");
         assert_ne!(survivor_birth, first_birth);
-        assert!(kernel.handles.process_execution_live_by_birth(survivor_birth));
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(survivor_birth)
+        );
         assert!(kernel.handles.thread_execution_live_by_id(survivor_tid));
         assert_eq!(
             kernel.handles.thread_creation_owner_by_id(survivor_tid),
@@ -84969,7 +85086,10 @@ mod unicorn_tests {
         assert!(survivor.cpu.last_debug_snapshot().is_some());
         assert!(survivor.cpu.native_engine_identity_for_test().is_none());
         drop(retained);
-        assert!(!attempt.is_err(), "Completed must not panic on held parent borrow");
+        assert!(
+            !attempt.is_err(),
+            "Completed must not panic on held parent borrow"
+        );
         attempt.expect("no host panic")?;
         Ok(())
     }
