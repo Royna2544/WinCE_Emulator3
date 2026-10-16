@@ -239,6 +239,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      red with a green real-MIPS post-native first-touch/fault witness. Do not
      infer general VM/file-view cleanup or a runnable leaf permit from 3a;
      the owner-page resource audit records the currently missing exit path.
+     Separately, test and repair the
+     [process-exit VM/view leak](KNOWN_BUGS.md#open-issues) with exact-birth
+     cleanup, including legacy PID-only view ambiguity; do not fold it into
+     3a or mistake slot retirement for Kernel allocation retirement.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import

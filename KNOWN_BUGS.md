@@ -4,6 +4,20 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Process exit leaves general private VM and mapped-file views behind:**
+  exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
+  heap/stack ranges, writable-image runs and heap state, but not ordinary
+  private `VirtualAlloc` records or `FileViewSlab` allocations. It also does
+  not remove `FileMappingObject.views` from the
+  [handle table](src/ce/object.rs#L1756). Explicit
+  [UnmapViewOfFile](src/ce/coredll.rs#L31147) releases a public birth-keyed
+  view and its shared slab (or a legacy view's private allocation), whereas
+  [CloseHandle](src/ce/kernel.rs#L6865) preserves a mapping object with live
+  views. [Legacy injected/DIB views](src/ce/object.rs#L225) can carry only
+  a numeric PID, without a process birth, so a future exit sweep must not
+  attribute them to a recycled PID. Make exact-birth view/private-VM cleanup
+  a separate tested cut; Cut 3a CPU quarantine neither causes nor repairs
+  this Kernel lifetime gap, and must not claim general VM/view release.
 - **Intermittent `0xc0000005` under the parallel default harness:** the
   release-feature native-failure broad attempt 02 reported
   `guest_thread_stack_tests::direct_visible_message_payload_windowpos_matches_raw_and_mips_reads`
