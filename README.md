@@ -105,7 +105,14 @@ remote-control HTTP/WebSocket surface.
   now refuses affected MessageBox/popup state before stopped-exit effects in
   three red-to-green source controls. The same sealed source passed release
   **2,137/0/10 ignored** and no-default **1,524/0/3 ignored**; modal-pixel
-  restoration, nonmodal descendant ownership and live acceptance remain open.
+  restoration and live acceptance remain open. The later bounded
+  [parked-survivor/saved-CPU-owner gate](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+  preserves tested nonmodal foreign CPU trees on natural-parked and
+  requested-active stopped exit and refuses invalid saved-thread ownership
+  before effects. Its combined sealed source passed release **2,144/0/10
+  ignored** and no-default **1,524/0/3 ignored** across 19 blocks each.
+  Other exit paths, no-context/PC resumability and live-app proof remain open;
+  no new app or mount run was made.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace
