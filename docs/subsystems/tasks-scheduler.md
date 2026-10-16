@@ -22,7 +22,9 @@ ignored** suites on `unicorn.rs` SHA-256 `4BE7F3F2…EAB69D`. This removes the
 successful non-live immediate in-hook child run and stages the parent's
 nonzero return PC before post-native launch in both modes. The file-view
 control checks canonical host bytes, not a guest-visible post-lease read.
-Machine-owned CPU custody, callback-scoped machine-state access, live-pump
+That deferred-launch gate alone did not provide CPU custody. A later narrow
+Cut 3a non-runnable fault quarantine passes focused real-MIPS controls, while
+callback-scoped machine-state access, runnable/parked custody, live-pump
 later-slice survival, Stage 5 scheduling and live-app acceptance remain open.
 The subsequent direct-MIPS first-slice `Completed` empty-descendant cut has a
 [stamped red](../../evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log):
@@ -33,8 +35,9 @@ still lose CPU custody after committed exit effects. The
 [bounded receipt](../../evidence/stage3-completed-borrow-20261017/validation.receipt.md)
 seals focused **1/0**, 19-block release **2,162/0/11 ignored**, and
 no-default **1,532/0/3 ignored** on `unicorn.rs` SHA-256
-`0DCF5C5D…136D06`. A sealed-source ignored native-fault rerun remains red
-(exit 101). The old two ignored held-borrow/A→B fixtures were retired as
+`0DCF5C5D…136D06`. A sealed-source ignored native-fault rerun was red
+(exit 101) at that earlier seal; the later Cut 3a focused replacement is
+green. The old two ignored held-borrow/A→B fixtures were retired as
 stale after missing post-deferral preconditions; their receipts remain.
 The subsequent [test-only live-pump fixed-stack witness](../../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
 executes real-MIPS first-touch `SW`/`LW` in both explicit-PC/global-hook and
@@ -60,7 +63,7 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - Thread/process `DuplicateHandle` aliases now share canonical mutable records; O-K3 separately keeps execution-live births and exact registered Thread/Process wait pins after public-alias closure. The [E-26](../evidence/ledger.md) one-pass/twelve-ignored result and twelve explicit reds are historical pre-fix baselines. Later bounded [alias](../../evidence/stage3-alias-20261014/validation.receipt.md), [owner](../../evidence/stage3-owner-20261014/validation.receipt.md), [pin](../../evidence/stage3-pins-20261015/validation.receipt.md) and [wait-preparation](../../evidence/stage3-waitprep-20261015/validation.receipt.md) gates turned their named controls green, including the E-11 pin controls. Boot-main enumeration, full primary completion, public-ID exhaustion, machine clone relineage and generic object aliases are not thereby accepted.
 - [Scheduler](../../src/ce/scheduler.rs) stores waits through one [TaskWaitStore](../../src/ce/task_wait.rs), keyed by exact `Birth(ThreadBirthKey)` or explicit `LegacyUnknownTid(u32)` compatibility owner. Finite-Sleep waits carry an immutable `TaskFrameRef` and select only the exact active blocked frame; other waits preserve their compatibility selection/subscription behavior. Wait IDs are locators, not a second authority.
 - [UnicornMips](../../src/emulator/unicorn.rs) keeps a frame-addressed native register payload for finite Sleep alongside numerous compatibility pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
-- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. This [bounded source-path gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md) is not machine-owned CPU custody, a callback-scoped Kernel/Task port, Stage 5 scheduling or live-app acceptance.
+- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. That [bounded source-path gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md) alone did not provide machine-owned CPU custody. Cut 3a now retains an admitted, faulted child CPU non-runnable after native sync/finish; it does not provide a callback-scoped Kernel/Task port, runnable custody, Stage 5 scheduling or live-app acceptance.
 - Persistent process engines are an experiment (ledger E-2) deferred to Stage 8; Task migration proceeds on the fresh-engine lifetime ([D-003](../DECISIONS.md)). Exact-scalar-key native snapshots are an initial migration, not full per-task native contexts.
 
 ### Bounded exact-birth wait-owner gate (source-tested)
@@ -519,8 +522,10 @@ also release mutable parent queue/frame and machine-state loans before B runs.
 
 ##### Candidate O-T7 slot and lease contract (for review; no Rust API exists)
 
-One machine-owned `CpuCustody` directory would hold each CPU payload exactly
-once. A proposed `CpuSlotKey` contains machine/checkpoint lineage, a slot
+The full proposed machine-owned directory would hold each runnable/parked CPU
+payload exactly once. Cut 3a implements only a `CpuCustody` holding directory
+for faulted non-runnable children, not this slot/lease contract. A proposed
+`CpuSlotKey` contains machine/checkpoint lineage, a slot
 index and a checked generation; generation exhaustion fails closed rather than
 wrapping. Each slot freezes its `ProcessBirthKey` at admission and retains the
 CPU payload plus the process-image/launch metadata now carried by
@@ -657,21 +662,23 @@ even if CPU owner-loss reds turn green. In any remaining nested in-hook path,
 A's native owner may remain open while its callback is paused, but only the
 checked leaf permit grants guest execution to B.
 
-##### Cut 3a quarantine resource lifetime (review answer; not implemented)
+##### Cut 3a quarantine resource lifetime (focused source cut; final broad pending)
 
-The first CPU-custody production cut can be narrower than wholesale parked-
-tree conversion: the main run loop owns a directory that initially accepts
+The first CPU-custody production cut is narrower than wholesale parked-tree
+conversion: the main run loop owns a directory that accepts
 only exact-birth, stopped, **non-runnable** child payloads from a genuine
 post-admission native error. This is not a second runnable queue. A pre-CPU
 DLL/PE/setup error still returns the original pending launch for retry;
-[`run_pending_process_launches`](../../src/emulator/unicorn.rs#L20255) currently
-mixes those cases with the native run in one `child_result` closure, whose
-`Err` arm drops the local B CPU. Split that ownership result before admitting
-anything. During migration each original CPU must be reachable in exactly
-one owner, custody or the legacy parked tree. Every admitted slot must be
+[`run_pending_process_launches`](../../src/emulator/unicorn.rs) now reserves
+exact-birth slot capacity before constructing B and separates pre-CPU retry
+from post-admission native-error ownership. The original faulted B CPU moves
+to quarantine, never the legacy parked tree. Every quarantined slot is
 reported in status/debug, counted by checkpoint save/restore refusal, and
-retired only after accepted exact-birth exit; a `TerminateProcess` request
-alone is not completion. The leaf permit, runnable locators and public-run
+retired only after checked accepted exact-birth exit; a `TerminateProcess`
+request alone is not completion. The accepted-exit witness carries birth only,
+so production trusts the same Kernel instance used for preflight/completion;
+it is not an independent machine-lineage proof. The leaf permit, runnable
+locators and public-run
 bypass removal belong to subsequent connected cuts. The callback-scoped
 Kernel/framebuffer port remains separate Step 2 work; this quarantine does
 not make the current raw aliases sound.
@@ -681,20 +688,22 @@ obligations are:
 
 | Resource after B's ordinary native fault | Lifetime / exact-birth exit path |
 | --- | --- |
-| B's original `UnicornMips` loader `MemoryMap`, mapped blobs, module/import metadata, `owned_process_launch`, pending/wait records and fault snapshot | The directory must retain the same payload, poisoned and non-runnable. After [checked Kernel completion](../../src/ce/kernel.rs#L3364), retire B's exact slot and drop its CPU-local data; first hoist any foreign-birth parked descendants rather than dropping their original CPUs. [Parked prune](../../src/emulator/unicorn.rs#L6240) demonstrates the existing preflight/seal/hoist order, but does not yet consume custody slots. On preflight refusal the slot remains. |
+| B's original `UnicornMips` loader `MemoryMap`, mapped blobs, module/import metadata, `owned_process_launch`, pending/wait records and fault snapshot | The directory retains the same payload, poisoned and non-runnable. After [checked Kernel completion](../../src/ce/kernel.rs), the consumer retires B's exact slot and drops its CPU-local data; it preflights and hoists foreign-birth parked descendants rather than dropping their original CPUs. On preflight refusal the slot remains. Mapped-blob byte counts are observable but are not measured resident host memory. |
 | Native Unicorn handle, hooks, mapping pins and resumable native snapshot | The [private-error abort](../../src/emulator/unicorn.rs#L15265) poisons and clears the saved continuation; [fresh-owner close](../../src/emulator/native_engine.rs#L680) destroys native maps/hooks before releasing callback boxes and pins, publishing no native snapshot. The quarantine therefore must not claim a live native engine or a recoverable PC. Opt-in persistent-owner semantics are not established by this proof. |
 | Canonical B-birth fixed heap/stack pages, writable-image runs and heap state | These live in `CeKernel::memory`, not merely in B's CPU. [Accepted exact-birth completion](../../src/ce/kernel.rs#L3555) retires those three families after the execution pin is released. Dropping a CPU without that transition is not VM cleanup. |
 | General private VM and file-mapping view registrations | No complete process-exit release path exists yet: [completion](../../src/ce/kernel.rs#L3555) does not retire these families, while explicit [UnmapViewOfFile](../../src/ce/coredll.rs#L31147) removes exact-birth public view records and `CloseHandle` [preserves live views](../../src/ce/kernel.rs#L6865). Normal public views are birth-keyed pointer-backed slabs; legacy injected/DIB views can have no birth. A first-slice fixed-stack fault with no such views may gate the narrow 3a ownership result, but full resource-release parity needs separate exact-birth cleanup and tests. The private-error abort also does not prove legacy file-view writeback immediately before a fault. |
 
-The proposed green replacement witness runs guest A's real `CreateProcessW`,
-executes B's fixed-stack first touch followed by a native fault, and checks
-one exact B-birth quarantined slot, zero B in the legacy parked tree, closed
-native owner, live unsignaled B in Kernel and no runnable continuation. It
-replaces the existing ignored direct-helper native-fault red **only in the
-same sealed cut as the producer and exit/checkpoint/observability consumers**;
-it must not be added as another ignored test. Neither this witness nor the
-directory alone proves the Step 2 port, complete view/VM cleanup, full O-T7
-leaf authority or live-app acceptance.
+The ordinary real-MIPS replacement witness now runs guest A's real
+`CreateProcessW` with a staged return after native sync/finish, executes B's
+fixed-stack `SW`/`LW` first touch followed by `READ_UNMAPPED`, and checks one
+exact B-birth quarantined slot, zero B in the legacy parked tree, closed
+native owner, live unsignaled B and no runnable continuation. A termination
+request leaves that state intact; accepted exit retires the slot and fixed
+stack. Focused debug/release controls pass. The pre-seal a03 release broad
+**2,183/0/9 ignored** is development-only; final sealed broad/no-default
+receipt and counts are pending. Neither this witness nor the directory proves
+the Step 2 port, complete view/VM cleanup, full O-T7 leaf authority, measured
+RSS retention or live-app acceptance. No app or writable-mount run was made.
 
 ##### Callback-scoped machine-state port cut (proposed, not implemented)
 
@@ -786,12 +795,15 @@ queue can be independently correct before this port, and its retry/tail-order
 controls should precede nested execution. A memory-fault-only port cut cannot
 make the normal attempt sound while other raw hooks and the caller's mutable
 references remain. Conversely, a complete port can establish machine-state
-loan safety before CPU slots, but cannot preserve the admitted child currently
-dropped on ordinary native error or nonempty `Completed` publication conflict.
-Those require the connected O-T7 custody cut, its active-leaf run gate and
-non-runnable quarantine; the existing ignored native-fault red must stay red
-until that ownership changes. No callback port, selector token, custody slot
-or exit event fence described here exists in production source today.
+loan safety before runnable CPU slots, but by itself does not preserve an
+admitted child on ordinary native error or nonempty `Completed` publication
+conflict. Cut 3a now preserves the first bounded fault shape only.
+The nonempty publication conflict still requires the connected O-T7 custody
+cut and active-leaf run gate. The earlier ignored native-fault red has an
+ordinary real-MIPS focused green Cut 3a replacement with non-runnable
+quarantine, but that narrow directory is not the proposed runnable slot/lease
+contract. No callback port, selector token or exit event fence described here
+exists in production source today.
 
 The historical 2026-10-17 pre-deferral read-only callback inventory is for
 `unicorn.rs` SHA-256
@@ -909,16 +921,17 @@ reaches first-slice `Completed` with an empty descendant queue and a held
 parent borrow; it does not prove a nonempty descendant splice or live-pump
 later-slice behavior.
 [Attempt 18](../../evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-still exits 101 at the admitted child's sole-CPU-owner assertion after an
-ordinary native fault and remains ignored.
+exited 101 at the admitted child's sole-CPU-owner assertion after an ordinary
+native fault at that earlier seal. Cut 3a now has an ordinary focused green
+replacement, pending final broad validation.
 
-Acceptance rechecks that historical red and the held-borrow red, plus the
-separately staged [injected first-slice native-error control](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md).
-At its historical seal, that ignored expected-red executed the child's first
-native slice to
-`READ_UNMAPPED`, then finds the exact child Kernel-live/unsignaled but the
-parent custody queue empty. It covered the non-live-pump launch helper only.
-Turn each green without drops; also require exact-birth/PID-reuse and
+Full O-T7 acceptance still needs the held-borrow and later-slice shapes. The
+historical [injected first-slice native-error red](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+executed the child's first native slice to `READ_UNMAPPED`, then found the
+exact child Kernel-live/unsignaled but the parent custody queue empty. It
+covered the non-live-pump helper only; the later ordinary Cut 3a real-MIPS
+replacement is focused green, not full ownership acceptance. Turn remaining
+paths green without drops; also require exact-birth/PID-reuse and
 cloned-lineage negatives, and A→B success preserving original B CPU, context
 and wait. A controlled fixture
 must separately exercise the `Exited` classifier: this natural real-MIPS
@@ -927,7 +940,7 @@ resumability is another gate. Current successful `CreateProcessW` defers the
 child to the post-native path in **both** modes; the non-live path may then
 rotate to the child before the parent's staged return PC executes. Live-pump
 still needs its own later-slice A exit/survivor fixture plus eventual approved
-app observation. This deferral does not implement CPU custody or replace the
+app observation. Deferral alone did not implement CPU custody or replace the
 two existing rotation-policy sites ahead of Stage 5.
 Neither fixture substitutes for a matched iNavi map, GPS, frame, latency or
 footprint run.

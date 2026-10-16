@@ -2215,8 +2215,8 @@ then reproduced the `Completed` held-queue `RefCell` panic/survivor loss,
 already-exited-A dropping B's original CPU, and admitted-child native-fault
 CPU loss. At that seal all three were ignored; no app or writable mount was
 run. The two stale route-specific
-fixture implementations were subsequently retired, while the native-fault
-custody control remains ignored.
+fixture implementations were subsequently retired; the native-fault
+custody control was later replaced by the ordinary Cut 3a focused witness.
 
 Separately, the earlier [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
 used the same four-file source seal for five stamped attempts. The four
@@ -2280,7 +2280,7 @@ and after; attempts 05–07 used the final HEAD and the same source hash.
 The two old ignored `Completed`/A→B fixture implementations were retired
 because A13 reruns 16/17 missed their post-deferral preconditions; their
 earlier red logs remain historical evidence. The admitted-child native-fault
-control remains ignored and current:
+control was still ignored and red at that seal:
 [attempt 07](../../evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
 exited 101 at the child-CPU-custody assertion (SHA-256
 `52df312df7b39ba3ba58bcbbc786604f7f480dc8bf2354dcb2e0702609b387e4`).
@@ -2372,8 +2372,8 @@ mid-run validation-wrapper source change and is explicitly invalidated. The
 [dumped COREDLL REA evidence](../../evidence/ce6-rea-primary-thread-20261017/findings.md)
 supports durable main-thread identity but is static, not a live-app witness.
 Exit reconstruction, full CPU custody and boot-main enumeration remain open.
-The [current-source native-fault red](../../evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
-again fails with a Kernel-live admitted child and no parked CPU owner; it is
+The [pre-Cut-3a native-fault red](../../evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+failed with a Kernel-live admitted child and no parked CPU owner; it is
 process-free and does not implicate the real iNavi image.
 
 The [v2 offline preflight receipt](../../evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
@@ -2433,10 +2433,35 @@ passed **1/0**; complete release-feature and no-default suites passed
 **2,178/0/10 ignored** and **1,539/0/2 ignored** over 19 blocks each, with
 three feature checks exiting 0. This guard does not establish natural
 reentry, a machine-owned leaf permit, a callback-scoped Kernel/framebuffer
-port, or custody after a child native fault. The earlier scheduler-block
+port, or custody after a child native fault at that guard's seal. The earlier
+scheduler-block
 receipt's suggested shared import/block flag is superseded by the current
 source audit: those hook families execute sequentially in the sole native
 entry. No live app or mount run was made.
+
+## Cut 3a non-runnable admitted-child CPU quarantine (2026-10-17, focused; final seal pending)
+
+An ordinary real-MIPS guest A calls `CreateProcessW`; its nonzero return stays
+staged after the parent native attempt's clean sync/finish while B is launched
+post-native. B first touches its fixed stack with `SW`/`LW`, then triggers
+`READ_UNMAPPED`. Focused debug/release controls pass: the original B CPU is
+retained in one exact-birth, generation-checked, non-runnable machine custody
+slot, not the legacy parked tree; its native owner is closed and unsafe saved
+context cleared while B remains Kernel-live and unsignaled. A
+`TerminateProcess` request alone does not retire it. Same-Kernel checked
+accepted exit retires the slot and the fixed-stack pin. The main run loop owns
+the directory; monitor save/restore refuse it; status/debug publish keys,
+birth, state and retained mapped-blob bytes. These bytes are not a measured
+host RSS peak. The Kernel-minted exit witness carries exact birth only, so
+the production consumer relies on same-Kernel coupling, not a cross-machine
+lineage proof. General private VM and mapped-file-view exit cleanup remain
+separate [open bugs](../../KNOWN_BUGS.md). Runnable/parked custody, public-run
+bypass removal, the callback-scoped Kernel/framebuffer port, full O-T7 and
+live-app acceptance remain open.
+
+The pre-seal a03 release broad **2,183/0/9 ignored** is development evidence,
+not the final source gate. Final source-sealed broad release/no-default counts
+and receipt: **pending**. No app or writable-mount run was made.
 
 ## Chat-project validation notes (not in this repository)
 

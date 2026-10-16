@@ -243,8 +243,9 @@ retired after missing the post-deferral route; this does not exercise the
 live-pump route. The separate
 [post-admission native-fault red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
 at its earlier seal executed a synthetic child into `READ_UNMAPPED`; Kernel
-left it live but the ordinary first-slice error dropped its CPU. It too remains
-ignored. The
+left it live but the ordinary first-slice error dropped its CPU. That red is
+historical; an ordinary real-MIPS Cut 3a replacement now passes focused tests.
+The
 [pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
 now passes same-birth retry and queued-tail controls after file-view/path/PE
 setup errors; it does not retain an admitted CPU after a native failure. The
@@ -274,8 +275,8 @@ terminal after committed exit effects and can lose descendant CPU custody.
 Its [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
 seals `unicorn.rs` SHA-256 `0dcf5c5d04d0e632cbe405554bfc7029b7eea654070d4ca1fbdc3070ac136d06`:
 focused **1/0**, 19-block release-feature **2,162/0/11 ignored**, and
-no-default **1,532/0/3 ignored**. The current-source ignored native-fault
-rerun still loses an admitted child's CPU and remains red (exit 101).
+no-default **1,532/0/3 ignored**. An ignored native-fault rerun at that
+earlier seal lost an admitted child's CPU (exit 101).
 This is not a CPU slot/Task port, Stage 5 scheduling gate or live result. The
 later [test-only live-pump fixed-stack witness](evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
 seals `unicorn.rs` SHA-256
@@ -315,9 +316,18 @@ refuses same-host-thread nested native entry before private CPU setup; a
 preseeded-busy real-MIPS control retries on the same CPU. Sealed 19-block
 release/no-default suites passed **2,178/0/10 ignored** and **1,539/0/2
 ignored**. This is not a machine-owned leaf permit or a Kernel/framebuffer
-port. The
-[latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
-still loses its only CPU owner despite a live Kernel child. The
+port. The [latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+is historical. Cut 3a now retains the original faulted B CPU in a machine-owned,
+exact-birth, non-runnable slot after A's staged `CreateProcessW` return and
+native sync/finish. Its real-MIPS focused debug/release controls pass; final
+source-sealed broad/no-default counts and receipt are **pending**. A
+`TerminateProcess` request does not retire B; checked accepted exit retires
+the slot and its fixed-stack page. Status/debug report retained mapped-blob
+bytes, not measured RSS. The accepted-exit witness relies on the same Kernel
+used by the production caller; it is not independently machine-lineaged.
+Runnable/parked custody, public-run bypass removal, general private VM/view
+cleanup, the callback-scoped Kernel/framebuffer port and live-app proof remain
+open. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
 passes 171 source/build-chain controls and 83 runner guards; it requires a
 future fresh output-hash-stamped rebuild and does not authorize a run.

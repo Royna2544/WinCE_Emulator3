@@ -207,13 +207,16 @@ first-slice `Completed` fixture reaches the empty-descendant borrow hazard,
 and its [bounded source/test gate](../evidence/stage3-completed-borrow-20261017/validation.receipt.md)
 passed focused **1/0**, 19-block release **2,162/0/11 ignored**, and
 no-default **1,532/0/3 ignored**. Neither nonempty descendant preservation
-nor later-slice A→B survival is proved; a sealed-source ignored native-fault
-rerun still exits 101 at the child-CPU-custody assertion.
+nor later-slice A→B survival is proved; an earlier sealed-source ignored
+native-fault rerun exited 101 at the child-CPU-custody assertion. A later
+narrow Cut 3a quarantine passes focused real-MIPS controls; final sealed
+broad/no-default receipt and counts are pending.
 The checkpoint refusal's seven former ignores are now
 [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
-in complete release and no-default suites. This does not change the staging
-order: inventory and migrate the callback-scoped Kernel/framebuffer port by
-production reentry family (step 2), then admit CPU slots (step 3).
+in complete release and no-default suites. For runnable CPU slots, the
+staging order remains callback-scoped Kernel/framebuffer port (step 2) before
+the full custody/leaf-permit migration (step 3); a non-runnable Cut 3a
+quarantine is the bounded exception.
 
 O-T7 is now a [reviewable candidate contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists),
 not an implemented owner. Stage its connected source cut in this order:
@@ -258,8 +261,8 @@ not an implemented owner. Stage its connected source cut in this order:
    and no-default suites pass. This does not remove the outer mutable Kernel/
    framebuffer references across `emu_start`, protect another host thread, or
    give the machine an exact leaf permit. A child's post-native first-touch
-   fault is the next reachable alias witness to carry through the connected
-   port; the still-red ordinary native-fault CPU-loss control gates Step 3.
+   fault is a reachable alias witness to carry through the connected port;
+   Cut 3a's narrow CPU quarantine does not pass that port or full Step 3.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the entire native
    attempt, fallible short loans tied to exact attempt/leaf authority, and a
@@ -279,16 +282,21 @@ not an implemented owner. Stage its connected source cut in this order:
    port leaves O-T7 CPU custody open.
 3. Admit boot and child CPU payloads into one machine-owned slot directory;
    stage this rather than converting every parked path at once. A narrow
-   [Cut 3a quarantine](subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-review-answer-not-implemented)
-   may precede complete Step 2 because it never runs a custody-held CPU: the
-   main run loop owns exact-birth, generation-checked slots only for faulted,
-   non-runnable admitted children. The post-native child-error producer,
-   exact-birth exit/termination/prune retirement, checkpoint refusal,
-   status/debug publication and one-owner invariant must land together with
-   its green real-MIPS fault witness. Pre-CPU launch errors still retry;
-   native-error quarantine never fabricates a resumable context. This cut
-   cannot claim a sound machine lease, raw-alias safety or general VM/view
-   cleanup. Move runnable and parked CPU paths one connected family at a
+   [Cut 3a quarantine](subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-focused-source-cut-final-broad-pending)
+   now precedes complete Step 2 because it never runs a custody-held CPU:
+   the main run loop owns exact-birth, generation-checked slots only for
+   faulted, non-runnable admitted children. Focused real-MIPS debug/release
+   controls pass: A's staged return survives native sync/finish, B executes
+   fixed-stack first touch then faults, and its original CPU is retained in
+   the slot rather than the legacy parked tree. Pre-CPU launch errors retry;
+   native-error quarantine never fabricates a resumable context. A termination
+   request alone retains B; same-Kernel accepted exit retires its slot and
+   fixed-stack pin. Status/debug expose retained mapped-blob bytes, not
+   measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
+   **2,183/0/9 ignored** is development-only; final sealed broad/no-default
+   receipt and counts are pending. This cut cannot claim a sound machine
+   lease, raw-alias safety or general private VM/view cleanup. Move runnable
+   and parked CPU paths one connected family at a
    time after that; add the leaf permit when the first runnable slot lands.
    For those later connected cuts, review private stable per-slot cells with short directory borrowing and
    closure-scoped fallible payload loans. Gate backend entry on the exact
@@ -310,7 +318,8 @@ not an implemented owner. Stage its connected source cut in this order:
    destination before effects, then move original locators infallibly after
    accepted exit. Native/load/publication failures retain non-runnable CPU
    custody; a late post-effect failure quarantines it and reports partial
-   effects. Turn the current native-error red green. The two stale
+   effects. The historical native-error red has a focused green Cut 3a
+   replacement, pending final broad validation. The two stale
    held-borrow and real-MIPS A-exits/B-live fixture implementations were
    retired after they missed post-native preconditions; their historical
    evidence remains. A direct empty-descendant `Completed` control is now
