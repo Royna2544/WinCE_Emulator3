@@ -195,6 +195,20 @@ diagnostic labels, never the sole selector for process-exit effects. An
 unknown-owner compatibility record cannot silently be claimed by a later
 birth that reuses its numeric ID.
 
+A parked CPU nested under another CPU is an execution/scheduling container,
+not evidence that its process is owned by the container's process. Exiting
+one verified process birth may retire only that birth's execution resources;
+a separately live foreign-birth CPU must remain reachable by the scheduler.
+Before a stopped-exit effect, partition any CPU subtree that would be removed
+into exact exiting-birth resources and verified live survivors. Unknown,
+stale or conflicting ownership refuses completion before mutation; a
+successful exit moves survivors without copying contexts or inventing guest
+execution. The current parked-tree implementation does not yet satisfy this
+target contract. Local CE6 process/thread source and bounded dumped-COREDLL
+wrapper analysis are recorded in the
+[exit evidence](../evidence/ce6-rea-exit-20261016/findings.md); the dumped
+kernel's recursive child-exit behavior has not been directly recovered.
+
 Cancellation, reply and wake effects are keyed to the selected exact object or
 send IDs and occur once. An unavailable owner or failed preparation must stop
 before publication; an irreversible partial teardown must be reported as such,
