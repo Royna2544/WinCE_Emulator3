@@ -75,6 +75,42 @@ thread_local! {
 }
 
 #[cfg(feature = "unicorn")]
+thread_local! {
+    // The current scheduler has one native entry per host thread. Deferred
+    // child execution begins only after the parent's emu_start returns.
+    static NATIVE_ENTRY_ACTIVE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Refuse a recursive native start before it can invalidate the outer
+/// engine's count/stop evidence. This is an entry precondition, not a
+/// Kernel/framebuffer port or machine-owned CPU lease.
+#[cfg(feature = "unicorn")]
+struct NativeGuestExecutionGuard;
+
+#[cfg(feature = "unicorn")]
+impl NativeGuestExecutionGuard {
+    fn enter() -> Result<Self> {
+        NATIVE_ENTRY_ACTIVE.with(|active| {
+            if active.replace(true) {
+                Err(Error::Backend(
+                    "nested native guest execution is unsupported".to_owned(),
+                ))
+            } else {
+                Ok(Self)
+            }
+        })
+    }
+}
+
+#[cfg(feature = "unicorn")]
+impl Drop for NativeGuestExecutionGuard {
+    fn drop(&mut self) {
+        NATIVE_ENTRY_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Clone, Copy, Default)]
 struct NativeStopEvidence {
     native_error: bool,
@@ -9384,7 +9420,9 @@ impl UnicornMips {
         if report.attempt_id.is_none() {
             report.final_outcome = NativeSliceOutcome::NoAttempt;
             if result.is_err() {
-                report.failure_operation = Some("preflight or native setup");
+                if report.failure_operation.is_none() {
+                    report.failure_operation = Some("preflight or native setup");
+                }
                 // Setup may already have mapped or synchronized native memory
                 // despite never entering guest execution.
                 report.partial_effects_possible = report.start_process_id.is_some();
@@ -14346,6 +14384,11 @@ impl UnicornMips {
         }
         // This checked ordinal is diagnostic correlation, never a Task or
         // native-handle identity. Allocate only when a primary start is next.
+        let native_entry = NativeGuestExecutionGuard::enter();
+        if native_entry.is_err() {
+            report.failure_operation = Some("enter native guest execution");
+        }
+        let native_entry_guard = pre_entry_try!(native_entry);
         report.attempt_id = Some(pre_entry_try!(DiagnosticAttemptId::next()));
         // A ready wait may consume kernel state and switch the selected thread.
         // Defer that choice until all fallible pre-entry setup has succeeded.
@@ -14753,6 +14796,7 @@ impl UnicornMips {
             native_timeout_us,
             limits.instruction_limit,
         );
+        drop(native_entry_guard);
         // Both queries belong to this primary native lease and must precede
         // capture or deferred child execution. A failed query is a hard
         // outcome, never evidence that the stop simply did not happen.
@@ -71316,6 +71360,85 @@ mod unicorn_tests {
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
     };
+
+    #[test]
+    fn native_guest_execution_guard_rejects_nested_entry_and_releases() {
+        let outer = super::NativeGuestExecutionGuard::enter().expect("first native entry");
+        match super::NativeGuestExecutionGuard::enter() {
+            Err(Error::Backend(message)) => {
+                assert!(message.contains("nested native guest execution"));
+            }
+            _ => panic!("nested native entry must be refused"),
+        }
+        drop(outer);
+        let subsequent = super::NativeGuestExecutionGuard::enter()
+            .expect("sequential native entry after the outer run");
+        drop(subsequent);
+    }
+
+    #[test]
+    fn native_entry_preseeded_busy_refuses_before_guest_execution_then_retries() -> crate::Result<()>
+    {
+        let mut kernel = phase1_kernel("native-entry-busy.exe")?;
+        let mut cpu = phase1_counter_cpu(0x1000, "native-entry-busy.exe")?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let counter_before = phase1_counter(&cpu);
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 20,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let outer = super::NativeGuestExecutionGuard::enter().expect("outer native entry");
+        let refused = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        assert!(matches!(
+            refused.result,
+            Err(Error::Backend(ref message)) if message.contains("nested native guest execution")
+        ));
+        assert_eq!(refused.report.attempt_id(), None);
+        assert_eq!(
+            refused.report.final_outcome(),
+            super::NativeSliceOutcome::NoAttempt
+        );
+        assert_eq!(
+            refused.report.failure_operation(),
+            Some("enter native guest execution")
+        );
+        assert_eq!(
+            refused.report.native_result(),
+            &super::AttemptObservation::Uncollected
+        );
+        assert_eq!(
+            refused.report.count_stop_query(),
+            &super::AttemptObservation::Uncollected
+        );
+        assert_eq!(
+            refused.report.context_capture(),
+            &super::AttemptObservation::Uncollected
+        );
+        assert_eq!(phase1_counter(&cpu), counter_before);
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        assert!(super::NativeGuestExecutionGuard::enter().is_err());
+        drop(outer);
+
+        let retried = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        retried.result?;
+        assert!(retried.report.attempt_id().is_some());
+        assert_eq!(
+            retried.report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(phase1_counter(&cpu) > counter_before);
+        Ok(())
+    }
 
     fn stamp_synthetic_saved_context(cpu: &mut super::UnicornMips, kernel: &CeKernel) {
         assert!(
