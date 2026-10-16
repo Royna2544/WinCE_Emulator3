@@ -674,7 +674,8 @@ exact-birth slot capacity before constructing B and separates pre-CPU retry
 from post-admission native-error ownership. The original faulted B CPU moves
 to quarantine, never the legacy parked tree. Every quarantined slot is
 reported in status/debug, counted by checkpoint save/restore refusal, and
-retired only after checked accepted exact-birth exit; a `TerminateProcess`
+retired only after checked accepted exact-birth exit in the tested fault path;
+a `TerminateProcess`
 request alone is not completion. The accepted-exit witness carries birth only,
 so production trusts the same Kernel instance used for preflight/completion;
 it is not an independent machine-lineage proof. The leaf permit, runnable
@@ -699,7 +700,10 @@ fixed-stack `SW`/`LW` first touch followed by `READ_UNMAPPED`, and checks one
 exact B-birth quarantined slot, zero B in the legacy parked tree, closed
 native owner, live unsignaled B and no runnable continuation. A termination
 request leaves that state intact; accepted exit retires the slot and fixed
-stack. Focused debug/release controls pass. The pre-seal a03 release broad
+stack in that tested path. A source-audited post-load/pre-native-entry error
+may quarantine an unpoisoned CPU that the exit consumer refuses to retire;
+general error-path closure needs a separate control/fix. Focused debug/release
+controls pass. The pre-seal a03 release broad
 **2,183/0/9 ignored** is development-only; final sealed broad/no-default
 receipt and counts are pending. Neither this witness nor the directory proves
 the Step 2 port, complete view/VM cleanup, full O-T7 leaf authority, measured

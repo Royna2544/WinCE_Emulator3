@@ -322,7 +322,10 @@ exact-birth, non-runnable slot after A's staged `CreateProcessW` return and
 native sync/finish. Its real-MIPS focused debug/release controls pass; final
 source-sealed broad/no-default counts and receipt are **pending**. A
 `TerminateProcess` request does not retire B; checked accepted exit retires
-the slot and its fixed-stack page. Status/debug report retained mapped-blob
+the slot and its fixed-stack page in the focused native-fault shape. A
+source-audited post-load/pre-native-entry error may quarantine an unpoisoned
+CPU that the current exit consumer refuses to retire; general closure is
+pending a separate control/fix. Status/debug report retained mapped-blob
 bytes, not measured RSS. The accepted-exit witness relies on the same Kernel
 used by the production caller; it is not independently machine-lineaged.
 Runnable/parked custody, public-run bypass removal, general private VM/view

@@ -2449,7 +2449,10 @@ retained in one exact-birth, generation-checked, non-runnable machine custody
 slot, not the legacy parked tree; its native owner is closed and unsafe saved
 context cleared while B remains Kernel-live and unsignaled. A
 `TerminateProcess` request alone does not retire it. Same-Kernel checked
-accepted exit retires the slot and the fixed-stack pin. The main run loop owns
+accepted exit retires the slot and the fixed-stack pin in that focused path.
+A source-audited post-load/pre-native-entry error may quarantine an
+unpoisoned CPU that the exit consumer refuses to retire; no executed control
+or general closure is claimed. The main run loop owns
 the directory; monitor save/restore refuse it; status/debug publish keys,
 birth, state and retained mapped-blob bytes. These bytes are not a measured
 host RSS peak. The Kernel-minted exit witness carries exact birth only, so

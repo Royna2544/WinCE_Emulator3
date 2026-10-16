@@ -291,7 +291,10 @@ not an implemented owner. Stage its connected source cut in this order:
    the slot rather than the legacy parked tree. Pre-CPU launch errors retry;
    native-error quarantine never fabricates a resumable context. A termination
    request alone retains B; same-Kernel accepted exit retires its slot and
-   fixed-stack pin. Status/debug expose retained mapped-blob bytes, not
+   fixed-stack pin in that focused fault shape. A post-load/pre-native-entry
+   error may quarantine an unpoisoned CPU that the current exit consumer
+   refuses to retire; add a separate control/fix before general closure.
+   Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
    **2,183/0/9 ignored** is development-only; final sealed broad/no-default
    receipt and counts are pending. This cut cannot claim a sound machine
