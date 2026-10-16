@@ -128,6 +128,11 @@ first. Totals are passed/failed/ignored for release
 source and validation evidence; a source gate is not a live EXE/PDB or app-run
 result. The per-slice text before this condense is at
 `git show 75dd5560:PROGRESS.md`.
+An offline [CE6 source/REA exit check](evidence/ce6-rea-exit-20261016/findings.md)
+found per-process thread/handle cleanup and distinct dumped-COREDLL
+`TerminateProcess`/`CloseHandle` wrappers. It did not locate the dumped
+kernel's exit body or establish live child-process behavior. The current
+parked CPU tree is not process-lifetime authority.
 - D-011 modal-presence refusal
   ([receipt](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)):
   exact-birth stopped exits fail closed before Kernel effects when the affected

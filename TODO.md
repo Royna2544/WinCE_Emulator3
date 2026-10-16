@@ -125,6 +125,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Separately prove ownership of nonmodal descendant CPU queues on successful
      natural parked, initial-child `Exited` and active exact-birth completion;
      either hoist/extract them or fail closed before a destructive drop.
+     Use the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-not-implemented)
+     and [CE6/REA boundary](evidence/ce6-rea-exit-20261016/findings.md)
+     for an expected-red connected source gate; no ROM kernel exit body was
+     identified and this is not live-app proof.
      Give the already-exited parked-CPU cleanup branch a typed retention or
      quarantine rule for residual modal state; it has no earlier exit to
      preflight at that point.

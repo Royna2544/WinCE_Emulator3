@@ -153,7 +153,9 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     - Source audit, 2026-10-16: natural parked completion, initial-child
       `Exited` and active exact-birth tree removal can drop nonmodal descendant
       CPU queues (requested parked and initial-child `Completed` hoist them
-      instead). This is untested ownership loss, not an attributed live failure.
+      instead). This is untested ownership loss, not an attributed live failure;
+      the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-not-implemented)
+      has not yet been source-gated.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.
