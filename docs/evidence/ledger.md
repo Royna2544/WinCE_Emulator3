@@ -2221,6 +2221,34 @@ executed in this check. Ghidra's MIPS calling convention and MIPS III decoding
 remain assumptions/limitations. The original, mounts and emulator were not
 run or modified; the temporary exact-hash NTFS analysis copy was removed.
 
+## Dumped COREDLL thread-exit REA follow-up (2026-10-16, static artifact)
+
+The [retained REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
+and [raw evidence bundle](../../evidence/ce6-rea-exit-20261016/coredll-exitthread-followup-rea-evidence.json)
+use an exact SHA-verified analysis copy of the dumped CE6 MIPS `coredll.dll`.
+`ExitThread` checks a KData-derived value, sets an `IsExiting` flag on one
+branch, calls `PrepareThreadExit`, performs branch-dependent cleanup, and
+invokes the `0xFFFFBBCE` kernel method with the exit code. `TerminateThread`
+uses a separate resolved-handle method at `0xFFFFB7DE`, and
+`PrepareThreadExit` calls `0xFFFFBAB2`. The named-function search found no
+`ExitProcess` wrapper in its bounded result. These are static wrapper facts,
+not a decoded ROM kernel exit body, a proven main-thread condition, or live
+child-lifetime behavior. The original binary was not modified; the temporary
+analysis copy was removed.
+
+## Opt-in native timer rendezvous (2026-10-16, executed diagnostic)
+
+The [bounded receipt](../../evidence/native-timer-rendezvous-20261016/validation.receipt.md)
+records 48/48 fresh-owner iterations across timer-first, hook-first and
+simultaneous-release orders (16 each). Each returned from both C boundaries,
+reported native `TIMEOUT=1`, `COUNT_STOP=0`, PC `0x1000`, and closed the owner
+under a 60-second external process-tree watchdog. Accepted build and test raw
+logs are stamped, NUL-free and hash-sealed. Two earlier zero-corrupt logs and
+one failed-link log remain preserved without success claims. The probe is
+opt-in; no production timeout or C path changed. This non-reproduction neither
+explains earlier full-suite AVs nor establishes race freedom, iNavi timing or
+footprint.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
