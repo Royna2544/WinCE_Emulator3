@@ -80,6 +80,14 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   Flush but not Unmap. The immediate CreateProcess view-sync failure path has
   no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports are
   absent. History: ledger E-14 to E-41.
+- Monitor checkpoint/rewind is deliberately unavailable while a CPU has
+  execution custody or a pending launch or canonical Kernel Task record is
+  retained, even if that record has stopped. The bounded
+  [lineage-refusal gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+  prevents duplicate births but does not relineage the whole machine. A
+  D-011 stopped-exit hold therefore has no safe in-session rewind today;
+  recovery requires quit, repair and restart. This is a safety limitation,
+  not a successful live-checkpoint implementation.
 - D-008 charges the whole anonymous mapping at first public `MapViewOfFile`,
   not at `CreateFileMapping` as documented for default `SEC_COMMIT` in
   [Microsoft's CE mapping reference](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms923951%28v%3Dmsdn.10%29);
@@ -151,7 +159,7 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
       unproved; the modal-presence gate only refuses MessageBox/popup disposal
       ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)).
     - The synthetic first-slice child `Exited` A→B source gate now hoists the
-      tested nonmodal foreign CPU tree, but real-MIPS classifier reachability,
+      tested nonmodal foreign CPU tree, but real-MIPS `Exited`-classifier reachability,
       other active exits, requested parked siblings, already-exited skips and
       generic duplicate pruning remain unproved. Foreign CPUs without saved
       context and PC resumability remain unproved. The bounded
@@ -159,6 +167,15 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
       covers only tested natural-parked and requested-active stopped exits;
       [first-slice receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md).
       This source-audited risk is not an attributed live-app failure.
+    - A [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+      executes A's actual `CreateProcessW` IAT call to launch B, then returns
+      A through its saved startup RA. A exits `0x63`; B remains exact-birth
+      Kernel-live and unsignaled, but slice-end rotation makes B the local CPU
+      before A is pruned. `run_pending_process_launches` then tests A's exited
+      handle, records `CreateProcessChildParkSkipped(already_exited)` and drops
+      that local B CPU; the parent queue has zero owners instead of one. The
+      final source test is ignored expected-red. This is a reproduced source
+      fixture failure, not an attributed live iNavi or live-pump failure.
     - If the parent parked queue is already borrowed, first-slice `Exited`
       refuses before Kernel exit and the fallback returns terminal `Backend`
       without a host panic, but it drops the local A+B CPU owners. This is
@@ -168,6 +185,14 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
       reentering that queue while its mutable borrow is held is unsupported;
       current framebuffer implementations do not do so. The first-slice
       candidate also lacks a separate exact live primary-thread-birth gate.
+      A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+      executes an admitted synthetic MIPS child through its first native
+      slice. Its injected `READ_UNMAPPED` returns an ordinary `Backend` error;
+      the exact child birth stays Kernel-live, `STILL_ACTIVE` and unsignaled,
+      but `run_pending_process_launches` drops the local CPU (queue 0 versus
+      one required owner). This is a reproduced offline source failure, not
+      a live iNavi or live-pump result. The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
+      must cover it alongside the tested borrow conflict.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.

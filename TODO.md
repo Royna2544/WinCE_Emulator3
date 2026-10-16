@@ -129,8 +129,30 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      The bounded [first-slice `Exited` source gate](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
      adds synthetic production-helper A→B preservation and a terminal
      held-parent-queue-borrow control; it does not execute the guest classifier.
+     First complete the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
+     and [O-T7](docs/DECISIONS.md) consumer inventory: both held-queue
+     publication and an ordinary post-admission first-slice error can drop
+     the only live child CPU owner. The [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+     now proves a third route: after A's guest launch and exit, the
+     already-exited-A skip drops live B's CPU. Keep it and the
+     [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+     that proves an ordinary first-slice error leaves a still-live child
+     without CPU custody runnable as ignored diagnostics. The
+     [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
+     preserves published launches only until CPU construction; it does not
+     own an admitted child through DLL load, native execution or error.
+     The [bounded live-checkpoint guard](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+     refuses retained Task/launch and CPU custody on save and restore; it is
+     a safety stop, not atomic relineage. Real monitor rewind is unavailable
+     and D-011 refusal currently needs repair/restart. Design the whole-machine
+     relineage/recovery transaction before restoring that feature.
+     Repair post-admission custody before unignoring those diagnostics, and
+     stage further expected reds
+     before replacing parked Box ownership with checked locators; do not add
+     another pending owner vector. A controlled `Exited`-classifier fixture
+     and separate live-pump deferred-launch/later-exit fixture remain.
      Extend the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
-     to a real-MIPS first-slice fixture, other active exits, requested parked siblings,
+     to other active exits, requested parked siblings,
      already-exited skips and generic duplicate pruning. Prove foreign CPUs
      without saved context and PC resumability separately; no ROM kernel exit
      body was identified by the [CE6/REA check](evidence/ce6-rea-exit-20261016/findings.md),

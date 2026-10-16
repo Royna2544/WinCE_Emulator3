@@ -114,8 +114,22 @@ remote-control HTTP/WebSocket surface.
   The later bounded [first-slice `Exited` helper gate](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
   preserves its tested foreign CPU, but does not execute guest MIPS or prove
   the classifier path. A held parent-queue borrow ends in typed terminal
-  owner loss, not recovery. Other exit paths, no-context/PC resumability and
+  owner loss, not recovery. Two later ignored, executed
+  [guest-launch](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+  and [native-fault](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+  reds show an exact-birth live child losing its only CPU via the
+  already-exited-parent skip or ordinary first-slice error. The bounded
+  [pre-CPU launch-retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
+  keeps an already-published launch available for retry before any CPU
+  exists. Post-admission CPU owner loss remains open. Machine-owned
+  custody is the next connected Stage 3/4 source cut, not yet implemented.
+  Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
+- A bounded [checkpoint lineage guard](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+  refuses monitor save/restore while canonical task records or pending
+  launches are retained, or CPU custody remains. This prevents duplicate
+  process births but is not
+  live rewind: a D-011 recovery hold currently requires repair and restart.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

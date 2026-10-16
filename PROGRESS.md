@@ -133,6 +133,59 @@ found per-process thread/handle cleanup and distinct dumped-COREDLL
 `TerminateProcess`/`CloseHandle` wrappers. It did not locate the dumped
 kernel's exit body or establish live child-process behavior. The current
 parked CPU tree is not process-lifetime authority.
+The bounded [wait/child-lifetime follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
+also located dumped-COREDLL `WaitForSingleObject` and `GetExitCodeProcess`
+kernel-call wrappers. Local CE6 source confirms `CreateProcess` waits for
+loader completion, process waits use a pinned event, and requested
+termination precedes accepted execution exit. This reinforces independent
+child CPU custody; the dumped kernel process-exit body remains unidentified.
+An offline [REA check of the shipped iNavi PE](evidence/ce6-rea-inavi-20261016/findings.md)
+located static `FindWindowW`-guarded `CreateProcessW` branches for
+`happyway_win.exe` and `iSearch.exe`, each retaining returned process/thread
+information. This corroborates child ownership as a real app dependency but
+does not establish branch execution, boot timing or UI progress.
+- A [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+  now executes an actual ordinal-493 `CreateProcessW` import in guest A.
+  A exits once with `0x63`; B remains exact-birth Kernel-live and unsignaled,
+  but `CreateProcessChildParkSkipped(already_exited)` drops the local CPU now
+  switched to B, leaving the parent queue empty. Focused attempt 03 failed
+  on B CPU reachability; the final fixture is ignored for ordinary suites.
+  This is not the live-pump route or a live iNavi result.
+- A [test-only first-slice native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+  now executes a synthetic child to `READ_UNMAPPED`. Its exact birth stays
+  Kernel-live, `STILL_ACTIVE` and unsignaled, but the ordinary error drops
+  the constructed CPU (parent queue zero versus one required). The final
+  ignored fixture is source-sealed at `unicorn.rs` SHA-256
+  `508101e2942f997472de99c1765905756104e06caf6313ac96717292e3250c79`;
+  focused red exit 101 and normal selection one ignored/zero failed. No
+  production custody repair, broad suite or mounted app run followed.
+- The [pre-CPU pending-launch red](evidence/stage3-pre-cpu-launch-retention-20261016/validation.receipt.md)
+  showed ambiguous lazy file-view setup draining an already-published exact
+  child launch while its Kernel birth stayed live. The bounded
+  [green source cut](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
+  now restores the exact current launch plus its unprocessed tail on retryable
+  errors before child CPU construction. The same-birth retry and malformed-PE
+  tail controls pass **2/0**, two related pending-child controls pass **2/0**,
+  and no-default and normal-feature checks pass. This does not retain a CPU
+  after DLL-load/native/publication failure; the post-admission reds above
+  remain open. No app or mount run followed.
+- The [live CPU checkpoint red](evidence/stage3-live-checkpoint-lineage-20261016/validation.receipt.md)
+  copied boot PID 1/TID 1 execution births on save and restore. The separate
+  [pristine-CPU Kernel reds](evidence/stage3-kernel-checkpoint-lineage-20261016/validation.receipt.md)
+  showed that even an empty CPU wrapper cloned live boot and queued-child
+  births. The bounded [fail-closed source gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+  now refuses monitor save/restore while canonical process/thread records,
+  pending launches or CPU custody remain. Five former reds pass under release
+  and no-default profiles; existing checkpoint selection passes **4/0 with
+  5 ignored** in each, and three feature checks pass. Positive copies use a
+  synthetic fully retired Kernel only; live in-session rewind and full
+  machine relineage remain absent. A D-011 recovery hold therefore requires
+  repair and restart, not a cloned live checkpoint. No app/mount run followed.
+- The [combined boundary gate](evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
+  passed four normal-feature integration suites (**908/0**) and serial
+  no-feature `cargo test -j 1` (**1,525/0/8 ignored**) on the same sealed
+  four-file source. Its five stamped raw logs were hash-checked after closure.
+  This is not full release-feature, machine-owned custody or live-app acceptance.
 - Bounded first-slice child `Exited` survivor source gate
   ([receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)):
   production-helper synthetic A→B controls move the original nonmodal B CPU,
@@ -140,7 +193,10 @@ parked CPU tree is not process-lifetime authority.
   mismatched saved B ownership refuses before Kernel effects. A held parent
   queue borrow refuses A's exit before effects, then the production publication
   path returns a typed terminal error without a host panic. That error drops
-  the local A+B CPU tree; it is not a recovery hold. These controls do not run
+  the local A+B CPU tree; it is not a recovery hold. The final source passed
+  focused **3/0**, 19-block release **2,147/0/10 ignored** and no-default
+  **1,524/0/3 ignored** suites, plus Unicorn-only and CI-feature checks.
+  These controls do not run
   guest MIPS or establish first-slice classifier reachability, full Stage 3 or
   live-app behavior. No app or writable-mount run was made.
 - Bounded parked-survivor and saved-CPU-owner source gate
@@ -177,8 +233,10 @@ parked CPU tree is not process-lifetime authority.
 - D-011 stopped host-exit framebuffer preflight
   ([receipt](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)):
   every saved backing is validated before any exit mutation. A failure returns
-  typed recovery, holds the stopped CPU and blocks new checkpoints until a
-  restore. 2,094/0/9 and 1,510/0/3.
+  typed recovery and holds the stopped CPU. At that historical seal the
+  monitor allowed an earlier checkpoint restore; the later live-lineage
+  guard now refuses such a clone, so repair and restart are required.
+  2,094/0/9 and 1,510/0/3.
 - Guest pseudo-exit caller birth
   ([receipt](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)):
   native and decoded self-exit require the live caller birth and exact
