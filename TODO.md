@@ -141,7 +141,7 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
-     The [bounded live-checkpoint guard](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+     The [bounded live-checkpoint guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
      refuses retained Task/launch and CPU custody on save and restore; it is
      a safety stop, not atomic relineage. Real monitor rewind is unavailable
      and D-011 refusal currently needs repair/restart. Design the whole-machine

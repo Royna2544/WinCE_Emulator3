@@ -125,11 +125,11 @@ remote-control HTTP/WebSocket surface.
   custody is the next connected Stage 3/4 source cut, not yet implemented.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
-- A bounded [checkpoint lineage guard](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+- A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate
-  process births but is not
-  live rewind: a D-011 recovery hold currently requires repair and restart.
+  process births but is not live rewind: a D-011 recovery hold currently
+  requires repair and restart.
 - The E-28 native count-stop query and typed `CountLimit` pass focused real-MIPS
   controls. The count-adapter source passed 1,671 release tests (0 failed,
   16 ignored) and 1,259 no-feature tests (0 failed, 14 ignored), plus no-trace

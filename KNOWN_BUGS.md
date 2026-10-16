@@ -83,7 +83,7 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
 - Monitor checkpoint/rewind is deliberately unavailable while a CPU has
   execution custody or a pending launch or canonical Kernel Task record is
   retained, even if that record has stopped. The bounded
-  [lineage-refusal gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+  [canonical-map lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   prevents duplicate births but does not relineage the whole machine. A
   D-011 stopped-exit hold therefore has no safe in-session rewind today;
   recovery requires quit, repair and restart. This is a safety limitation,

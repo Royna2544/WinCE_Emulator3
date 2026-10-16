@@ -181,11 +181,22 @@ does not establish branch execution, boot timing or UI progress.
   synthetic fully retired Kernel only; live in-session rewind and full
   machine relineage remain absent. A D-011 recovery hold therefore requires
   repair and restart, not a cloned live checkpoint. No app/mount run followed.
+- A later [orphaned-frame expected red](evidence/stage3-checkpoint-orphan-frame-20261016/validation.receipt.md)
+  exposed a gap in that first guard: an exited, aliasless thread retained an
+  active finite-Sleep frame while both filtered snapshot lists were empty.
+  Save and restore each cloned its original task birth. The
+  [canonical-map guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
+  now checks the underlying process/thread records on both sides. All seven
+  lineage controls pass under release and no-default profiles; ordinary
+  checkpoint selection passes **4/0/7 ignored**, serial no-feature passes
+  **1,525/0/10 ignored**, raw Kernel integration passes **133/0**, and four
+  feature checks pass. This is refusal, not frame cleanup or live rewind.
 - The [combined boundary gate](evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
   passed four normal-feature integration suites (**908/0**) and serial
   no-feature `cargo test -j 1` (**1,525/0/8 ignored**) on the same sealed
   four-file source. Its five stamped raw logs were hash-checked after closure.
-  This is not full release-feature, machine-owned custody or live-app acceptance.
+  This predates the later canonical-map guard and is not full release-feature,
+  machine-owned custody or live-app acceptance.
 - Bounded first-slice child `Exited` survivor source gate
   ([receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)):
   production-helper synthetic A→B controls move the original nonmodal B CPU,
