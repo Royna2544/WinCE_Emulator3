@@ -61,6 +61,13 @@ image/DLL, safe heap reuse, clone-lineage or full Stage 2 gates.
 | O-T6 | OEM default quantum configuration; extract from dumped kernel/OAL evidence, not a guessed 10 ms or the shim's 100 ms. | open |
 | O-T7 | Review the [candidate machine-owned CPU slot/lease contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists): one centrally owned payload per slot, key = machine lineage + index + checked generation, exact process birth fixed at admission, task/frame provenance checked on each context lease, and Scheduler queues containing only locators. Multiple slots per process and distinct frames per slot are allowed, but executable lease and structural locator cardinality must be checked. The proposed private stable per-slot cell plus short directory borrow/closure-scoped fallible payload loan avoids a self-referential lease; a checked leaf permit and `ParentSuspension` transfer A→B while A's native callback is paused. Settle exact pending-launch claim in Kernel's existing queue, connected conversion of every recursive/active/displaced CPU owner to locators, non-runnable post-admission custody, partial-effect quarantine, infallible accepted-exit survivor splice, and atomic checkpoint relineage or fail-closed live-custody save/restore. Before claiming a sound whole-machine lease, replace or narrowly prove current long-lived `&mut CeKernel`/raw `kernel_ptr` and framebuffer reentry with callback-scoped fallible machine-state loans and an exit event fence. This candidate is not implementation or a decision to change Stage 5 policy. | open |
 
+O-T7 review must also distinguish a generic `with_cpu` payload loan from an
+executable lease: only the exact active-leaf run permit can enter the backend.
+The private per-slot cell does not by itself prevent retirement or reuse;
+a generation-checked slot-loan/retire latch must reject either while a payload
+loan or permit is outstanding. Callback-scoped machine-state loans alone do
+not prove every pending-return `RefCell` safe.
+
 ### Clock and timers ([page](subsystems/clock-timers.md)) - needed before Stage 6
 
 | ID | Question | Status |

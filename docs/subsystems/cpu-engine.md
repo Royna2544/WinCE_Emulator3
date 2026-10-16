@@ -233,31 +233,37 @@ These steps close separate hardening gaps, not the already-closed O-P1
 classification gate. E-28 and E-34 did not change the 1M-instruction tick,
 quantum, clock or handoff policy.
 
-### Native timeout worker race audit (design only)
+### Native timeout worker race audit (opt-in diagnostic)
 
 Two earlier full-suite release AVs remain unattributed; a matched
 [six-run library cohort](../../evidence/parallel-native-av-cohort-20261016/validation.receipt.md)
 observed no crash in either the explicit-serial or default harness arm. An
 ordinary positive-timeout `uc_emu_start` starts and joins a native worker
-(`vendor/unicorn-engine-sys/uc.c:1013-1040,1230-1252`). Its unsynchronized
+(`vendor/unicorn-engine-sys/uc.c:1041-1075,1264-1286`). Its unsynchronized
 `emulation_done`/stop fields can race the emulating thread at a deadline,
 including the normal nonzero live-pump timeout. This is a source-supported
 concurrency risk, not an assigned cause of either AV. On Windows,
 `restore_jit_state` is a no-op (`uc.c:38-74`); the proposed simultaneous
 JIT/W^X-restore mechanism does not follow from this source on this host.
 
-Stage a bounded, stamped offline timing sweep around a tiny native stop near
-deadline T, with fresh owners, completed-iteration count and an external
-watchdog. A no-crash result is rate evidence only; without a controlled C
-barrier, this is not a deterministic expected-red test. Keep timeout-zero as
-the comparison arm, not a silent production fix. Simply passing zero to the
-live runner would drop its default 1-second native cap
+The opt-in `native-timer-diagnostic` feature compiles a per-engine C callback
+at timer-expiry and hook-stop boundaries; its field, callback sites and ABI
+are absent from normal builds (`vendor/unicorn-engine-sys/PATCHES.md`). The
+bounded [offline control](../../evidence/native-timer-rendezvous-20261016/validation.receipt.md)
+forced timer-first, hook-first and simultaneous release for 16 fresh owners
+each, with an external process-tree watchdog. All 48 iterations closed with
+the expected native/query/PC witnesses. This is a successful controlled
+overlap test, not a crash-rate estimate, data-race proof or explanation of
+the earlier AVs. The older timing sweep remains a separate, ignored control.
+Keep timeout-zero as a comparison arm, not a silent production fix. Simply
+passing zero to the live runner would drop its default 1-second native cap
 (`unicorn.rs:1027,13551-13555,24591-24596`) in favor of a possibly 30-second
 host-wall hook limit, and would turn `Query::TIMEOUT` false. Any same-thread
 deadline replacement must preserve an explicit live cap, a safe-PC checked
 stop and typed O-P1/E-34 outcome semantics, including the existing mixed
-native-deadline/visible-yield control. Vendored C changes require a separate
-user decision; none is made here. No live app or footprint claim follows.
+native-deadline/visible-yield control. The opt-in probe is diagnostic only;
+a production `uc.c` or timeout change needs a separate user decision. No
+live app or footprint claim follows.
 
 Historical E-19 status (source identity: `types.rs` SHA-256
 `00856084…80521`, `unicorn.rs` `6560E1E3…A0F2`;

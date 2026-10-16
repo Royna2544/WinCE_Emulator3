@@ -172,6 +172,13 @@ already-loaned object through a raw pointer. A checked parent-suspension token
 resumes only after the child is classified and its resource is in custody.
 The current raw Kernel/framebuffer hook pointers do not yet meet this target.
 
+A generic `with_cpu` payload loan does not authorize execution. Backend entry
+requires an exact active-leaf run permit; a generation-checked slot-loan and
+retire latch must refuse slot retirement or reuse while any payload loan or
+run permit is outstanding. A private stable per-slot cell alone cannot enforce
+that lifetime rule. The proposed callback-scoped machine-state boundary also
+does not, by itself, prove every existing pending-return `RefCell` safe.
+
 ## A2. Shared identity and lifetime
 
 Names below are proposed contracts, not newly implemented APIs.
