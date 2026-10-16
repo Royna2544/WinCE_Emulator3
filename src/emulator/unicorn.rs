@@ -5984,10 +5984,13 @@ impl UnicornMips {
                 cpu.saved_context_thread_birth
                     .filter(|thread| thread.thread_id() == cpu.initial_thread_id)
             });
-        for thread_id in [parked.thread_id, cpu.current_thread_id] {
-            if thread_id == 0 {
-                continue;
-            }
+        // `parked.thread_id` is a scheduler representative. It may name a
+        // worker while this saved CPU is stopped on the primary thread, and
+        // it has no captured ThreadBirthKey of its own. Authenticate the
+        // actual stopped CPU thread instead of promoting that numeric tag
+        // into exit authority.
+        let thread_id = cpu.current_thread_id;
+        if thread_id != 0 {
             let frozen = if thread_id == cpu.initial_thread_id {
                 primary_birth
             } else {
