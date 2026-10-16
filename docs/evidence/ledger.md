@@ -2422,6 +2422,22 @@ scheduler-block self-reentry only. Natural or cross-hook reentry, modal
 partial-effects recovery, whole-attempt port and O-T7 CPU custody are open.
 No live app or mount run was made.
 
+## Bounded native-entry precondition (2026-10-17)
+
+The [sealed receipt](../../evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+records `unicorn.rs` SHA-256 `55642d7b…32ed3d`. A same-host-thread guard
+refuses native guest reentry before private CPU setup. The real-MIPS
+**preseeded** busy control verifies typed refusal and same-CPU retry; the
+initial late-guard retry failure remains preserved. Sealed focused release
+passed **1/0**; complete release-feature and no-default suites passed
+**2,178/0/10 ignored** and **1,539/0/2 ignored** over 19 blocks each, with
+three feature checks exiting 0. This guard does not establish natural
+reentry, a machine-owned leaf permit, a callback-scoped Kernel/framebuffer
+port, or custody after a child native fault. The earlier scheduler-block
+receipt's suggested shared import/block flag is superseded by the current
+source audit: those hook families execute sequentially in the sole native
+entry. No live app or mount run was made.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

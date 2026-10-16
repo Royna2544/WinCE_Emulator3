@@ -251,6 +251,15 @@ not an implemented owner. Stage its connected source cut in this order:
    shared-flag import/block gate. This does not promote Step 2; audit reachable
    raw-alias and host-callback loans, then finish the connected whole-attempt
    port and modal partial-effects gates.
+   The later [native-entry precondition](../evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+   refuses a second same-host-thread guest-native entry at the start of the
+   private attempt, before saved-CPU setup. Its preseeded-busy real-MIPS
+   control verifies typed refusal and same-CPU retry; complete sealed release
+   and no-default suites pass. This does not remove the outer mutable Kernel/
+   framebuffer references across `emu_start`, protect another host thread, or
+   give the machine an exact leaf permit. A child's post-native first-touch
+   fault is the next reachable alias witness to carry through the connected
+   port; the still-red ordinary native-fault CPU-loss control gates Step 3.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the entire native
    attempt, fallible short loans tied to exact attempt/leaf authority, and a

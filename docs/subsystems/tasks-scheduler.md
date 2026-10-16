@@ -813,6 +813,15 @@ surrogate for natural overlap. The outer long-lived mutable Kernel and
 framebuffer references, other raw hook aliases and post-native child loan
 remain open; sequential hooks alone do not prove a sound whole-attempt port.
 
+The subsequent [bounded native-entry precondition](../../evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+now refuses a second guest-native entry on the same host thread at the start
+of the private attempt, before saved-CPU setup. Its preseeded-busy real-MIPS
+control verifies typed refusal and same-CPU retry, and the sealed broad
+suites pass. It is not a machine-owned leaf permit, does not exclude another
+host thread, and does not remove the outer Kernel/framebuffer loans or the
+post-native child helper's alias boundary. The proposed port and O-T7 slot
+contract remain unimplemented.
+
 At that historical source seal, non-live-pump `CreateProcessW` ran the child
 immediately from the import hook at `:13569–13579`; its HLE dispatch loan had
 ended, but `run_pending_process_launches(&mut CeKernel)` retained a mutable
