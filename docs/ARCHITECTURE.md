@@ -113,9 +113,11 @@ owner and poisons native re-entry. At that earlier native seal, raw/decoded
 pseudo routes remained synchronous compatibility paths. The later bounded
 [decoded self-exit gate](../evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
 uses an executed call/delay-slot witness and that stopped finalizer for the
-direct-kernel pseudo shape. Raw direct compatibility remains separate. An
-unpreflighted modal backing is refused, and the complete target exit-effect
-contract, including failures after successful
+direct-kernel pseudo shape. Raw direct compatibility remains separate. The
+bounded [modal-presence refusal gate](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+rejects affected MessageBox/popup state before stopped-exit effects in its
+tested shapes; checked modal backing restoration and the complete target
+exit-effect contract, including failures after successful
 preflight, remains open. No live iNavi result follows.
 
 ## A1. Machine authority
@@ -214,7 +216,11 @@ propagation. The later selected-owner control refuses a boot/root exit whose
 saved CPU owner no longer matches the selected process. The monitor blocks a
 new checkpoint after refusal and permits only an earlier checkpoint restore
 to clear its execution hold. It does not make later teardown effects atomic or complete the
-machine-owned Task/VM lifecycle.
+machine-owned Task/VM lifecycle. The later
+[modal-presence cut](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+refuses affected modal CPU subtrees in three red-to-green stopped-exit shapes;
+it does not restore modal backing or preserve nonmodal descendant CPUs on a
+successful exit.
 
 ### Stage 3 pseudo self-exit convergence (bounded source gate)
 

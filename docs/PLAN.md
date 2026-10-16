@@ -117,8 +117,10 @@ requires an attempt-local executed JALR/delay-slot witness and exact stopped
 caller/owner before the same finalizer; its
 [broad offline suites](../evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)
 passed release 2,107/0/9 ignored and no-default 1,511/0/3 ignored. Raw direct
-pseudo compatibility remains separate; modal backing refuses completion until
-it has a checked preflight.
+pseudo compatibility remains separate. The bounded
+[modal-presence refusal gate](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+now fails closed before effects in its tested exact-birth stopped-exit shapes;
+checked modal backing restoration remains separate.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit
@@ -359,7 +361,10 @@ close only their named gates, not Stage 2 or live acceptance.
   above source-tests stop-before-next-instruction and exact child/boot Task/VM
   retirement after owner closure and preflight. The later decoded gate above
   covers the witnessed direct-kernel pseudo shape; raw direct pseudo
-  compatibility and modal restoration remain separate gates. Full exit-effect
+  compatibility remains separate. The bounded
+  [modal-presence refusal gate](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+  protects its tested stopped-exit shapes; checked modal restoration remains
+  a separate gate. Full exit-effect
   authority, live-app behavior and CE6 parity
   remain open.
   Broadcast, HWND timers, hotkeys,

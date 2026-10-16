@@ -218,6 +218,12 @@ source passed 18-block release-feature **2,107/0/9 ignored** and no-default
 ([receipt](evidence/stage3-raw-decoded-pseudo-exit-20261016/broad-validation.receipt.md)).
 Raw direct pseudo compatibility remains fixture-only and fail-closed; this is
 not full Task/VM authority or live-app proof. No app or mount run was made.
+The bounded [D-011 modal-presence refusal gate](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
+now preserves modal-bearing parked CPU subtrees and fails closed before
+Kernel effects for three red-to-green stopped-exit shapes. Its sealed source
+passed 19-block release-feature **2,137/0/10 ignored** and no-default
+**1,524/0/3 ignored**; checked modal-pixel restoration, nonmodal descendant
+CPU ownership and live-app proof remain open. No mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
 but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL
