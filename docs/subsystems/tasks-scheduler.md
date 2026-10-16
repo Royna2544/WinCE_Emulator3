@@ -24,6 +24,14 @@ nonzero return PC before post-native launch in both modes. The file-view
 control checks canonical host bytes, not a guest-visible post-lease read.
 Machine-owned CPU custody, callback-scoped machine-state access, live-pump
 later-slice survival, Stage 5 scheduling and live-app acceptance remain open.
+The subsequent direct-MIPS first-slice `Completed` empty-descendant cut has a
+[stamped red](../../evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log):
+window restoration held a parent-queue read borrow and the old unconditional
+borrow panicked. Current source skips an empty descendant publication and
+uses fallible borrow/reservation for nonempty descendants; the latter can
+still lose CPU custody after committed exit effects. Its final green/broad
+seal is pending. The old two ignored held-borrow/A→B fixtures were retired as
+stale after missing post-deferral preconditions; their receipts remain.
 
 ## Responsibility and scope
 
@@ -413,8 +421,10 @@ local A+B CPU tree. This is not the infallible publication/recovery target
 above: Stage 4 needs machine-owned child custody. Current framebuffer
 implementations do not reenter that queue while its mutable borrow spans
 Kernel completion, but the open trait does not prevent a custom one.
-`Completed` still uses an unconditional queue borrow, and first-slice
-primary-thread exact live-birth authority remains unproved. Already-exited
+The later direct-MIPS empty-descendant `Completed` source cut skips that
+borrow; nonempty descendant publication still has a terminal post-effect
+ownership-loss path and no preservation control. First-slice primary-thread
+exact live-birth authority remains unproved. Already-exited
 skips, requested parked siblings and generic duplicate pruning need separate
 gates, then a real-MIPS CreateProcess→parent-exit fixture. No one of these
 tests is iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
@@ -458,9 +468,11 @@ from retryable error (exact pending launch retained), and never orphan a child.
 A source audit found that the current pending-launch drain has fallible steps
 before CPU construction; because an already-returned guest `CreateProcessW`
 cannot be undone as a failed parent call, such an error needs an explicit
-retained-launch or child-completion outcome. It also found that `Completed`
-borrows the parent queue unconditionally, while post-construction load/native
-errors and numeric duplicate pruning can drop local or nested CPU boxes.
+retained-launch or child-completion outcome. It also found a then-
+unconditional `Completed` parent-queue borrow; the later empty-descendant
+source cut removes only that unnecessary borrow. Nonempty publication
+conflict, post-construction load/native errors and numeric duplicate pruning
+can still drop local or nested CPU boxes.
 A post-admission failure retains the exact stopped CPU tree and Kernel live/wait
 state. A successful A exit must reserve a checked survivor destination before
 Kernel effects, then move original B custody without a fallible publication.
@@ -694,12 +706,14 @@ At the final deferred-source seal, ignored reruns
 [16](../../evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
 and [17](../../evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
 exit 101 at stale fixture preconditions, before their old failure sites;
-neither proves those failures fixed or reproduced on the new route. Determine
-whether the `Completed` parent-queue borrow remains reachable after deferral,
-including a live-pump later slice, then rebuild or retire those controls.
+neither proves those failures fixed or reproduced on the new route. Their
+ignored fixture implementations were retired. A new direct-MIPS fixture
+reaches first-slice `Completed` with an empty descendant queue and a held
+parent borrow; it does not prove a nonempty descendant splice or live-pump
+later-slice behavior.
 [Attempt 18](../../evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
 still exits 101 at the admitted child's sole-CPU-owner assertion after an
-ordinary native fault. All three remain ignored.
+ordinary native fault and remains ignored.
 
 Acceptance rechecks that historical red and the held-borrow red, plus the
 separately staged [injected first-slice native-error control](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md).

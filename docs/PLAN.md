@@ -149,18 +149,20 @@ without Kernel exit or host panic, but drops the local CPU tree; it is not a
 recovery hold. The older test-seam requirement is thus met for this one shape,
 not for real-MIPS classifier reachability. Final-source suites passed release
 2,147/0/10 ignored and no-default 1,524/0/3 ignored over 19 blocks each.
-Exact live primary birth,
-`Completed` publication borrow, custom framebuffer reentry, other survivor
-shapes and live iNavi remain open.
+Exact live primary birth, nonempty `Completed` descendant publication,
+custom framebuffer reentry, other survivor shapes and live iNavi remain open.
 
 The next preparatory Stage 3/4 cross-boundary source cut requires a
 [machine-owned CPU-custody design](subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
 before production custody code: inventory every boot/child/displaced/parked/Completed/switch/
 failure/exit owner, settle [O-T7](DECISIONS.md), and stage expected reds for
 held-queue publication and ordinary first-slice failure losing a live CPU.
-The read-only owner audit found pre-CPU drained-launch errors, an unconditional
-`Completed` queue borrow, numeric prune/drop sites and independently cloned
-checkpoints. Add controls for those boundaries and a late post-effect failure
+The read-only owner audit found pre-CPU drained-launch errors, a then-
+unconditional `Completed` queue borrow, numeric prune/drop sites and
+independently cloned checkpoints. A later direct-MIPS source cut skips the
+empty-descendant borrow, but nonempty publication conflict still loses CPU
+custody after committed exit effects. Add controls for the remaining
+boundaries and a late post-effect failure
 before admitting a machine-owned slot cut. A live-custody checkpoint fails
 closed until CPU and Kernel/VM identities can be relineaged atomically.
 The current Kernel exit path has no safe ordinary failure injection after
@@ -191,9 +193,14 @@ its own later-slice survivor fixture; this gate does not provide O-T7 CPU
 custody, live-app acceptance or a writable-mount run.
 
 The [2026-10-17 pre-deferral rerun](../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-confirmed three still-ignored offline reds on one earlier seal: `Completed`
+confirmed three then-ignored offline reds on one earlier seal: `Completed`
 panicked on a held parent-queue borrow and stranded B; the already-exited-A
 skip dropped B; and a post-admission native error dropped the child's CPU.
+Two old fixture implementations were subsequently retired because they miss
+the post-native route; their historical receipts remain. A new direct-MIPS
+first-slice `Completed` fixture reaches the empty-descendant borrow hazard,
+but neither nonempty descendant preservation nor later-slice A→B survival is
+proved. The native-fault custody red remains ignored.
 The checkpoint refusal's seven former ignores are now
 [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
 in complete release and no-default suites. This does not change the staging
@@ -238,10 +245,13 @@ not an implemented owner. Stage its connected source cut in this order:
    destination before effects, then move original locators infallibly after
    accepted exit. Native/load/publication failures retain non-runnable CPU
    custody; a late post-effect failure quarantines it and reports partial
-   effects. Turn the current native-error red green; first rebuild or retire
-   the stale held-borrow and real-MIPS A-exits/B-live fixtures after checking
-   their post-native reachability. Then cover `Completed`, numeric duplicate
-   pruning, framebuffer reentry and post-effect injection.
+   effects. Turn the current native-error red green. The two stale
+   held-borrow and real-MIPS A-exits/B-live fixture implementations were
+   retired after they missed post-native preconditions; their historical
+   evidence remains. A direct empty-descendant `Completed` control is now
+   staged, while nonempty descendant custody, numeric duplicate pruning,
+   later-slice framebuffer reentry and post-effect injection need separate
+   controls.
 5. Separately prove controlled first-slice `Exited` classification, B's later
    PC resumability and the live-pump later-slice deferred-launch/exit route. Keep
    live iNavi/frame/footprint acceptance behind a newly sealed build and its

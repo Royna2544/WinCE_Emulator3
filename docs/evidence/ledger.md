@@ -2120,8 +2120,8 @@ recoverable hold or the target's infallible publication boundary.
 The current normal callsites at `unicorn.rs:13530` and `:14611` do not hold
 that parent queue borrow. Existing concrete framebuffers do not reenter the
 queue during exit completion; a custom reentrant implementation is not
-supported by this cut. The separate `Completed` queue borrow and an exact
-live primary-thread-birth gate remain open. These tests do not execute a
+supported by this cut. At that seal, the separate `Completed` queue borrow and
+an exact live primary-thread-birth gate remained open. These tests do not execute a
 guest MIPS first slice, establish classifier reachability or iNavi behavior.
 The [CE6/REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
 is static ownership context, not a decompilation of the dumped kernel exit
@@ -2136,8 +2136,10 @@ returns through its saved startup RA with `0x63`. B is separately exact-birth
 Kernel-live and unsignaled; after B is activated and A is pruned, the outer A
 launch sees `CreateProcessChildParkSkipped(already_exited)` and discards the
 local CPU now belonging to B. The asserted parent CPU queue is zero versus
-one required owner. The final source test is ignored expected-red; the normal
-focused selection passes with one ignored. The natural route uses
+one required owner. At that seal the final source test was ignored
+expected-red; the normal focused selection passed with one ignored. The
+fixture was later retired after missing post-deferral preconditions. The
+historical natural route uses
 `parked_prune_exit`, not the synthetic `initial_child_exit` arm, and covers
 only `live_pump=false`. No production repair or app/mount run occurred.
 
@@ -2211,7 +2213,10 @@ separately hash-preserved. This does not lift the live save/restore fence.
 Three [pre-deferral offline expected reds](../../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
 then reproduced the `Completed` held-queue `RefCell` panic/survivor loss,
 already-exited-A dropping B's original CPU, and admitted-child native-fault
-CPU loss. All three remain ignored; no app or writable mount was run.
+CPU loss. At that seal all three were ignored; no app or writable mount was
+run. The two stale route-specific
+fixture implementations were subsequently retired, while the native-fault
+custody control remains ignored.
 
 Separately, the earlier [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
 used the same four-file source seal for five stamped attempts. The four
@@ -2244,6 +2249,22 @@ exited 101 at the sole-child-CPU assertion after an ordinary native fault;
 that custody failure remains current. CPU slots, a callback-scoped
 machine-state port, live-pump later-slice survivor behavior, Stage 5 policy
 and live iNavi acceptance are unproved. No app or writable mount was run.
+
+## Direct first-slice Completed empty-descendant gate (2026-10-17, validation pending)
+
+The stamped [attempt 01 expected red](../../evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
+executed a direct pseudo-exit MIPS child through window-backing restoration
+and first-slice `Completed`. A test framebuffer held a parent-queue read
+borrow; the old unconditional `borrow_mut` panicked even though the child had
+no parked descendants. The current source skips that empty publication and
+uses `try_borrow_mut`/`try_reserve` for nonempty descendants. A nonempty
+conflict is reported as typed terminal `Backend` after committed exit effects
+and can still lose descendant CPU custody. Focused green and broad receipt
+are pending; this is not a nonempty-survivor, later-slice or live-app result.
+The two old ignored `Completed`/A→B fixture implementations were retired
+because A13 reruns 16/17 missed their post-deferral preconditions; their
+earlier red logs remain historical evidence. The admitted-child native-fault
+control remains ignored and current. No app or writable mount was run.
 
 ## Shipped iNavi process-launch REA check (2026-10-16, static artifact)
 

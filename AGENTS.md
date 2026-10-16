@@ -264,7 +264,14 @@ modes; non-live rotation may select the child before the parent resumes.
 Its 19-block release-feature **2,161/0/13 ignored** and no-default
 **1,532/0/3 ignored** suites passed. Ignored current-source reruns 16/17
 missed their old fixture preconditions, so they neither reproduced nor fixed
-those failures; rerun 18 still loses an admitted child's CPU on native fault.
+those failures; their stale ignored fixtures have since been retired. A new
+direct-MIPS first-slice `Completed` control reaches window restoration with an
+empty descendant queue and a held parent-queue read borrow; the old source
+panicked there. The current source skips that unnecessary borrow and uses
+fallible borrow/reservation for nonempty descendants, where failure remains
+terminal after committed exit effects and can lose descendant CPU custody.
+Its final validation is pending. Rerun 18 still loses an admitted child's CPU
+on native fault and remains ignored.
 This is not a CPU slot/Task port, Stage 5 scheduling gate or live result. The
 shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
 identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
@@ -272,8 +279,9 @@ analysis does not establish their runtime frequency. The
 dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
 and local CE6 source further distinguish loader completion, process waits,
 termination requests and accepted exit; the ROM kernel exit body is unknown.
-Current-route reachability of the earlier `Completed` borrow/reentry failure,
-exact primary birth, other framebuffer reentry and exit paths remain open.
+Current-route reachability of a nonempty `Completed` descendant publication
+conflict, exact primary birth, later-slice survivor behavior, other framebuffer
+reentry and exit paths remain open.
 No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
