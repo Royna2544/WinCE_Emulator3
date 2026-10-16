@@ -230,6 +230,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
      A-to-B handoff and native-fault CPU-custody gates; do not count either
      guard as the connected port.
+     Stage [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-review-answer-not-implemented)
+     as a distinct non-runnable custody cut: first separate pre-CPU retry
+     errors from admitted native errors, then connect the exact-birth slot
+     producer to main's run-loop owner, checked exit/prune retirement,
+     checkpoint refusal, status/debug and one-owner controls. Only in that
+     same sealed cut replace the existing ignored direct-helper native-fault
+     red with a green real-MIPS post-native first-touch/fault witness. Do not
+     infer general VM/file-view cleanup or a runnable leaf permit from 3a;
+     the owner-page resource audit records the currently missing exit path.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import

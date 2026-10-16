@@ -122,7 +122,8 @@ remote-control HTTP/WebSocket surface.
   [pre-CPU launch-retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
   keeps an already-published launch available for retry before any CPU
   exists. Post-admission CPU owner loss remains open. The callback-scoped
-  machine-state port precedes machine-owned custody; neither is implemented.
+  machine-state port and machine-owned runnable custody are unimplemented; a
+  narrower non-runnable fault quarantine is planned as a separate cut.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
 - The bounded [exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
