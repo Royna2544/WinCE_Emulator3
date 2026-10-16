@@ -8517,6 +8517,46 @@ impl UnicornMips {
             .any(|blob| blob.bytes.sealed_pin().is_some())
     }
 
+    /// A CPU-only monitor checkpoint cannot relineage live execution custody
+    /// with Kernel/VM births. This is a conservative refusal predicate, not
+    /// the canonical task directory: a pristine `new` wrapper is safe, while
+    /// any loaded, assigned, parked or previously run wrapper is not.
+    pub fn has_unrelineaged_checkpoint_custody(&self) -> bool {
+        let structural = self.entry.is_some()
+            || self.entry_image_base.is_some()
+            || self.stack_top.is_some()
+            || self.initial_thread_id != MAIN_GUEST_THREAD_ID
+            || self.memory.regions().next().is_some()
+            || !self.mapped_blobs.is_empty()
+            || !self.loaded_modules.is_empty()
+            || self.owned_process_launch.is_some()
+            || !self.parked_child_processes.is_empty()
+            || self.run_slice_generation != 0
+            || self.last_native_slice_outcome != NativeSliceOutcome::NoAttempt
+            || self.last_debug.is_some()
+            || self.last_wall_clock_debug.is_some()
+            || self.completed_active_process_exit
+            || self.private_slab_attempt_poisoned;
+        #[cfg(feature = "unicorn")]
+        {
+            structural
+                || self.saved_context.is_some()
+                || self.running_guest_thread.is_some()
+                || self.current_thread_id != MAIN_GUEST_THREAD_ID
+                || !self.pending_guest_thread_returns.is_empty()
+                || !self.pending_wndproc_returns.is_empty()
+                || !self.blocked_wait_threads.is_empty()
+                || self.blocked_guest_thread.is_some()
+                || self.suspended_guest_thread.is_some()
+                || !self.suspended_guest_thread_queue.is_empty()
+                || !self.self_suspended_guest_threads.is_empty()
+        }
+        #[cfg(not(feature = "unicorn"))]
+        {
+            structural
+        }
+    }
+
     #[cfg(feature = "unicorn")]
     pub fn trampoline_debug_text(&self) -> String {
         use std::fmt::Write as _;
@@ -19904,6 +19944,20 @@ fn sync_mapped_blobs_from_unicorn<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn restore_pre_cpu_launch_error(
+    kernel: &mut CeKernel,
+    remaining: &mut VecDeque<crate::ce::kernel::PendingProcessLaunch>,
+    current: Option<crate::ce::kernel::PendingProcessLaunch>,
+    error: Error,
+) -> Error {
+    if let Some(current) = current {
+        remaining.push_front(current);
+    }
+    kernel.restore_pending_process_launches(std::mem::take(remaining).into());
+    error
+}
+
+#[cfg(feature = "unicorn")]
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
@@ -19918,21 +19972,39 @@ fn run_pending_process_launches<D>(
     if launches.is_empty() {
         return Ok(());
     }
-    sync_file_mapping_views_from_unicorn_guarded(
+    if let Err(error) = sync_file_mapping_views_from_unicorn_guarded(
         parent_uc,
         kernel,
         parent_owner_pid,
         sealed_host_write_guard,
-    )?;
+    ) {
+        return Err(restore_pre_cpu_launch_error(
+            kernel,
+            &mut launches,
+            None,
+            error,
+        ));
+    }
     while let Some(launch) = launches.pop_front() {
-        let launch_birth = launch.process_birth.ok_or_else(|| {
-            Error::Backend("pending child launch has no original process birth".to_owned())
-        })?;
+        let Some(launch_birth) = launch.process_birth else {
+            return Err(restore_pre_cpu_launch_error(
+                kernel,
+                &mut launches,
+                Some(launch),
+                Error::Backend("pending child launch has no original process birth".to_owned()),
+            ));
+        };
         if kernel.handles.process_birth_key(launch.process_id) != Some(launch_birth) {
-            return Err(Error::Backend(format!(
+            let error = Error::Backend(format!(
                 "pending child launch pid {} has a stale process birth",
                 launch.process_id
-            )));
+            ));
+            return Err(restore_pre_cpu_launch_error(
+                kernel,
+                &mut launches,
+                Some(launch),
+                error,
+            ));
         }
         if let Some(requested_code) = kernel
             .handles
@@ -19978,7 +20050,18 @@ fn run_pending_process_launches<D>(
             });
             continue;
         }
-        let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
+        let resolved = match resolve_process_launch_path(kernel, &launch) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return Err(restore_pre_cpu_launch_error(
+                    kernel,
+                    &mut launches,
+                    Some(launch),
+                    error,
+                ));
+            }
+        };
+        let Some(path) = resolved else {
             let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
                 &launch,
                 u32::MAX,
@@ -20028,7 +20111,28 @@ fn run_pending_process_launches<D>(
             error: None,
             detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
-        let image = PeImage::inspect(&path)?;
+        let image = match PeImage::inspect(&path) {
+            Ok(image) => image,
+            Err(error) => {
+                return Err(restore_pre_cpu_launch_error(
+                    kernel,
+                    &mut launches,
+                    Some(launch),
+                    error,
+                ));
+            }
+        };
+        let mut child = match UnicornMips::new() {
+            Ok(child) => child,
+            Err(error) => {
+                return Err(restore_pre_cpu_launch_error(
+                    kernel,
+                    &mut launches,
+                    Some(launch),
+                    error,
+                ));
+            }
+        };
         let saved_base = kernel.process_module_base();
         let saved_path = kernel.process_module_path().to_owned();
         let saved_host_path = kernel.process_module_host_path().cloned();
@@ -20055,7 +20159,6 @@ fn run_pending_process_launches<D>(
         kernel.reset_current_process_exit_state();
 
         let child_result = (|| -> Result<(ChildProcessRunOutcome, UnicornMips)> {
-            let mut child = UnicornMips::new()?;
             child.owned_process_launch = Some(launch.clone());
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
             child.set_initial_thread_id(launch.thread_id);
@@ -71882,6 +71985,70 @@ mod unicorn_tests {
         bytes
     }
 
+    fn tiny_mips_create_process_then_return_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_spinner_pe();
+        bytes.resize(0x600, 0);
+        // The main image really imports COREDLL CreateProcessW by ordinal.
+        // The loader, not this test, patches its IAT to an import trap.
+        write_vec_u16(&mut bytes, 0x84 + 2, 2);
+        write_vec_u32(&mut bytes, 0x98 + 56, 0x3000);
+        write_vec_u32(&mut bytes, 0x98 + 96 + 8, 0x2000);
+        write_vec_u32(&mut bytes, 0x98 + 96 + 12, 0x28);
+        let idata_section = 0x178 + 40;
+        bytes[idata_section..idata_section + 8].copy_from_slice(b".idata\0\0");
+        write_vec_u32(&mut bytes, idata_section + 8, 0x200);
+        write_vec_u32(&mut bytes, idata_section + 12, 0x2000);
+        write_vec_u32(&mut bytes, idata_section + 16, 0x200);
+        write_vec_u32(&mut bytes, idata_section + 20, 0x400);
+        write_vec_u32(&mut bytes, idata_section + 36, 0xc000_0040);
+        write_vec_u32(&mut bytes, 0x400, 0x2050); // original first thunk
+        write_vec_u32(&mut bytes, 0x40c, 0x2040); // COREDLL.dll
+        write_vec_u32(&mut bytes, 0x410, 0x2070); // first thunk / IAT
+        bytes[0x440..0x44c].copy_from_slice(b"COREDLL.dll\0");
+        let create_process_ordinal = crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W;
+        write_vec_u32(&mut bytes, 0x450, 0x8000_0000 | create_process_ordinal);
+        write_vec_u32(&mut bytes, 0x470, 0x8000_0000 | create_process_ordinal);
+        for (index, wide) in "survivor.exe"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .enumerate()
+        {
+            write_vec_u16(&mut bytes, 0x480 + index * 2, wide);
+        }
+
+        // The PE entry's saved startup RA is the emulator's thread-exit stub.
+        // Preserve it across JALR, invoke CreateProcessW through the real IAT,
+        // then return 0x63 through that original RA in the same first slice.
+        let words = [
+            0x27bd_ff00, // addiu sp,sp,-0x100
+            0x03e0_8021, // move s0,ra
+            0x3c04_0040, // lui a0,0x40
+            0x3484_2080, // ori a0,a0,0x2080: L"survivor.exe"
+            0x0000_2821, // move a1,zero
+            0x0000_3021, // move a2,zero
+            0x0000_3821, // move a3,zero
+            0xafa0_0010, // sw zero,16(sp): arg 4
+            0xafa0_0014, // sw zero,20(sp): arg 5
+            0xafa0_0018, // sw zero,24(sp): arg 6
+            0xafa0_001c, // sw zero,28(sp): arg 7
+            0xafa0_0020, // sw zero,32(sp): arg 8
+            0x27a8_0080, // addiu t0,sp,0x80: PROCESS_INFORMATION
+            0xafa8_0024, // sw t0,36(sp): arg 9
+            0x3c08_0040, // lui t0,0x40
+            0x8d19_2070, // lw t9,0x2070(t0): patched IAT
+            0x0320_f809, // jalr t9
+            0,           // delay slot
+            0x0200_f821, // move ra,s0
+            0x2402_0063, // addiu v0,zero,0x63
+            0x03e0_0008, // jr ra
+            0,           // delay slot
+        ];
+        for (index, word) in words.into_iter().enumerate() {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        bytes
+    }
+
     fn write_guest_fixture_bytes(parent: &mut super::UnicornMips, address: u32, bytes: &[u8]) {
         let blob = parent
             .mapped_blobs
@@ -77557,6 +77724,202 @@ mod unicorn_tests {
         assert!(!kernel.recent_process_ops().iter().any(|record| {
             record.op == "CreateProcessResolved" && record.process_id == Some(launch.process_id)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn pre_cpu_file_view_refusal_retains_exact_pending_launch_for_retry() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        let child_path = test_root.join("child.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let child_birth = launch.process_birth.expect("published child birth");
+        let base = kernel
+            .memory
+            .virtual_alloc(
+                parent_birth,
+                crate::ce::memory::VirtualAllocationSource::FileViewLegacy,
+                0,
+                4,
+                0x3000,
+                0x04,
+            )
+            .expect("test lazy file-view allocation");
+        assert!(
+            kernel
+                .memory
+                .set_virtual_initial_bytes(parent_birth, base, vec![0; 4])
+        );
+        let mut view_handles = Vec::new();
+        for view_pid in [parent_pid, launch.process_id] {
+            let handle = kernel.handles.create_file_mapping(None, 4, 4, None);
+            kernel.handles.file_mapping_mut(handle)?.views.push(
+                crate::ce::object::FileMappingView {
+                    base,
+                    size: 4,
+                    offset: 0,
+                    process_id: view_pid,
+                    process_birth: None,
+                },
+            );
+            view_handles.push(handle);
+        }
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let error = super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits::default(),
+            &[],
+            &parked,
+        )
+        .expect_err("conflicting lazy file views must refuse before child CPU admission");
+        assert!(
+            format!("{error}").contains("ambiguous lazy file-view seed"),
+            "pre-CPU setup error: {error}"
+        );
+        assert!(parked.borrow().is_empty(), "no child CPU was constructed");
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.process_id == Some(launch.process_id)
+                && matches!(
+                    record.op,
+                    "CreateProcessResolved"
+                        | "CreateProcessResolveFailed"
+                        | "CreateProcessChildError"
+                        | "CreateProcessChildParked"
+                )
+        }));
+
+        let retained = kernel.take_pending_process_launches();
+        assert_eq!(
+            retained,
+            vec![launch.clone()],
+            "retryable pre-CPU failure must preserve the exact published launch"
+        );
+        kernel.restore_pending_process_launches(retained);
+        // Remove only the conflicting lazy view; retry the *same* birth and
+        // require its first real MIPS slice to become CPU-reachable.
+        kernel
+            .handles
+            .file_mapping_mut(view_handles[1])?
+            .views
+            .clear();
+        super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        )?;
+        assert!(kernel.take_pending_process_launches().is_empty());
+        assert_eq!(parked.borrow().len(), 1);
+        assert_eq!(
+            parked.borrow()[0].process_state.process_id,
+            launch.process_id
+        );
+        assert_eq!(
+            parked.borrow()[0]
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(child_birth)
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        Ok(())
+    }
+
+    #[test]
+    fn pre_cpu_bad_pe_retains_current_and_following_exact_launches() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("bad-child.exe"), b"not a MIPS PE").unwrap();
+        std::fs::write(test_root.join("later-child.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let bad = kernel.queue_process_launch(Some("bad-child.exe".to_owned()), None);
+        let later = kernel.queue_process_launch(Some("later-child.exe".to_owned()), None);
+        let bad_birth = bad.process_birth.expect("first child birth");
+        let later_birth = later.process_birth.expect("following child birth");
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits::default(),
+            &[],
+            &parked,
+        )
+        .expect_err("invalid first image must refuse before CPU construction");
+        assert!(parked.borrow().is_empty());
+        assert_eq!(kernel.current_process_id(), parent_pid);
+        for (launch, birth) in [(&bad, bad_birth), (&later, later_birth)] {
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(
+                kernel.process_exit_code(launch.process_handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        }
+        assert!(kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessResolved" && record.process_id == Some(bad.process_id)
+        }));
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.process_id == Some(bad.process_id)
+                && matches!(
+                    record.op,
+                    "CreateProcessResolveFailed"
+                        | "CreateProcessChildError"
+                        | "CreateProcessChildParked"
+                )
+        }));
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![bad, later],
+            "the popped child and untouched tail keep original order and births"
+        );
         Ok(())
     }
 
@@ -84384,6 +84747,252 @@ mod unicorn_tests {
         assert_eq!(
             kernel.process_exit_code(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: exited A can discard the still-live guest-created B CPU"]
+    fn real_mips_first_slice_child_return_hoists_guest_created_survivor() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let first_path = test_root.join("first-slice.exe");
+        let survivor_path = test_root.join("survivor.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&first_path, tiny_mips_create_process_then_return_pe()).unwrap();
+        std::fs::write(&survivor_path, tiny_mips_spinner_pe()).unwrap();
+
+        let image = crate::pe::PeImage::inspect(&first_path)?;
+        assert_eq!(image.imports.len(), 1);
+        assert_eq!(image.imports[0].module_name, "COREDLL.dll");
+        assert_eq!(image.imports[0].imports.len(), 1);
+        assert!(matches!(
+            image.imports[0].imports[0].import,
+            crate::pe::ImportBy::Ordinal(493)
+        ));
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let first = kernel.queue_process_launch(Some("first-slice.exe".to_owned()), None);
+        let first_birth = first.process_birth.expect("first process birth");
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        // This is deliberately the immediate, non-live-pump route. The live
+        // pump defers CreateProcess until after its current slice instead.
+        super::run_pending_process_launches(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        )?;
+
+        let trace = kernel.recent_process_ops();
+        let returned: Vec<_> = trace
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessChildReturned"
+                    && record.process_id == Some(first.process_id)
+            })
+            .collect();
+        assert_eq!(returned.len(), 1, "A must exit exactly once");
+        assert_eq!(returned[0].result, Some(0x63));
+        assert!(!kernel.handles.process_execution_live_by_birth(first_birth));
+        assert_eq!(kernel.process_exit_code(first.process_handle), Some(0x63));
+        assert_eq!(kernel.is_wait_ready(first.process_handle, 1), Some(true));
+
+        let queued_survivors: Vec<_> = trace
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessWQueued"
+                    && record.application.as_deref() == Some("survivor.exe")
+            })
+            .collect();
+        assert_eq!(queued_survivors.len(), 1, "MIPS IAT call must queue B once");
+        let survivor_pid = queued_survivors[0].process_id.expect("survivor PID");
+        let survivor_handle = queued_survivors[0].process_handle.expect("survivor handle");
+        let survivor_birth = kernel
+            .handles
+            .process_birth_key_for_handle(survivor_handle)
+            .expect("survivor exact birth");
+        assert_ne!(survivor_birth, first_birth);
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(survivor_birth)
+        );
+        assert_eq!(
+            kernel.process_exit_code(survivor_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(survivor_handle, 1), Some(false));
+        assert_eq!(kernel.current_process_id(), root_pid);
+
+        let parked = parked.borrow();
+        assert_eq!(
+            parked.len(),
+            1,
+            "A's only live descendant must remain CPU-reachable; trace: {:?}",
+            trace
+                .iter()
+                .map(|record| (record.op, record.process_id, record.detail.as_deref()))
+                .collect::<Vec<_>>()
+        );
+        let survivor = &parked[0];
+        assert_eq!(survivor.process_state.process_id, survivor_pid);
+        assert_eq!(survivor.process_handle, Some(survivor_handle));
+        assert_eq!(survivor.module_host_path, survivor_path);
+        assert_eq!(
+            survivor
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|launch| launch.process_birth),
+            Some(survivor_birth)
+        );
+        assert_eq!(survivor.cpu.initial_thread_id, survivor.thread_id);
+        assert_eq!(survivor.cpu.current_thread_id, survivor.thread_id);
+        assert_eq!(survivor.cpu.entry, Some(0x0040_1000));
+        let saved = survivor
+            .cpu
+            .saved_context
+            .as_ref()
+            .expect("original B CPU context");
+        assert_ne!(saved.pc, 0);
+        assert!(survivor.cpu.last_debug_snapshot().is_some());
+        assert!(survivor.cpu.native_engine_identity_for_test().is_none());
+        assert!(trace.iter().any(|record| {
+            record.op == "CreateProcessChildParked" && record.process_id == Some(survivor_pid)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: ordinary first-slice native error drops an admitted child CPU"]
+    fn ordinary_first_slice_native_fault_retains_admitted_child_cpu() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        eprintln!("FIXTURE_TEMP_ROOT={}", test_root.display());
+        let parent_path = test_root.join("parent.exe");
+        let child_path = test_root.join("faulting-child.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_bytes, 0x200, 0x3c08_2000); // lui t0,0x2000
+        write_vec_u32(&mut child_bytes, 0x204, 0x8d02_0000); // lw v0,0(t0), unmapped
+        write_vec_u32(&mut child_bytes, 0x208, 0x2403_55aa); // must not execute
+        std::fs::write(&child_path, child_bytes).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("faulting-child.exe".to_owned()), None);
+        // Kernel publishes this birth before the local child CPU is built.
+        // Publication is not itself admission to a machine-owned CPU slot.
+        let published_birth = launch.process_birth.expect("published child birth");
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let error = super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        )
+        .expect_err("the child must encounter its native read fault");
+        assert!(
+            matches!(error, Error::Backend(_)),
+            "ordinary fault: {error}"
+        );
+        let child_error = kernel
+            .recent_process_ops()
+            .iter()
+            .find(|record| {
+                record.op == "CreateProcessChildError"
+                    && record.process_id == Some(launch.process_id)
+            })
+            .expect("child loaded and attempted its first native slice");
+        assert_eq!(
+            child_error.path.as_deref(),
+            Some(child_path.to_str().unwrap())
+        );
+        assert!(
+            child_error
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("Unicorn run failed: READ_UNMAPPED")),
+            "child failure must be the injected native read fault: {:?}",
+            child_error.error
+        );
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(published_birth)
+        );
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert_eq!(kernel.current_process_id(), parent_pid);
+
+        let parked = parked.borrow();
+        assert_eq!(
+            parked.len(),
+            1,
+            "ordinary native error must retain the sole admitted child CPU"
+        );
+        let child = &parked[0];
+        assert_eq!(child.process_state.process_id, launch.process_id);
+        assert_eq!(child.process_handle, Some(launch.process_handle));
+        assert_eq!(child.module_host_path, child_path);
+        assert_eq!(
+            child
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(published_birth)
+        );
+        let snapshot = child
+            .cpu
+            .last_debug_snapshot()
+            .expect("faulting CPU snapshot");
+        let fault = snapshot.memory_fault.as_ref().expect("native memory fault");
+        assert_eq!(fault.address, 0x2000_0000);
+        assert_eq!(fault.pc, 0x0040_1004);
+        assert!(fault.access.contains("READ_UNMAPPED"));
+        assert_ne!(snapshot.pc, 0, "native fault is not a PC-zero exit");
+        assert_eq!(
+            child.cpu.last_native_slice_outcome(),
+            super::NativeSliceOutcome::NativeError
         );
         Ok(())
     }

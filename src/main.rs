@@ -2203,7 +2203,7 @@ fn run_monitor(
         };
         if recovery_required && monitor_command_blocked_by_recovery(command) {
             println!(
-                "  stopped-process exit recovery required; restore an earlier checkpoint or quit before running, queuing input, or saving a new checkpoint"
+                "  stopped-process exit recovery required; live checkpoint/rewind is unavailable until machine relineage. Quit, repair the cause, and restart before running or queuing input"
             );
             continue;
         }
@@ -2447,7 +2447,7 @@ fn run_monitor(
                     continue;
                 };
                 let (restored_cpu, restored_kernel, restored_framebuffer) =
-                    match try_monitor_checkpoint_restore(checkpoint, kernel) {
+                    match try_monitor_checkpoint_restore(checkpoint, cpu, kernel) {
                         Ok(restored) => restored,
                         Err(err) => {
                             println!("  checkpoint not restored: {err}");
@@ -2488,6 +2488,13 @@ fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
             "writable image backing needs machine-level checkpoint relineage".to_owned(),
         ));
     }
+    // Even an empty CPU wrapper cannot make a live/retained Kernel Task or
+    // published child launch independent in a cloned machine.
+    if kernel.has_pending_process_launches() || kernel.handles.has_canonical_task_records() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "canonical Kernel task or launch needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -2503,6 +2510,11 @@ fn try_monitor_checkpoint_save(
             "sealed main image needs machine-level checkpoint relineage".to_owned(),
         ));
     }
+    if cpu.has_unrelineaged_checkpoint_custody() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "live CPU custody needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     Ok(MonitorCheckpoint {
         name,
         cpu: cpu.clone(),
@@ -2513,6 +2525,7 @@ fn try_monitor_checkpoint_save(
 
 fn try_monitor_checkpoint_restore(
     checkpoint: &MonitorCheckpoint,
+    destination_cpu: &UnicornMips,
     destination_kernel: &CeKernel,
 ) -> Result<(UnicornMips, CeKernel, VirtualFramebuffer)> {
     ensure_monitor_checkpointable(destination_kernel)?;
@@ -2520,6 +2533,13 @@ fn try_monitor_checkpoint_restore(
     if checkpoint.cpu.has_sealed_image_runs() {
         return Err(wince_emulation_v3::Error::Unsupported(
             "sealed main image needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
+    if checkpoint.cpu.has_unrelineaged_checkpoint_custody()
+        || destination_cpu.has_unrelineaged_checkpoint_custody()
+    {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "live CPU custody needs machine-level checkpoint relineage".to_owned(),
         ));
     }
     Ok((
@@ -2757,9 +2777,9 @@ fn print_monitor_help() {
     println!("  map                         list memory regions and mapped static blobs");
     println!("  x ADDRESS [LEN]             hexdump mapped static PE/DLL/trap bytes");
     println!("  disasm ADDRESS [WORDS]      print mapped static MIPS instruction words");
-    println!("  checkpoint [name]           save CPU wrapper, CE kernel, and framebuffer");
+    println!("  checkpoint [name]           save only after Task and CPU custody retire");
     println!("  checkpoints                 list saved checkpoints");
-    println!("  rewind [name|index]         restore a saved checkpoint, default last");
+    println!("  rewind [name|index]         restore an eligible stopped checkpoint, default last");
     println!("  quit                        exit the monitor");
     println!("  note: x/disasm read mapped static bytes; live memory needs persistent CPU state");
 }
@@ -4541,6 +4561,20 @@ mod tests {
         );
     }
 
+    fn checkpointable_retired_kernel() -> CeKernel {
+        let mut kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let birth = kernel.current_process_birth_key().expect("boot birth");
+        assert!(
+            kernel
+                .try_terminate_stopped_current_process_for_birth_with_framebuffer(birth, 0, None)
+                .expect("empty boot process exits")
+        );
+        assert!(kernel.handles.process_snapshots().is_empty());
+        assert!(kernel.handles.thread_snapshots().is_empty());
+        kernel
+    }
+
     #[test]
     fn monitor_checkpoint_save_rejects_slab_backed_private_vm() {
         let kernel = kernel_with_committed_private_slab();
@@ -4563,7 +4597,7 @@ mod tests {
 
     #[test]
     fn monitor_checkpoint_save_and_restore_reject_writable_image_backing() {
-        let clean = CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let clean = checkpointable_retired_kernel();
         let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
         let framebuffer = VirtualFramebuffer::default();
         let clean_checkpoint =
@@ -4577,7 +4611,7 @@ mod tests {
                 if message.contains("writable image backing")
         ));
         assert!(matches!(
-            try_monitor_checkpoint_restore(&clean_checkpoint, &image_kernel),
+            try_monitor_checkpoint_restore(&clean_checkpoint, &cpu, &image_kernel),
             Err(wince_emulation_v3::Error::Unsupported(message))
                 if message.contains("writable image backing")
         ));
@@ -4588,7 +4622,7 @@ mod tests {
             framebuffer,
         };
         assert!(matches!(
-            try_monitor_checkpoint_restore(&image_checkpoint, &clean),
+            try_monitor_checkpoint_restore(&image_checkpoint, &image_checkpoint.cpu, &clean),
             Err(wince_emulation_v3::Error::Unsupported(message))
                 if message.contains("writable image backing")
         ));
@@ -4596,7 +4630,7 @@ mod tests {
 
     #[test]
     fn monitor_checkpoint_restore_rejects_slab_backed_source_or_destination() {
-        let clean = CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let clean = checkpointable_retired_kernel();
         let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
         let framebuffer = VirtualFramebuffer::default();
         let clean_checkpoint =
@@ -4612,7 +4646,7 @@ mod tests {
             .virtual_allocations_for(destination_owner)
             .count();
         assert!(matches!(
-            try_monitor_checkpoint_restore(&clean_checkpoint, &destination),
+            try_monitor_checkpoint_restore(&clean_checkpoint, &cpu, &destination),
             Err(wince_emulation_v3::Error::Unsupported(message))
                 if message.contains("machine-level checkpoint relineage")
         ));
@@ -4633,11 +4667,525 @@ mod tests {
             framebuffer: framebuffer.clone(),
         };
         assert!(matches!(
-            try_monitor_checkpoint_restore(&slab_checkpoint, &clean),
+            try_monitor_checkpoint_restore(&slab_checkpoint, &cpu, &clean),
             Err(wince_emulation_v3::Error::Unsupported(message))
                 if message.contains("machine-level checkpoint relineage")
         ));
         assert!(!clean.memory.has_stable_private_slabs());
+    }
+
+    fn live_boot_checkpoint_fixture() -> (UnicornMips, CeKernel, VirtualFramebuffer) {
+        let kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            kernel.handles.live_thread_creation_owner_by_id(1),
+            Some(birth)
+        );
+        assert!(kernel.handles.thread_birth_key_by_id(1).is_some());
+
+        let mut cpu = UnicornMips::new().expect("checkpoint CPU initializes");
+        cpu.map_region(
+            0x0040_0000,
+            0x1000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "live-boot-checkpoint-test",
+        )
+        .expect("boot CPU has an executable mapping");
+        (cpu, kernel, VirtualFramebuffer::default())
+    }
+
+    #[test]
+    fn monitor_checkpoint_restore_refuses_live_destination_cpu() {
+        let clean_kernel = checkpointable_retired_kernel();
+        let clean_cpu = UnicornMips::new().expect("clean checkpoint CPU initializes");
+        let checkpoint = try_monitor_checkpoint_save(
+            "clean".to_owned(),
+            &clean_cpu,
+            &clean_kernel,
+            &VirtualFramebuffer::default(),
+        )
+        .expect("empty CPU checkpoint saves");
+        let (destination_cpu, destination_kernel, _) = live_boot_checkpoint_fixture();
+        assert!(matches!(
+            try_monitor_checkpoint_restore(&checkpoint, &destination_cpu, &destination_kernel),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("checkpoint relineage")
+        ));
+    }
+
+    #[test]
+    #[ignore = "expected red: live checkpoint save duplicates the original execution birth"]
+    fn monitor_checkpoint_save_live_birth_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer) = live_boot_checkpoint_fixture();
+        let original_process = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let original_thread = kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("boot thread birth");
+
+        let checkpoint = match try_monitor_checkpoint_save(
+            "live boot".to_owned(),
+            &cpu,
+            &kernel,
+            &framebuffer,
+        ) {
+            Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                assert!(message.contains("checkpoint") || message.contains("relineage"));
+                return;
+            }
+            Err(error) => panic!("live checkpoint needs typed refusal, got {error}"),
+            Ok(checkpoint) => checkpoint,
+        };
+
+        let copied_process = checkpoint
+            .kernel
+            .current_process_birth_key()
+            .expect("saved live process birth");
+        let copied_thread = checkpoint
+            .kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("saved live thread birth");
+        assert!(
+            checkpoint
+                .kernel
+                .handles
+                .process_execution_live_by_birth(copied_process),
+            "saved checkpoint still owns a live execution birth"
+        );
+        assert_ne!(
+            copied_process, original_process,
+            "an independent live checkpoint must not reuse the source ProcessBirthKey"
+        );
+        assert_ne!(
+            copied_thread, original_thread,
+            "an independent live checkpoint must not reuse the source ThreadBirthKey"
+        );
+        assert!(
+            !checkpoint
+                .kernel
+                .handles
+                .contains_process_birth(original_process)
+        );
+        assert!(
+            !checkpoint
+                .kernel
+                .handles
+                .contains_thread_birth(original_thread)
+        );
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(original_process)
+        );
+    }
+
+    #[test]
+    #[ignore = "expected red: restoring a live checkpoint duplicates its execution birth"]
+    fn monitor_checkpoint_restore_live_birth_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer) = live_boot_checkpoint_fixture();
+        let source_process = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let source_thread = kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("boot thread birth");
+        // A snapshot saved before a future save guard still has to be rejected
+        // or relineaged at restore; the destination is a separate live machine.
+        let prior_checkpoint = MonitorCheckpoint {
+            name: "prior live snapshot".to_owned(),
+            cpu: cpu.clone(),
+            kernel: kernel.clone(),
+            framebuffer: framebuffer.clone(),
+        };
+        let (_restored_cpu, restored_kernel, _restored_framebuffer) =
+            match try_monitor_checkpoint_restore(&prior_checkpoint, &cpu, &kernel) {
+                Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                    assert!(message.contains("checkpoint") || message.contains("relineage"));
+                    return;
+                }
+                Err(error) => panic!("live checkpoint restore needs typed refusal, got {error}"),
+                Ok(restored) => restored,
+            };
+
+        let restored_process = restored_kernel
+            .current_process_birth_key()
+            .expect("restored live process birth");
+        let restored_thread = restored_kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("restored live thread birth");
+        assert!(
+            restored_kernel
+                .handles
+                .process_execution_live_by_birth(restored_process)
+        );
+        assert_ne!(
+            restored_process, source_process,
+            "restoring into a separate live machine must not reuse the saved ProcessBirthKey"
+        );
+        assert_ne!(
+            restored_thread, source_thread,
+            "restoring into a separate live machine must not reuse the saved ThreadBirthKey"
+        );
+        assert!(
+            !restored_kernel
+                .handles
+                .contains_process_birth(source_process)
+        );
+        assert!(!restored_kernel.handles.contains_thread_birth(source_thread));
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(source_process)
+        );
+    }
+
+    #[test]
+    #[ignore = "expected red: pristine CPU checkpoint duplicates the live boot Kernel birth"]
+    fn monitor_checkpoint_save_pristine_cpu_boot_birth_requires_relineage_or_refusal() {
+        let kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let cpu = UnicornMips::new().expect("pristine checkpoint CPU initializes");
+        assert!(!cpu.has_unrelineaged_checkpoint_custody());
+        let original_process = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let original_thread = kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("boot thread birth");
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(original_process)
+        );
+        assert_eq!(
+            kernel.handles.live_thread_creation_owner_by_id(1),
+            Some(original_process)
+        );
+        let mut boot_probe = kernel.clone();
+        assert!(boot_probe.take_pending_process_launches().is_empty());
+
+        let checkpoint = match try_monitor_checkpoint_save(
+            "pristine CPU, live boot".to_owned(),
+            &cpu,
+            &kernel,
+            &VirtualFramebuffer::default(),
+        ) {
+            Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                assert!(message.contains("checkpoint") || message.contains("relineage"));
+                return;
+            }
+            Err(error) => panic!("live boot checkpoint needs typed refusal, got {error}"),
+            Ok(checkpoint) => checkpoint,
+        };
+
+        let copied_process = checkpoint
+            .kernel
+            .current_process_birth_key()
+            .expect("copied boot birth");
+        let copied_thread = checkpoint
+            .kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("copied boot thread birth");
+        assert!(
+            checkpoint
+                .kernel
+                .handles
+                .process_execution_live_by_birth(copied_process)
+        );
+        assert_ne!(
+            copied_process, original_process,
+            "a pristine CPU does not make a live Kernel birth safe to clone"
+        );
+        assert_ne!(
+            copied_thread, original_thread,
+            "boot task lineage must change with process lineage"
+        );
+        assert!(
+            !checkpoint
+                .kernel
+                .handles
+                .contains_process_birth(original_process)
+        );
+        assert!(
+            !checkpoint
+                .kernel
+                .handles
+                .contains_thread_birth(original_thread)
+        );
+    }
+
+    fn pristine_cpu_with_queued_child_checkpoint_fixture() -> (
+        UnicornMips,
+        CeKernel,
+        VirtualFramebuffer,
+        wince_emulation_v3::ce::kernel::PendingProcessLaunch,
+    ) {
+        let mut kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let launch = kernel.queue_process_launch(Some("checkpoint-child.exe".to_owned()), None);
+        let child = launch.process_birth.expect("queued child process birth");
+        assert!(kernel.handles.process_execution_live_by_birth(child));
+        assert_eq!(
+            kernel
+                .handles
+                .live_thread_creation_owner_by_id(launch.thread_id),
+            Some(child)
+        );
+        let cpu = UnicornMips::new().expect("pristine checkpoint CPU initializes");
+        assert!(!cpu.has_unrelineaged_checkpoint_custody());
+        (cpu, kernel, VirtualFramebuffer::default(), launch)
+    }
+
+    fn assert_independent_queued_child_checkpoint_births(
+        source: &CeKernel,
+        copy: &mut CeKernel,
+        source_launch: &wince_emulation_v3::ce::kernel::PendingProcessLaunch,
+    ) {
+        let source_boot = source
+            .current_process_birth_key()
+            .expect("source boot birth");
+        let source_boot_thread = source
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("source boot thread birth");
+        let source_child = source_launch.process_birth.expect("source child birth");
+        let source_child_thread = source_launch
+            .primary_thread_birth
+            .expect("source child primary birth");
+        let copied_boot = copy.current_process_birth_key().expect("copied boot birth");
+        let copied_boot_thread = copy
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("copied boot thread birth");
+        let copied_child = copy
+            .handles
+            .process_birth_key(source_launch.process_id)
+            .expect("copied child birth");
+        let copied_child_thread = copy
+            .handles
+            .thread_birth_key_by_id(source_launch.thread_id)
+            .expect("copied child primary birth");
+        assert!(copy.handles.process_execution_live_by_birth(copied_child));
+        let pending = copy.take_pending_process_launches();
+        assert_eq!(
+            pending.len(),
+            1,
+            "the pending child launch must survive the checkpoint"
+        );
+        assert_eq!(pending[0].process_id, source_launch.process_id);
+        assert_eq!(pending[0].thread_id, source_launch.thread_id);
+        assert_eq!(
+            pending[0].process_birth,
+            Some(copied_child),
+            "pending launch must point to the copied child's exact birth"
+        );
+        assert_eq!(
+            pending[0].primary_thread_birth,
+            Some(copied_child_thread),
+            "pending launch must point to the copied primary task"
+        );
+        assert_ne!(
+            copied_child, source_child,
+            "an independently checkpointed live child must not reuse its source birth"
+        );
+        assert_ne!(
+            copied_child_thread, source_child_thread,
+            "the child primary task must relineage with its process"
+        );
+        assert_ne!(
+            copied_boot, source_boot,
+            "the boot process must relineage in the same operation"
+        );
+        assert_ne!(
+            copied_boot_thread, source_boot_thread,
+            "the boot task must relineage in the same operation"
+        );
+        assert!(!copy.handles.contains_process_birth(source_child));
+        assert!(!copy.handles.contains_thread_birth(source_child_thread));
+        assert!(!copy.handles.contains_process_birth(source_boot));
+        assert!(!copy.handles.contains_thread_birth(source_boot_thread));
+    }
+
+    #[test]
+    #[ignore = "expected red: pristine CPU save duplicates a pending live child Kernel birth"]
+    fn monitor_checkpoint_save_pristine_cpu_pending_child_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer, launch) =
+            pristine_cpu_with_queued_child_checkpoint_fixture();
+        let mut checkpoint = match try_monitor_checkpoint_save(
+            "pristine CPU, pending child".to_owned(),
+            &cpu,
+            &kernel,
+            &framebuffer,
+        ) {
+            Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                assert!(message.contains("checkpoint") || message.contains("relineage"));
+                return;
+            }
+            Err(error) => panic!("pending child checkpoint needs typed refusal, got {error}"),
+            Ok(checkpoint) => checkpoint,
+        };
+        assert_independent_queued_child_checkpoint_births(&kernel, &mut checkpoint.kernel, &launch);
+    }
+
+    #[test]
+    #[ignore = "expected red: pristine CPU restore duplicates a pending live child Kernel birth"]
+    fn monitor_checkpoint_restore_pristine_cpu_pending_child_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer, launch) =
+            pristine_cpu_with_queued_child_checkpoint_fixture();
+        // Model a snapshot saved before the eventual save guard; restore must
+        // still refuse it or relineage every exact child and boot reference.
+        let prior_checkpoint = MonitorCheckpoint {
+            name: "prior pending child snapshot".to_owned(),
+            cpu: cpu.clone(),
+            kernel: kernel.clone(),
+            framebuffer: framebuffer.clone(),
+        };
+        let (_restored_cpu, mut restored_kernel, _restored_framebuffer) =
+            match try_monitor_checkpoint_restore(&prior_checkpoint, &cpu, &kernel) {
+                Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                    assert!(message.contains("checkpoint") || message.contains("relineage"));
+                    return;
+                }
+                Err(error) => panic!("pending child restore needs typed refusal, got {error}"),
+                Ok(restored) => restored,
+            };
+        assert_independent_queued_child_checkpoint_births(&kernel, &mut restored_kernel, &launch);
+    }
+
+    fn orphaned_finite_sleep_frame_checkpoint_fixture() -> (
+        UnicornMips,
+        CeKernel,
+        VirtualFramebuffer,
+        wince_emulation_v3::ce::object::ThreadBirthKey,
+        wince_emulation_v3::ce::object::TaskFrameRef,
+    ) {
+        use wince_emulation_v3::ce::object::TaskFrameRef;
+
+        let mut kernel =
+            CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
+        let process = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let thread = kernel
+            .handles
+            .thread_birth_key_by_id(1)
+            .expect("boot thread birth");
+        let frame_key = kernel
+            .handles
+            .preflight_finite_sleep_frame(thread)
+            .expect("boot thread can block in finite Sleep");
+        let frame = TaskFrameRef::new(frame_key, 1).expect("nonzero wait ID");
+        kernel
+            .handles
+            .activate_finite_sleep_frame(frame)
+            .expect("finite Sleep frame activates");
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(thread),
+            Some(frame)
+        );
+
+        // Model an interrupted cleanup with no indexed scheduler waiter. The
+        // canonical record retains its active frame after execution exits,
+        // while the public task snapshots omit that exited, aliasless record.
+        assert!(kernel.handles.mark_thread_exited_by_birth(thread, 0));
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(process, 0)
+                .is_some()
+        );
+        assert!(kernel.handles.process_snapshots().is_empty());
+        assert!(kernel.handles.thread_snapshots().is_empty());
+        assert!(kernel.handles.contains_thread_birth(thread));
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(thread),
+            Some(frame)
+        );
+
+        let cpu = UnicornMips::new().expect("pristine checkpoint CPU initializes");
+        assert!(!cpu.has_unrelineaged_checkpoint_custody());
+        (cpu, kernel, VirtualFramebuffer::default(), thread, frame)
+    }
+
+    #[test]
+    #[ignore = "expected red: checkpoint save clones an orphaned active finite-Sleep frame hidden from task snapshots"]
+    fn monitor_checkpoint_save_orphaned_finite_sleep_frame_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer, thread, frame) =
+            orphaned_finite_sleep_frame_checkpoint_fixture();
+        let checkpoint = match try_monitor_checkpoint_save(
+            "orphaned Sleep frame".to_owned(),
+            &cpu,
+            &kernel,
+            &framebuffer,
+        ) {
+            Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                assert!(message.contains("checkpoint") || message.contains("relineage"));
+                return;
+            }
+            Err(error) => panic!("orphaned frame save needs typed refusal, got {error}"),
+            Ok(checkpoint) => checkpoint,
+        };
+
+        assert!(
+            !checkpoint.kernel.handles.contains_thread_birth(thread),
+            "an independent checkpoint must not retain the original orphaned frame's task birth"
+        );
+        assert_eq!(
+            checkpoint.kernel.handles.active_finite_sleep_frame(thread),
+            None
+        );
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(thread),
+            Some(frame)
+        );
+    }
+
+    #[test]
+    #[ignore = "expected red: checkpoint restore clones an orphaned active finite-Sleep frame hidden from task snapshots"]
+    fn monitor_checkpoint_restore_orphaned_finite_sleep_frame_requires_relineage_or_refusal() {
+        let (cpu, kernel, framebuffer, thread, frame) =
+            orphaned_finite_sleep_frame_checkpoint_fixture();
+        // A snapshot created before a future save guard must also be rejected
+        // when restored into a clean, independently cloned machine.
+        let prior_checkpoint = MonitorCheckpoint {
+            name: "prior orphaned Sleep frame snapshot".to_owned(),
+            cpu: cpu.clone(),
+            kernel: kernel.clone(),
+            framebuffer,
+        };
+        let (_restored_cpu, restored_kernel, _restored_framebuffer) =
+            match try_monitor_checkpoint_restore(&prior_checkpoint, &cpu, &kernel) {
+                Err(wince_emulation_v3::Error::Unsupported(message)) => {
+                    assert!(message.contains("checkpoint") || message.contains("relineage"));
+                    return;
+                }
+                Err(error) => panic!("orphaned frame restore needs typed refusal, got {error}"),
+                Ok(restored) => restored,
+            };
+
+        assert!(
+            !restored_kernel.handles.contains_thread_birth(thread),
+            "an independent restore must not retain the original orphaned frame's task birth"
+        );
+        assert_eq!(
+            restored_kernel.handles.active_finite_sleep_frame(thread),
+            None
+        );
+        assert_eq!(
+            kernel.handles.active_finite_sleep_frame(thread),
+            Some(frame)
+        );
     }
 
     #[test]

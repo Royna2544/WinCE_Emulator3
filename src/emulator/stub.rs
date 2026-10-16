@@ -34,6 +34,19 @@ impl UnicornMips {
             .any(|blob| blob.bytes.sealed_pin().is_some())
     }
 
+    /// Match the native backend's conservative checkpoint refusal boundary.
+    /// The no-Unicorn stub has no runnable native context, but a loaded or
+    /// assigned wrapper still must not be mistaken for pristine `new` state.
+    pub fn has_unrelineaged_checkpoint_custody(&self) -> bool {
+        self.entry.is_some()
+            || self.entry_image_base.is_some()
+            || self.stack_top.is_some()
+            || self.initial_thread_id != 1
+            || self.memory.regions().next().is_some()
+            || !self.mapped_blobs.is_empty()
+            || !self.loaded_modules.is_empty()
+    }
+
     pub fn last_native_slice_outcome(&self) -> NativeSliceOutcome {
         NativeSliceOutcome::NoAttempt
     }
