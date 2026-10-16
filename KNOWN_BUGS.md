@@ -142,73 +142,25 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     raw direct current-process pseudo-handle calls keep a separate synchronous
     compatibility path. The decoded self-exit shape has a later bounded
     stopped-owner gate, not a general real-handle continuation.
-  - `TaskWaitStore` separates exact births from explicit legacy-unknown TIDs;
-    thread-directed post/quit delivery, status and wake, HWND-less thread
-    timers, and W-B1a window creation/explicit HWND post/typed payloads now
-    use frozen birth ownership
-    ([wait receipt](evidence/stage3-wait-owner-20261015/validation.receipt.md),
-    [GWE receipt](evidence/stage3-gwe-thread-birth-20261015/validation.receipt.md),
-    [timer receipt](evidence/stage3-thread-timer-birth-20261015/validation.receipt.md),
-    [window receipt](evidence/stage3-window-owner-birth-20261015/validation.receipt.md)).
-    W-B1b separately source-gates bounded remote touch/key target birth
-    ([input receipt](evidence/stage3-window-input-birth-20261015/validation.receipt.md));
-    W-B1c preserves mixed touch/key admission order within one `CeRemote`
-    ([order receipt](evidence/stage3-mixed-input-order-20261015/validation.receipt.md)).
-    Broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other input
-    producers, full exit capture retirement and implicit gesture ownership
-    remain outside these gates; their reuse isolation is unproved. Independent
-    window/backing selection on verified process exit and the no-birth
-    pseudo-exit fence are source-tested under PID reuse (focused controls;
-    release **2,055/0/9 ignored** and no-default **1,485/0/3 ignored**
-    across 18 groups each;
-    [receipt](evidence/stage3-host-teardown-20261015/validation.receipt.md)).
-    The later bounded [sender-ownership gate](evidence/stage3-sender-birth-20261015/validation.receipt.md)
-    covers tested queued sends and guest no-wait producers. The
-    [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
-    prevents foreign parent/owner links from expanding host-exit targets and
-    wakes a sender whose receiver HWND retires (release **2,072/0/9 ignored**,
-    no-default **1,500/0/3 ignored**, 18 blocks each). The bounded
-    [pseudo-caller gate](evidence/stage3-pseudo-caller-birth-20261015/validation.receipt.md)
-    now checks captured guest caller birth and native owner lease, with
-    release **2,081/0/9 ignored** and no-default **1,502/0/3 ignored**.
-    The bounded [D-011 framebuffer gate](evidence/stage3-host-exit-framebuffer-preflight-20261015/validation.receipt.md)
-    now refuses un-restorable saved backings before stopped-exit effects and
-    retains active/parked/pending ownership for recovery. A stopped boot CPU
-    whose selected process no longer matches its saved owner also fails with
-    typed authority recovery. The monitor blocks new checkpoints after
-    refusal; only an earlier checkpoint restore clears its hold. Release
-    **2,094/0/9 ignored** and no-default **1,510/0/3 ignored** passed.
-    Full host teardown remains open: the bounded
-    [native-import pseudo self-exit gate](evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
-    source-tested exact child or boot CPU stop before the next guest
-    instruction and Task/VM retirement after native owner closure and
-    framebuffer preflight. At that earlier native-import seal, raw/decoded
-    pseudo exits remained synchronous compatibility paths. The later bounded
-    [decoded self-exit gate](evidence/stage3-raw-decoded-pseudo-exit-20261016/decoded-pseudo-exit.receipt.md)
-    now routes the witnessed direct-kernel pseudo call through the stopped
-    finalizer; raw direct compatibility remains separate. The bounded
-    [modal-presence refusal gate](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
-    now preflights affected exact-birth stopped CPU subtrees and refuses
-    MessageBox/popup disposal before Kernel effects; three preserved reds are
-    green, with release **2,137/0/10 ignored** and no-default **1,524/0/3
-    ignored**. It does not prepare or restore modal pixels, prove compatible
-    retry, or establish every stopped-exit shape. The
-    [D-011 modal design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)
-    retains those later gates.
-    A separate 2026-10-16 source audit found that successful natural parked
-    completion and initial-child `Exited` can drop nonmodal descendant CPU
-    queues, as can active exact-birth tree removal; requested parked and
-    initial-child `Completed` instead hoist descendants. This is an untested
-    ownership-loss path, not an attributed live failure; the modal-presence
-    refusal does not repair it.
-    The `parked_process_handle_exit_code` branch also drops an already-exited
-    parked CPU without inspecting its modal state; an earlier external Kernel
-    exit cannot be made atomic by this later finalizer preflight. Retention or
-    quarantine for that stale-CPU path remains a separate source-audited gap.
-    Failures after preflight are not proven
-    whole-exit atomic. CE6 foreign-link topology, direct WndProc,
-    receiver-side cross-process result writes and conditional system-origin
-    device broadcasts are not established. No live-app or CE6 parity follows.
+  - Birth ownership covers the producers and exit paths gated in `PROGRESS.md`
+    ("Stage 3 source gates"), each with its receipt. Still open:
+    - Broadcast, HWND-owned timers, hotkeys, sent/paint/modal and other input
+      producers, full exit capture retirement and implicit gesture ownership;
+      their isolation under TID/PID reuse is unproved.
+    - Modal pixels are neither prepared nor restored, and compatible retry is
+      unproved; the modal-presence gate only refuses MessageBox/popup disposal
+      ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)).
+    - Source audit, 2026-10-16: natural parked completion, initial-child
+      `Exited` and active exact-birth tree removal can drop nonmodal descendant
+      CPU queues (requested parked and initial-child `Completed` hoist them
+      instead). This is untested ownership loss, not an attributed live failure.
+    - `parked_process_handle_exit_code` drops an already-exited parked CPU
+      without inspecting its modal state, and an earlier external Kernel exit
+      cannot be made atomic by the later finalizer preflight.
+    - Failures after preflight are not whole-exit atomic. CE6 foreign-link
+      topology, direct WndProc, receiver-side cross-process result writes and
+      conditional system-origin device broadcasts are not established. No
+      live-app or CE6 parity follows.
   - W-B1c does not establish physical arrival order across HTTP and desktop
     producers, ordering with NMEA/serial batch dispatch, CE6 focus/activation
     parity, cross-thread guest WNDPROC execution order or O-C5 guest-time
