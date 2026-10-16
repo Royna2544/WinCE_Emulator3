@@ -20122,15 +20122,15 @@ fn run_pending_process_launches<D>(
                 continue;
             }
             ChildProcessRunOutcome::Exited(exit_code) => {
-                let completed = match child
-                    .preflight_stopped_modal_display_tree(launch_birth)
-                    .and_then(|_| {
-                        kernel.try_mark_process_launch_exited_with_framebuffer(
-                            &launch,
-                            exit_code,
-                            Some(&mut *framebuffer),
-                        )
-                    }) {
+                let completed = match complete_first_slice_child_exit(
+                    &mut child,
+                    &launch,
+                    launch_birth,
+                    kernel,
+                    framebuffer,
+                    exit_code,
+                    parked_child_processes,
+                ) {
                     Ok(completed) => completed,
                     Err(error) => {
                         completion_recovery_error = Some(error);
@@ -20230,6 +20230,27 @@ fn run_pending_process_launches<D>(
         });
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn complete_first_slice_child_exit(
+    child: &mut UnicornMips,
+    launch: &crate::ce::kernel::PendingProcessLaunch,
+    launch_birth: crate::ce::object::ProcessBirthKey,
+    kernel: &mut CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    exit_code: u32,
+    _parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+) -> Result<bool> {
+    child
+        .preflight_stopped_modal_display_tree(launch_birth)
+        .and_then(|_| {
+            kernel.try_mark_process_launch_exited_with_framebuffer(
+                launch,
+                exit_code,
+                Some(&mut *framebuffer),
+            )
+        })
 }
 
 #[cfg(feature = "unicorn")]
@@ -53127,6 +53148,224 @@ mod guest_thread_stack_tests {
                 .process_execution_live_by_birth(foreign_birth)
         );
         assert!(kernel.blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn first_slice_exited_survivor_hoists_original_foreign_cpu() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_2340, 0x7ffb_1000)?;
+        let exiting_birth = fixture.exiting.process_birth.expect("exiting birth");
+        let foreign_birth = fixture.foreign.process_birth.expect("foreign birth");
+        let mut child = fixture
+            .scheduler
+            .parked_child_processes
+            .pop_front()
+            .expect("first-slice child CPU")
+            .cpu;
+        let parent_queue = std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new()));
+        assert_eq!(child.parked_child_processes.len(), 1);
+        assert!(parent_queue.borrow().is_empty());
+        let foreign_before = &child.parked_child_processes[0];
+        assert_eq!(
+            foreign_before.cpu.as_ref() as *const UnicornMips,
+            fixture.foreign_cpu_before
+        );
+        let saved_before = foreign_before.cpu.saved_context.clone();
+        let blocked_before = foreign_before.cpu.blocked_wait_threads.clone();
+        let wait_before = fixture
+            .kernel
+            .blocked_waiter(fixture.wait_id)
+            .expect("foreign wait before first-slice exit")
+            .clone();
+        let trace_before = fixture.kernel.recent_process_ops().to_vec();
+        let selected_before = fixture.kernel.current_process_state();
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let pixels_before = framebuffer.pixels().to_vec();
+        let dirty_before = framebuffer.dirty_rects().to_vec();
+
+        assert!(complete_first_slice_child_exit(
+            &mut child,
+            &fixture.exiting,
+            exiting_birth,
+            &mut fixture.kernel,
+            &mut framebuffer,
+            0x63,
+            &parent_queue,
+        )?);
+
+        assert!(
+            !fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.exiting.process_handle),
+            Some(0x63)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.foreign.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert!(child.parked_child_processes.is_empty());
+        let parent_queue = parent_queue.borrow();
+        assert_eq!(parent_queue.len(), 1);
+        let survivor = &parent_queue[0];
+        assert_parked_foreign_exit_survivor(
+            survivor,
+            &fixture.foreign,
+            fixture.foreign_cpu_before,
+            fixture.wait_id,
+            0x0050_2340,
+            0x7ffb_1000,
+        );
+        assert_eq!(survivor.cpu.saved_context, saved_before);
+        assert_eq!(survivor.cpu.blocked_wait_threads, blocked_before);
+        assert_eq!(
+            fixture.kernel.blocked_waiter(fixture.wait_id),
+            Some(&wait_before)
+        );
+        assert_eq!(fixture.kernel.current_process_state(), selected_before);
+        assert_eq!(framebuffer.pixels(), pixels_before);
+        assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
+        assert_eq!(
+            fixture
+                .kernel
+                .recent_process_ops()
+                .iter()
+                .skip(trace_before.len())
+                .filter(|record| {
+                    record.op == "CreateProcessExited"
+                        && record.process_id == Some(fixture.exiting.process_id)
+                })
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_slice_exited_survivor_refuses_mismatched_saved_owner_before_effects() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_4560, 0x7ff9_3000)?;
+        let exiting_birth = fixture.exiting.process_birth.expect("exiting birth");
+        let foreign_birth = fixture.foreign.process_birth.expect("foreign birth");
+        let wrong_saved_birth = fixture
+            .exiting
+            .primary_thread_birth
+            .expect("A primary birth");
+        fixture.foreign_parked_mut().cpu.saved_context_thread_birth = Some(wrong_saved_birth);
+        let mut child = fixture
+            .scheduler
+            .parked_child_processes
+            .pop_front()
+            .expect("first-slice child CPU")
+            .cpu;
+        let parent_queue = std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new()));
+        assert_eq!(child.parked_child_processes.len(), 1);
+        assert!(parent_queue.borrow().is_empty());
+        let foreign_before = &child.parked_child_processes[0];
+        assert_eq!(
+            foreign_before.cpu.as_ref() as *const UnicornMips,
+            fixture.foreign_cpu_before
+        );
+        let saved_before = foreign_before.cpu.saved_context.clone();
+        let blocked_before = foreign_before.cpu.blocked_wait_threads.clone();
+        let wait_before = fixture
+            .kernel
+            .blocked_waiter(fixture.wait_id)
+            .expect("foreign wait before first-slice refusal")
+            .clone();
+        let trace_before = fixture.kernel.recent_process_ops().to_vec();
+        let selected_before = fixture.kernel.current_process_state();
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let pixels_before = framebuffer.pixels().to_vec();
+        let dirty_before = framebuffer.dirty_rects().to_vec();
+
+        let error = complete_first_slice_child_exit(
+            &mut child,
+            &fixture.exiting,
+            exiting_birth,
+            &mut fixture.kernel,
+            &mut framebuffer,
+            0x63,
+            &parent_queue,
+        )
+        .expect_err("mismatched saved foreign CPU owner must refuse before A exits");
+        assert!(
+            matches!(&error, Error::HostExitAuthorityRecoveryRequired { .. }),
+            "unexpected refusal: {error:?}"
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.exiting.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.foreign.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert!(parent_queue.borrow().is_empty());
+        assert_eq!(child.parked_child_processes.len(), 1);
+        let foreign_retained = &child.parked_child_processes[0];
+        assert_eq!(
+            foreign_retained.cpu.as_ref() as *const UnicornMips,
+            fixture.foreign_cpu_before
+        );
+        assert_eq!(foreign_retained.cpu.saved_context, saved_before);
+        assert_eq!(
+            foreign_retained.cpu.saved_context_thread_birth,
+            Some(wrong_saved_birth)
+        );
+        assert_eq!(foreign_retained.cpu.blocked_wait_threads, blocked_before);
+        assert_eq!(
+            foreign_retained
+                .cpu
+                .saved_context
+                .as_ref()
+                .map(|saved| saved.pc),
+            Some(0x0050_4560)
+        );
+        assert_eq!(
+            foreign_retained
+                .cpu
+                .saved_context
+                .as_ref()
+                .map(|saved| saved.regs.regs[29]),
+            Some(0x7ff9_3000)
+        );
+        assert_eq!(
+            fixture.kernel.blocked_waiter(fixture.wait_id),
+            Some(&wait_before)
+        );
+        assert_eq!(fixture.kernel.current_process_state(), selected_before);
+        assert_eq!(fixture.kernel.recent_process_ops(), trace_before.as_slice());
+        assert_eq!(framebuffer.pixels(), pixels_before);
+        assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
         Ok(())
     }
 
