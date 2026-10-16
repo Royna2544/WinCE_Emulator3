@@ -6049,7 +6049,23 @@ impl UnicornMips {
                     .and_then(|launch| launch.process_birth)
                     == Some(owner);
             let remove_exiting_birth = if beneath_exiting_cpu || possibly_exiting {
-                Self::checked_parked_cpu_process_birth(parked, kernel)? == owner
+                let parked_birth = Self::checked_parked_cpu_process_birth(parked, kernel)?;
+                if parked_birth != owner && parked.cpu.saved_context.is_some() {
+                    // A foreign CPU must still be able to enter its saved
+                    // context after the exiting birth has been retired. The
+                    // parked node's thread_id is only a scheduler hint.
+                    let thread_id = parked.cpu.current_thread_id;
+                    let saved_birth = parked.cpu.saved_context_thread_birth;
+                    if thread_id == 0
+                        || saved_birth.is_none_or(|birth| birth.thread_id() != thread_id)
+                        || kernel.live_thread_birth_key_by_id(thread_id) != saved_birth
+                    {
+                        return Err(Error::HostExitAuthorityRecoveryRequired {
+                            reason: "foreign exit survivor saved CPU context has no live current thread birth",
+                        });
+                    }
+                }
+                parked_birth == owner
             } else {
                 false
             };
@@ -47885,6 +47901,157 @@ mod guest_thread_stack_tests {
         assert_eq!(parked.cpu.blocked_wait_threads[0].regs.regs[29], sp);
     }
 
+    struct NaturalParkedExitSurvivorFixture {
+        kernel: CeKernel,
+        scheduler: UnicornMips,
+        exiting: crate::ce::kernel::PendingProcessLaunch,
+        foreign: crate::ce::kernel::PendingProcessLaunch,
+        wait_id: u64,
+        foreign_cpu_before: *const UnicornMips,
+    }
+
+    impl NaturalParkedExitSurvivorFixture {
+        fn new(pc: u32, sp: u32) -> Result<Self> {
+            let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+            let exiting = kernel.queue_process_launch(Some("\\Test\\exiting.exe".to_owned()), None);
+            let foreign =
+                kernel.queue_process_launch(Some("\\Test\\survivor.exe".to_owned()), None);
+            assert_ne!(exiting.process_birth, foreign.process_birth);
+            let _ = kernel.take_pending_process_launches();
+            kernel.set_current_process_id(foreign.process_id);
+            let (foreign_parked, wait_id) =
+                parked_blocked_foreign_exit_survivor(&mut kernel, &foreign, pc, sp)?;
+            let foreign_cpu_before = foreign_parked.cpu.as_ref() as *const UnicornMips;
+
+            let mut exiting_cpu = UnicornMips::new()?;
+            exiting_cpu.owned_process_launch = Some(exiting.clone());
+            exiting_cpu.set_initial_thread_id(exiting.thread_id);
+            exiting_cpu.current_thread_id = exiting.thread_id;
+            exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
+                pc: THREAD_EXIT_STUB_ADDR,
+                v0: 0x63,
+                thread_exit_reached: true,
+                ..Default::default()
+            });
+            exiting_cpu.parked_child_processes.push_back(foreign_parked);
+            let mut exiting_parked = parked_process_for_cpu(exiting.thread_id, exiting_cpu);
+            exiting_parked.process_state.process_id = exiting.process_id;
+            exiting_parked.process_handle = Some(exiting.process_handle);
+            exiting_parked.thread_handle = Some(exiting.thread_handle);
+
+            let mut scheduler = UnicornMips::new()?;
+            scheduler.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+            scheduler.current_thread_id = MAIN_GUEST_THREAD_ID;
+            scheduler.parked_child_processes.push_back(exiting_parked);
+            kernel.set_current_process_id(MAIN_GUEST_THREAD_ID);
+            Ok(Self {
+                kernel,
+                scheduler,
+                exiting,
+                foreign,
+                wait_id,
+                foreign_cpu_before,
+            })
+        }
+
+        fn foreign_parked_mut(&mut self) -> &mut ParkedProcess {
+            &mut self.scheduler.parked_child_processes[0]
+                .cpu
+                .parked_child_processes[0]
+        }
+
+        fn require_authority_refusal_without_effects(&mut self) {
+            let exiting_birth = self.exiting.process_birth.expect("exiting birth");
+            let foreign_birth = self.foreign.process_birth.expect("foreign birth");
+            let exiting_cpu_before =
+                self.scheduler.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
+            let foreign_before = &self.scheduler.parked_child_processes[0]
+                .cpu
+                .parked_child_processes[0];
+            let saved_before = foreign_before.cpu.saved_context.clone();
+            let saved_birth_before = foreign_before.cpu.saved_context_thread_birth;
+            let current_tid_before = foreign_before.cpu.current_thread_id;
+            let blocked_before = foreign_before.cpu.blocked_wait_threads.clone();
+            let wait_before = self
+                .kernel
+                .blocked_waiter(self.wait_id)
+                .expect("foreign wait before exit")
+                .clone();
+            let trace_before = self.kernel.recent_process_ops().to_vec();
+            let selected_before = self.kernel.current_process_state();
+            let current_execution_live_before = self
+                .kernel
+                .handles
+                .thread_execution_live_by_id(current_tid_before);
+
+            let error = self
+                .scheduler
+                .try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+                    &mut self.kernel,
+                    None,
+                )
+                .expect_err("unverifiable foreign CPU owner must refuse before A exit");
+            assert!(
+                matches!(&error, Error::HostExitAuthorityRecoveryRequired { .. }),
+                "unexpected refusal: {error:?}"
+            );
+            assert_eq!(self.kernel.current_process_state(), selected_before);
+            assert!(
+                self.kernel
+                    .handles
+                    .process_execution_live_by_birth(exiting_birth)
+            );
+            assert!(
+                self.kernel
+                    .handles
+                    .process_execution_live_by_birth(foreign_birth)
+            );
+            assert_eq!(
+                self.kernel.process_exit_code(self.exiting.process_handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(
+                self.kernel.process_exit_code(self.foreign.process_handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(self.kernel.recent_process_ops(), trace_before.as_slice());
+            assert_eq!(self.kernel.blocked_waiter(self.wait_id), Some(&wait_before));
+            assert_eq!(
+                self.kernel
+                    .handles
+                    .thread_execution_live_by_id(current_tid_before),
+                current_execution_live_before
+            );
+            assert_eq!(self.scheduler.parked_child_processes.len(), 1);
+            let retained = &self.scheduler.parked_child_processes[0];
+            assert_eq!(
+                retained.cpu.as_ref() as *const UnicornMips,
+                exiting_cpu_before
+            );
+            assert_eq!(
+                retained
+                    .cpu
+                    .last_debug
+                    .as_ref()
+                    .map(|debug| (debug.pc, debug.v0)),
+                Some((THREAD_EXIT_STUB_ADDR, 0x63))
+            );
+            assert_eq!(retained.cpu.parked_child_processes.len(), 1);
+            let foreign_retained = &retained.cpu.parked_child_processes[0];
+            assert_eq!(
+                foreign_retained.cpu.as_ref() as *const UnicornMips,
+                self.foreign_cpu_before
+            );
+            assert_eq!(foreign_retained.cpu.saved_context, saved_before);
+            assert_eq!(
+                foreign_retained.cpu.saved_context_thread_birth,
+                saved_birth_before
+            );
+            assert_eq!(foreign_retained.cpu.current_thread_id, current_tid_before);
+            assert_eq!(foreign_retained.cpu.blocked_wait_threads, blocked_before);
+        }
+    }
+
     #[test]
     fn finite_sleep_ready_probes_require_exact_native_frame_but_keep_legacy_waits() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
@@ -53058,6 +53225,184 @@ mod guest_thread_stack_tests {
         let saved_after = foreign_retained.cpu.saved_context.as_ref().unwrap();
         assert_eq!(saved_after, &saved_before);
         assert!(kernel.blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn exit_survivor_cpu_owner_worker_representative_keeps_primary_context() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_6780, 0x7ff8_4000)?;
+        let foreign_birth = fixture.foreign.process_birth.expect("foreign birth");
+        let primary_birth = fixture.foreign.primary_thread_birth.expect("primary birth");
+        let (worker_handle, worker_tid) = fixture.kernel.try_create_guest_thread_for_creator(
+            fixture.foreign.thread_id,
+            0x0050_9000,
+            0,
+            false,
+        )?;
+        let worker_birth = fixture
+            .kernel
+            .handles
+            .thread_birth_key_for_handle(worker_handle)
+            .expect("live representative worker birth");
+        assert_eq!(worker_birth.thread_id(), worker_tid);
+        assert_eq!(
+            fixture
+                .kernel
+                .handles
+                .thread_creation_owner_by_id(worker_tid),
+            Some(foreign_birth)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .thread_execution_live_by_id(worker_tid)
+        );
+        let primary_tid = fixture.foreign.thread_id;
+        let foreign_parked = fixture.foreign_parked_mut();
+        foreign_parked.thread_id = worker_tid;
+        assert_eq!(foreign_parked.cpu.current_thread_id, primary_tid);
+        assert_eq!(
+            foreign_parked.cpu.saved_context_thread_birth,
+            Some(primary_birth)
+        );
+        let wait_before = fixture
+            .kernel
+            .blocked_waiter(fixture.wait_id)
+            .expect("primary blocked wait")
+            .clone();
+
+        fixture
+            .scheduler
+            .try_prune_exited_and_active_processes_from_parked_with_framebuffer(
+                &mut fixture.kernel,
+                None,
+            )
+            .expect("worker representative must not replace the stopped primary CPU owner");
+        assert!(!fixture.kernel.handles.process_execution_live_by_birth(
+            fixture.exiting.process_birth.expect("exiting birth")
+        ));
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.exiting.process_handle),
+            Some(0x63)
+        );
+        assert_eq!(fixture.scheduler.parked_child_processes.len(), 1);
+        let retained = &fixture.scheduler.parked_child_processes[0];
+        assert_eq!(retained.thread_id, worker_tid);
+        assert_eq!(retained.cpu.current_thread_id, primary_tid);
+        assert_parked_foreign_exit_survivor(
+            retained,
+            &fixture.foreign,
+            fixture.foreign_cpu_before,
+            fixture.wait_id,
+            0x0050_6780,
+            0x7ff8_4000,
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert_eq!(
+            fixture.kernel.blocked_waiter(fixture.wait_id),
+            Some(&wait_before)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .thread_execution_live_by_id(worker_tid)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exit_survivor_cpu_owner_zero_current_tid_refuses_before_effects() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_6790, 0x7ff8_5000)?;
+        fixture.foreign_parked_mut().cpu.current_thread_id = 0;
+        assert!(fixture.foreign_parked_mut().cpu.saved_context.is_some());
+        fixture.require_authority_refusal_without_effects();
+        Ok(())
+    }
+
+    #[test]
+    fn exit_survivor_cpu_owner_saved_worker_mismatches_current_primary() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_67a0, 0x7ff8_6000)?;
+        let primary_tid = fixture.foreign.thread_id;
+        let foreign_birth = fixture.foreign.process_birth.expect("foreign birth");
+        let (worker_handle, worker_tid) = fixture.kernel.try_create_guest_thread_for_creator(
+            primary_tid,
+            0x0050_9000,
+            0,
+            false,
+        )?;
+        let worker_birth = fixture
+            .kernel
+            .handles
+            .thread_birth_key_for_handle(worker_handle)
+            .expect("worker birth");
+        assert_eq!(
+            fixture
+                .kernel
+                .handles
+                .thread_creation_owner_by_id(worker_tid),
+            Some(foreign_birth)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .thread_execution_live_by_id(primary_tid)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .thread_execution_live_by_id(worker_tid)
+        );
+        let foreign_parked = fixture.foreign_parked_mut();
+        assert_eq!(foreign_parked.cpu.current_thread_id, primary_tid);
+        foreign_parked.cpu.saved_context_thread_birth = Some(worker_birth);
+        fixture.require_authority_refusal_without_effects();
+        Ok(())
+    }
+
+    #[test]
+    fn exit_survivor_cpu_owner_exited_worker_record_refuses_before_effects() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_67b0, 0x7ff8_7000)?;
+        let (worker_handle, worker_tid) = fixture.kernel.try_create_guest_thread_for_creator(
+            fixture.foreign.thread_id,
+            0x0050_9000,
+            0,
+            false,
+        )?;
+        let worker_birth = fixture
+            .kernel
+            .handles
+            .thread_birth_key_for_handle(worker_handle)
+            .expect("worker birth");
+        let foreign_parked = fixture.foreign_parked_mut();
+        foreign_parked.cpu.current_thread_id = worker_tid;
+        foreign_parked.cpu.saved_context_thread_birth = Some(worker_birth);
+        assert!(fixture.kernel.mark_guest_thread_exited(worker_handle, 0x49));
+        assert_eq!(
+            fixture.kernel.handles.thread_birth_key_by_id(worker_tid),
+            Some(worker_birth)
+        );
+        assert!(
+            !fixture
+                .kernel
+                .handles
+                .thread_execution_live_by_id(worker_tid)
+        );
+        assert_eq!(
+            fixture.kernel.guest_thread_exit_code(worker_handle),
+            Some(0x49)
+        );
+        fixture.require_authority_refusal_without_effects();
         Ok(())
     }
 
