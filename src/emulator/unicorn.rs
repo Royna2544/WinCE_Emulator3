@@ -80667,12 +80667,6 @@ mod unicorn_tests {
     #[test]
     fn non_live_spin_child_keeps_exact_births_and_parent_resumes_within_bound() -> crate::Result<()>
     {
-        // Temporary attempt-local diagnostic: remove after count/PC classification.
-        let subscriber = tracing_subscriber::fmt()
-            .with_env_filter("ce.slice_profile=debug")
-            .without_time()
-            .finish();
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
         std::fs::create_dir_all(&test_root).unwrap();
@@ -80714,7 +80708,6 @@ mod unicorn_tests {
             .process_birth_key_for_handle(queued[0].process_handle.expect("child handle"))
             .expect("child birth");
         assert_eq!(kernel.current_process_birth_key(), Some(child_birth));
-
         let assert_custody = |cpu: &super::UnicornMips, kernel: &crate::ce::kernel::CeKernel| {
             let selected = kernel.current_process_birth_key();
             let parked_parent: Vec<_> = cpu
@@ -80788,30 +80781,9 @@ mod unicorn_tests {
                 &mut kernel,
                 &mut framebuffer,
                 super::UnicornRunLimits {
-                    stop_pc: None,
+                    stop_pc: Some(entry + 19 * 4),
                     ..limits
                 },
-            );
-            let parent_state = if kernel.current_process_birth_key() == Some(parent_birth) {
-                cpu.saved_context
-                    .as_ref()
-                    .map(|saved| (saved.pc, saved.regs.regs[17]))
-            } else {
-                cpu.parked_child_processes
-                    .iter()
-                    .find(|process| process.process_state.process_id == parent_birth.process_id())
-                    .and_then(|process| process.cpu.saved_context.as_ref())
-                    .map(|saved| (saved.pc, saved.regs.regs[17]))
-            };
-            eprintln!(
-                "FOLLOWUP_SLICE start_birth={:?} start_pc={:?} raw_stop_pc={:?} count_stop={:?} timeout={:?} outcome={:?} selected={:?} parent_state={parent_state:?}",
-                attempt.report.start_process_birth(),
-                attempt.report.start_pc(),
-                attempt.report.raw_stop_pc(),
-                attempt.report.count_stop_query(),
-                attempt.report.timeout_query(),
-                attempt.report.final_outcome(),
-                kernel.current_process_birth_key(),
             );
             attempt.result?;
             selected_births.push(kernel.current_process_birth_key());
