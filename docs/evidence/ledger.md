@@ -2382,6 +2382,31 @@ It rejects historical a04 provenance and requires wrapper-owned post-build
 EXE/PDB hash stamps, a matching current HEAD and executed focused tests.
 No new clean rebuild or mounted run was performed.
 
+## Bounded exact-primary stopped-exit gate (2026-10-17, executed)
+
+The [synthetic expected-red receipt](../../evidence/stage3-primary-exit-birth-20261017/expected-red.receipt.md)
+records same-process primary-TID reuse and missing-primary authority before
+the source cut. The subsequent stamped
+[a10 broad release attempt](../../evidence/stage3-primary-exit-birth-20261017/broad-release-a10.raw.log)
+failed its library block at **1,144/16/7 ignored**, exit 101, on earlier
+`unicorn.rs` SHA-256 `782DE852…30685D`; it is preserved failure evidence,
+not a broad gate. After the boot-owner and synthetic stopped-CPU fixture
+corrections, the [v2 focused guest-thread-stack rerun](../../evidence/stage3-primary-exit-birth-v2-20261017/focused-guest-thread-stack-a01.raw.log)
+passed **133/0/2 ignored** on `unicorn.rs` SHA-256 `CE560FE0…003833`.
+Its before/after file hashes matched despite an intervening HEAD change;
+focused success alone was not broad acceptance.
+
+The final [v4 receipt](../../evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256 `1EDEB353…916347`. A focused stopped-boot
+missing-primary recovery/non-exit control passed **1/0**. Complete 19-block
+release-feature and no-default suites passed **2,175/0/10 ignored** and
+**1,539/0/2 ignored**; checks for Unicorn, Unicorn plus desktop, and the
+normal feature set exited 0. These controls gate exact canonical primary
+birth and stopped CPU authority for their tested child/boot exit shapes;
+they do not establish every exit route, Task/Frame authority, O-T7 CPU
+custody, live-pump later-slice survival or CE6 parity. No app, GPS or writable
+mount was run.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

@@ -149,8 +149,13 @@ without Kernel exit or host panic, but drops the local CPU tree; it is not a
 recovery hold. The older test-seam requirement is thus met for this one shape,
 not for real-MIPS classifier reachability. Final-source suites passed release
 2,147/0/10 ignored and no-default 1,524/0/3 ignored over 19 blocks each.
-Exact live primary birth, nonempty `Completed` descendant publication,
-custom framebuffer reentry, other survivor shapes and live iNavi remain open.
+At that seal, exact live primary birth, nonempty `Completed` descendant
+publication, custom framebuffer reentry, other survivor shapes and live iNavi
+remained open. The later bounded
+[v4 stopped-exit gate](../evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+checks the canonical exact primary for tested child/boot exits and passed
+19-block release and no-default suites. Other exit consumers, descendant CPU
+custody, Task/Frame authority and live-app acceptance remain open.
 
 The next preparatory Stage 3/4 cross-boundary source cut requires a
 [machine-owned CPU-custody design](subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)

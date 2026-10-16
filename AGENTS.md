@@ -296,10 +296,16 @@ now keeps the exact primary thread birth on the canonical process instead of
 the drained launch queue/128-entry trace ring (release **2,169/0/10 ignored**,
 no-default **1,537/0/2 ignored**). The dumped COREDLL
 [REA check](evidence/ce6-rea-primary-thread-20261017/findings.md) supports
-durable main-thread identity, not full exit semantics. Current-route
+durable main-thread identity, not full exit semantics. The bounded
+[exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
+authenticates tested stopped child/boot CPU ownership and refuses a missing
+boot birth before effects (release **2,175/0/10 ignored**, no-default
+**1,539/0/2 ignored**). Its first broad attempt failed 16 controls: 15 stale
+synthetic fixture preconditions and one boot selected-owner regression. It was
+corrected and superseded; no live iNavi run followed. Current-route
 reachability of a nonempty `Completed` descendant publication conflict,
-exit reconstruction from that primary birth, later-slice survivor behavior,
-other framebuffer reentry and exit paths remain open. The
+general exit reconstruction, later-slice survivor behavior, other framebuffer
+reentry and exit paths remain open. The
 [latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
 still loses its only CPU owner despite a live Kernel child. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
