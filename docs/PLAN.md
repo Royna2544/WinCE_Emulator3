@@ -285,15 +285,22 @@ not an implemented owner. Stage its connected source cut in this order:
    [Cut 3a quarantine](subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-focused-source-cut-final-broad-pending)
    now precedes complete Step 2 because it never runs a custody-held CPU:
    the main run loop owns exact-birth, generation-checked slots only for
-   faulted, non-runnable admitted children. Focused real-MIPS debug/release
-   controls pass: A's staged return survives native sync/finish, B executes
+   faulted, non-runnable admitted children. Earlier focused real-MIPS
+   debug/release controls passed; superseded producer-side a09 debug confirmed A's staged
+   return survives native sync/finish, B executes
    fixed-stack first touch then faults, and its original CPU is retained in
    the slot rather than the legacy parked tree. Pre-CPU launch errors retry;
    native-error quarantine never fabricates a resumable context. A termination
    request alone retains B; same-Kernel accepted exit retires its slot and
-   fixed-stack pin in that focused fault shape. A post-load/pre-native-entry
-   error may quarantine an unpoisoned CPU that the current exit consumer
-   refuses to retire; add a separate control/fix before general closure.
+   fixed-stack pin in that focused fault shape. Stamped a07 expected red
+   reproduced a synthetic post-load/pre-native-entry unpoisoned quarantine;
+   producer-side sealing passed a08 debug pre-entry and a09 debug real-MIPS
+   fault on superseded `unicorn.rs` SHA-256 `1AAE8A66…33090`. Intermediate
+   producer-only a10 focused release passed but is superseded. Current source
+   moves the seal to `CpuCustody::quarantine_reserved` under Unicorn on the
+   `Reserved`→`Quarantined` transition, retaining the exit consumer's poison
+   backstop. Final-source focused and broad checks are pending; natural
+   reachability and general error-path closure remain unproved.
    Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
    **2,183/0/9 ignored** is development-only; final sealed broad/no-default

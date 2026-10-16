@@ -319,13 +319,20 @@ ignored**. This is not a machine-owned leaf permit or a Kernel/framebuffer
 port. The [latest admitted-child native-fault red](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
 is historical. Cut 3a now retains the original faulted B CPU in a machine-owned,
 exact-birth, non-runnable slot after A's staged `CreateProcessW` return and
-native sync/finish. Its real-MIPS focused debug/release controls pass; final
-source-sealed broad/no-default counts and receipt are **pending**. A
+native sync/finish. Earlier focused debug/release fault controls passed; after
+a producer-side pre-entry seal, same-source a08 synthetic pre-entry and a09
+real-MIPS fault debug controls passed (`unicorn.rs` SHA-256 `1AAE8A66…33090`).
+The superseded producer-only a10 focused release also passed. Current source
+moves the terminal seal into `CpuCustody::quarantine_reserved` under Unicorn
+on `Reserved`→`Quarantined`; final-source focused/broad release and no-default
+counts and receipt are **pending**. A
 `TerminateProcess` request does not retire B; checked accepted exit retires
 the slot and its fixed-stack page in the focused native-fault shape. A
-source-audited post-load/pre-native-entry error may quarantine an unpoisoned
-CPU that the current exit consumer refuses to retire; general closure is
-pending a separate control/fix. Status/debug report retained mapped-blob
+a07 expected red reproduced a post-load/pre-native-entry unpoisoned CPU that
+the exit consumer refused to retire; the superseded producer-side a08 made
+that synthetic precondition green. Custody now enforces the seal itself, with
+the exit consumer's poison check retained. Natural reachability and general closure
+remain unproved. Status/debug report retained mapped-blob
 bytes, not measured RSS. The accepted-exit witness relies on the same Kernel
 used by the production caller; it is not independently machine-lineaged.
 Runnable/parked custody, public-run bypass removal, general private VM/view

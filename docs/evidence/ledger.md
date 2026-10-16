@@ -2444,15 +2444,24 @@ entry. No live app or mount run was made.
 An ordinary real-MIPS guest A calls `CreateProcessW`; its nonzero return stays
 staged after the parent native attempt's clean sync/finish while B is launched
 post-native. B first touches its fixed stack with `SW`/`LW`, then triggers
-`READ_UNMAPPED`. Focused debug/release controls pass: the original B CPU is
+`READ_UNMAPPED`. Earlier focused debug/release controls passed; superseded
+producer-side a09 debug passed: the original B CPU is
 retained in one exact-birth, generation-checked, non-runnable machine custody
 slot, not the legacy parked tree; its native owner is closed and unsafe saved
 context cleared while B remains Kernel-live and unsignaled. A
 `TerminateProcess` request alone does not retire it. Same-Kernel checked
 accepted exit retires the slot and the fixed-stack pin in that focused path.
-A source-audited post-load/pre-native-entry error may quarantine an
-unpoisoned CPU that the exit consumer refuses to retire; no executed control
-or general closure is claimed. The main run loop owns
+Stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
+unpoisoned quarantine that the exit consumer refused to retire. Producer-side
+sealing made a08 debug pre-entry and a09 debug real-MIPS fault controls green
+on superseded `unicorn.rs` SHA-256
+`1AAE8A66ACFFFE3D8FE9CED10687C98A28879BF9267A1736D7B4689F21A33090`.
+Intermediate producer-only a10 focused release passed but is superseded.
+Current source makes `CpuCustody::quarantine_reserved` seal the CPU under
+Unicorn on `Reserved`→`Quarantined`, retaining the exit consumer's poison
+backstop. Final-source focused/broad checks remain pending. This forced
+precondition does not prove natural reachability or general error-path
+closure. The main run loop owns
 the directory; monitor save/restore refuse it; status/debug publish keys,
 birth, state and retained mapped-blob bytes. These bytes are not a measured
 host RSS peak. The Kernel-minted exit witness carries exact birth only, so

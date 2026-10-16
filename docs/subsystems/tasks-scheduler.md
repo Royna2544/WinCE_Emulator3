@@ -700,10 +700,17 @@ fixed-stack `SW`/`LW` first touch followed by `READ_UNMAPPED`, and checks one
 exact B-birth quarantined slot, zero B in the legacy parked tree, closed
 native owner, live unsignaled B and no runnable continuation. A termination
 request leaves that state intact; accepted exit retires the slot and fixed
-stack in that tested path. A source-audited post-load/pre-native-entry error
-may quarantine an unpoisoned CPU that the exit consumer refuses to retire;
-general error-path closure needs a separate control/fix. Focused debug/release
-controls pass. The pre-seal a03 release broad
+stack in that tested path. Stamped a07 expected red reproduced a synthetic
+post-load/pre-native-entry unpoisoned quarantine; a producer-side seal made
+a08 debug pre-entry and a09 debug real-MIPS fault controls green on superseded
+`unicorn.rs` SHA-256 `1AAE8A66…33090`. Intermediate producer-only a10 focused
+release passed but is superseded. Current source seals the CPU inside
+`CpuCustody::quarantine_reserved` under Unicorn on `Reserved`→`Quarantined`,
+with the exit consumer's poison backstop retained. This forced precondition
+does not prove natural reachability or general error-path closure. Earlier
+focused debug/release fault controls passed; final-source focused/broad suites
+remain pending.
+The pre-seal a03 release broad
 **2,183/0/9 ignored** is development-only; final sealed broad/no-default
 receipt and counts are pending. Neither this witness nor the directory proves
 the Step 2 port, complete view/VM cleanup, full O-T7 leaf authority, measured
