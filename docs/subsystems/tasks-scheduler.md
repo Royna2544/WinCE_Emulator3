@@ -803,7 +803,7 @@ This is not a sound machine-state loan or Step 2 acceptance. A later
 [source call-chain finding](../../evidence/stage3-machine-port-inventory-20261017/findings.md#current-importscheduler-call-chain-finding)
 found no natural import↔scheduler-block callback overlap in the current
 attempt: the block hook and import hook run sequentially under the sole
-production native `emu_start` at `unicorn.rs:14750`, neither hook starts a
+production native `emu_start` (now at `unicorn.rs:14796`), neither hook starts a
 nested guest run, and successful `CreateProcessW` defers its child until the
 parent native run returns. The vendored Unicorn
 [`uc_emu_start` implementation](../../vendor/unicorn-engine-sys/uc.c#L1117)
