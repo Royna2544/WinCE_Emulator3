@@ -20240,17 +20240,56 @@ fn complete_first_slice_child_exit(
     kernel: &mut CeKernel,
     framebuffer: &mut dyn Framebuffer,
     exit_code: u32,
-    _parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
 ) -> Result<bool> {
-    child
-        .preflight_stopped_modal_display_tree(launch_birth)
-        .and_then(|_| {
-            kernel.try_mark_process_launch_exited_with_framebuffer(
-                launch,
-                exit_code,
-                Some(&mut *framebuffer),
-            )
-        })
+    if launch.process_birth != Some(launch_birth)
+        || child.owned_process_launch.as_ref() != Some(launch)
+        || child.initial_thread_id != launch.thread_id
+        || child.current_thread_id != child.initial_thread_id
+    {
+        return Err(Error::HostExitAuthorityRecoveryRequired {
+            reason: "first-slice exit CPU does not own its exact child launch",
+        });
+    }
+    child.preflight_stopped_modal_display_tree(launch_birth)?;
+    let survivor_plan = UnicornMips::preflight_exit_survivors_in_queue(
+        &child.parked_child_processes,
+        launch_birth,
+        kernel,
+        true,
+    )?;
+    // Hold a needed publication slot and its capacity across Kernel
+    // completion; a child without survivors does not borrow the parent queue.
+    let mut parent_queue = if survivor_plan.output_len == 0 {
+        None
+    } else {
+        let mut queue = parent_queue.try_borrow_mut().map_err(|_| {
+            Error::HostExitAuthorityRecoveryRequired {
+                reason: "first-slice exit has no exclusive parent CPU queue",
+            }
+        })?;
+        queue
+            .try_reserve(survivor_plan.output_len)
+            .map_err(|_| Error::Backend("reserve first-slice exit survivor queue".to_owned()))?;
+        Some(queue)
+    };
+
+    let completed = kernel.try_mark_process_launch_exited_with_framebuffer(
+        launch,
+        exit_code,
+        Some(&mut *framebuffer),
+    )?;
+    if completed {
+        survivor_plan.apply(&mut child.parked_child_processes);
+        if let Some(queue) = parent_queue.as_mut() {
+            while let Some(survivor) = child.parked_child_processes.pop_front() {
+                queue.push_back(survivor);
+            }
+        } else {
+            debug_assert!(child.parked_child_processes.is_empty());
+        }
+    }
+    Ok(completed)
 }
 
 #[cfg(feature = "unicorn")]
