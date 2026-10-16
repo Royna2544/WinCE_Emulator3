@@ -125,9 +125,12 @@ The next nonmodal parked-CPU survivor gate is specified in the
 [Task/scheduler design](subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-not-implemented).
 It requires exact-birth disposal/survivor preflight before exit effects and
 infallible movement of original survivor CPUs after accepted completion.
-Expected-red natural parked, first-slice `Exited`, and active duplicate-tree
-cases must precede source changes; already-exited skips and duplicate pruning
-remain separately inventoried. The [CE6/REA evidence](../evidence/ce6-rea-exit-20261016/findings.md)
+Expected-red natural parked and active duplicate-tree controls are
+[preserved](../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
+before their bounded source cut. First-slice `Exited` needs a separate test seam
+or real-MIPS fixture before its own source change; already-exited skips,
+requested parked siblings and generic duplicate pruning remain separately
+inventoried. The [CE6/REA evidence](../evidence/ce6-rea-exit-20261016/findings.md)
 supports per-process ownership without locating the dumped kernel exit body.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,

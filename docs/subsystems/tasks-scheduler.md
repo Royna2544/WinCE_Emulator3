@@ -370,14 +370,16 @@ order and exact birth. Publication after successful Kernel retirement must be
 infallible, or the whole exit needs a separately proven rollback boundary;
 the present D-011 preflight does not establish post-preflight atomicity.
 
-The connected source gate needs expected-red natural parked and first-slice
-`Exited` A→B shapes, plus active A→same-birth parked duplicate→foreign B.
+The first bounded source gate starts with the [preserved expected-red natural
+parked and active same-birth-duplicate A→B controls](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md).
 Give B a distinct PC/SP, exact birth and a legitimate blocked wait so it
-cannot silently vanish or spuriously execute. Test stale/unknown witness
-refusal with no exit effects, and keep requested/`Completed` hoist controls.
-After this bounded gate, test already-exited skips and duplicate pruning
-separately, then a real-MIPS CreateProcess→parent-exit fixture. These are
-source tests, not iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
+cannot silently vanish or spuriously execute. Stale/unknown witness refusal
+needs a no-exit-effects control. The inline first-slice `Exited` A→B path needs
+a separate test seam or real-MIPS fixture before changing that path; retain
+the existing `Completed` hoist as its control. Already-exited skips, requested
+parked siblings and generic duplicate pruning need separately bounded gates,
+then a real-MIPS CreateProcess→parent-exit fixture. No one of these tests is
+iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
 supports per-process exit ownership; the dumped ROM kernel's exit body is
 still unidentified.
 
