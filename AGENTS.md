@@ -228,9 +228,13 @@ remain open. The later bounded
 preserves tested nonmodal foreign CPU trees on natural-parked and
 requested-active stopped exits and refuses stale saved CPU thread ownership
 before effects. Its combined sealed source passed release **2,144/0/10
-ignored** and no-default **1,524/0/3 ignored**, each over 19 blocks. Other
-exit paths, foreign CPUs without saved context, PC resumability, full Stage 3
-and live-app behavior remain open. No app or mount run was made.
+ignored** and no-default **1,524/0/3 ignored**, each over 19 blocks. The
+later [first-slice `Exited` helper gate](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
+synthetically preserves one A→B survivor shape; it does not execute guest
+MIPS or prove classifier reachability. Its held-parent-queue conflict returns
+typed terminal error but loses local A+B CPU ownership, not recovery. The
+separate `Completed` borrow, exact primary birth, framebuffer reentry and
+other exit paths remain open. No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
 but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL

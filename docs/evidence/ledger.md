@@ -2075,12 +2075,37 @@ no-default **1,524/0/3 ignored**. Earlier passing a09 on source `286A3FDF…`
 and the a06 alias-close regression are intermediate/superseded, not credited
 to this seal.
 
-First-slice child `Exited`, other active exits, requested parked siblings,
+At that seal, first-slice child `Exited`, other active exits, requested parked siblings,
 already-exited cleanup, generic duplicate pruning, foreign CPU nodes without
 saved context and PC resumability remain separate gates. The static
 [CE6/REA check](../../evidence/ce6-rea-exit-20261016/findings.md) did not
 locate the dumped kernel exit body. No iNavi app, writable mount, LAN,
 footprint, responsiveness or full Stage 3 result follows.
+
+## Bounded first-slice child Exited survivor source gate (2026-10-16, executed offline)
+
+The [preserved expected-red receipt](../../evidence/stage3-first-slice-survivor-red-20261016/validation.receipt.md)
+records two synthetic production-helper controls: successful first-slice A
+exit lost a nested live B CPU, and malformed saved B ownership was accepted.
+The subsequent [source-gate receipt](../../evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
+identifies the final source hash and validation attempts. On its bounded A→B
+shape, the helper preflights B, holds parent publication capacity before
+Kernel completion, and moves the original B CPU, context and wait after
+accepted A exit. It refuses mismatched saved B birth before effects. A third
+control deliberately holds a parent queue borrow: A's exit is refused before
+Kernel effects and the fallback returns typed terminal `Backend` without a
+host panic. This conflict drops the local A+B CPU tree, so it is not a
+recoverable hold or the target's infallible publication boundary.
+
+The current normal callsites at `unicorn.rs:13530` and `:14611` do not hold
+that parent queue borrow. Existing concrete framebuffers do not reenter the
+queue during exit completion; a custom reentrant implementation is not
+supported by this cut. The separate `Completed` queue borrow and an exact
+live primary-thread-birth gate remain open. These tests do not execute a
+guest MIPS first slice, establish classifier reachability or iNavi behavior.
+The [CE6/REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
+is static ownership context, not a decompilation of the dumped kernel exit
+body. No app or writable-mount run was made.
 
 ## Chat-project validation notes (not in this repository)
 

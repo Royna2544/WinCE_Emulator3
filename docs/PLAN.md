@@ -130,12 +130,22 @@ execution-live current thread birth refuses exit before effects. The
 [natural-parked/active duplicate expected reds](../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
 and earlier passing a09 source are historical; the combined sealed source
 passed release 2,144/0/10 ignored and no-default 1,524/0/3 ignored across
-19 blocks each. First-slice `Exited` needs a separate test seam or real-MIPS
-fixture before its own source change; other active exits, requested parked
+19 blocks each. At that seal, first-slice `Exited` still needed a separate
+test seam or real-MIPS fixture; other active exits, requested parked
 siblings, already-exited skips, generic duplicate pruning, foreign CPU nodes
 without saved context and PC resumability remain unproved. The
 [CE6/REA evidence](../evidence/ce6-rea-exit-20261016/findings.md) supports
 per-process ownership without locating the dumped kernel exit body.
+
+The subsequent bounded [first-slice `Exited` source gate](../evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
+uses a production-helper seam: synthetic A→B controls preserve the original
+nonmodal B CPU after accepted A exit and refuse mismatched saved ownership
+before effects. A held parent queue borrow yields a typed terminal error
+without Kernel exit or host panic, but drops the local CPU tree; it is not a
+recovery hold. The older test-seam requirement is thus met for this one shape,
+not for real-MIPS classifier reachability. Exact live primary birth,
+`Completed` publication borrow, custom framebuffer reentry, other survivor
+shapes and live iNavi remain open.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit

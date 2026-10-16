@@ -350,10 +350,11 @@ atomicity and live iNavi remain separate gates.
 The parked CPU tree is a scheduler container, not a CE process-lifetime tree.
 Removing an exiting process must not dispose an independently live foreign
 process nested below it. The bounded natural-parked and requested-active
-source cuts now hoist their tested nonmodal foreign CPUs; first-slice child
-`Exited`, other active exits, requested parked siblings, already-exited skips
-and generic duplicate pruning remain open. The requested `Completed` hoist is
-a control, not proof that every exit path preserves descendants.
+source cuts and the later synthetic first-slice `Exited` helper cut hoist
+their tested nonmodal foreign CPUs; real-MIPS first-slice classification,
+other active exits, requested parked siblings, already-exited skips and
+generic duplicate pruning remain open. The requested `Completed` hoist is a
+control, not proof that every exit path preserves descendants.
 
 Before any Kernel, GWE, framebuffer, Task or VM exit effect, one read-only
 preflight must partition the stopped CPU tree by exact process birth. Resolve
@@ -391,12 +392,21 @@ regression are superseded, not credited to this seal. Foreign CPUs without
 saved context and PC resumability remain unproved; none of these source
 tests establishes live-app behavior.
 
-The inline first-slice `Exited` A→B path needs
-a separate test seam or real-MIPS fixture before changing that path; retain
-the existing `Completed` hoist as its control. Already-exited skips, requested
-parked siblings and generic duplicate pruning need separately bounded gates,
-then a real-MIPS CreateProcess→parent-exit fixture. No one of these tests is
-iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
+The bounded [first-slice `Exited` source gate](../../evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
+uses a production-helper seam rather than guest MIPS. A→B success moves the
+original nonmodal B CPU, context and wait after accepted A completion;
+mismatched saved B ownership refuses before effects. When a deliberately
+held parent queue borrow blocks publication, preflight refuses A's exit and
+the fallback returns a typed terminal error without host panic, but loses the
+local A+B CPU tree. This is not the infallible publication/recovery target
+above: Stage 4 needs machine-owned child custody. Current framebuffer
+implementations do not reenter that queue while its mutable borrow spans
+Kernel completion, but the open trait does not prevent a custom one.
+`Completed` still uses an unconditional queue borrow, and first-slice
+primary-thread exact live-birth authority remains unproved. Already-exited
+skips, requested parked siblings and generic duplicate pruning need separate
+gates, then a real-MIPS CreateProcess→parent-exit fixture. No one of these
+tests is iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
 supports per-process exit ownership; the dumped ROM kernel's exit body is
 still unidentified.
 
