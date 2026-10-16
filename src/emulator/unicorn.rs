@@ -9488,6 +9488,14 @@ impl UnicornMips {
         use unicorn_engine::{RegisterMIPS, unicorn_const::HookType};
 
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+        // Refuse a nested native attempt before private setup takes the saved
+        // CPU context and marks it poisoned. The permit ends as soon as the
+        // single emu_start returns, before any deferred child can run.
+        let native_entry = NativeGuestExecutionGuard::enter();
+        if native_entry.is_err() {
+            report.failure_operation = Some("enter native guest execution");
+        }
+        let native_entry_guard = native_entry?;
         let active_has_visible_queued_receiver =
             self.active_process_has_visible_queued_receiver_work(kernel);
         let active_has_receiver = self.active_process_has_receiver_work(kernel);
@@ -14384,11 +14392,6 @@ impl UnicornMips {
         }
         // This checked ordinal is diagnostic correlation, never a Task or
         // native-handle identity. Allocate only when a primary start is next.
-        let native_entry = NativeGuestExecutionGuard::enter();
-        if native_entry.is_err() {
-            report.failure_operation = Some("enter native guest execution");
-        }
-        let native_entry_guard = pre_entry_try!(native_entry);
         report.attempt_id = Some(pre_entry_try!(DiagnosticAttemptId::next()));
         // A ready wait may consume kernel state and switch the selected thread.
         // Defer that choice until all fallible pre-entry setup has succeeded.
