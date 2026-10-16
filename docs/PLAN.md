@@ -168,27 +168,30 @@ GWE/window/framebuffer effects and before canonical completion: its dirty
 callback is infallible, and a panic or unsafe reentry would test a different
 contract. Add a fallible, test-injectable commit seam before claiming a typed
 partial-effects quarantine gate; neither the seam nor that gate exists yet.
-The [ignored native-fault expected-red](../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-now executes an admitted synthetic child through `READ_UNMAPPED`: Kernel
-keeps its exact birth live/unsignaled, but the ordinary error discards its
+At its earlier source seal, the [ignored native-fault expected-red](../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+executed an admitted synthetic child through `READ_UNMAPPED`: Kernel
+kept its exact birth live/unsignaled, but the ordinary error discarded its
 only CPU. This is offline non-live-pump evidence, not a source fix or app run.
 The [real-MIPS non-live control](../evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
-adds an executed third red: A launches B, exits, and the already-exited-A
-park skip drops B's CPU while B stays Kernel-live. The slot must be a resource
+added an executed third red at that seal: A launched B and exited, then the
+already-exited-A park skip dropped B's CPU while B stayed Kernel-live. The
+slot must be a resource
 owner behind the canonical Task directory,
 not a new lifecycle registry or another pending vector. Review exact-birth,
 clone and post-effect failures before connecting all consumers. This is not
 full Stage 4 acceptance or a bypass of unfinished Stage 3 Task authority. A
 controlled fixture for the `Exited` classifier remains separate: the real-MIPS
-non-live A→B shape rotates and prunes A first, then returns B as `Parked` to
-the outer launch handler. Live-pump defers the child launch and needs its own
-later-slice survivor fixture. Neither source gate grants live-app
-acceptance or a writable-mount run.
+non-live A→B shape rotated and pruned A first, then returned B as `Parked` to
+the outer launch handler. At that seal only live-pump deferred the child;
+the current source defers successful `CreateProcessW` in both modes after
+staging the parent's return PC, pending its own final source/test gate.
+Live-pump still needs its own later-slice survivor fixture. Neither historical
+source gate grants live-app acceptance or a writable-mount run.
 
-The [2026-10-17 current-source rerun](../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-confirms three still-ignored offline reds on one seal: `Completed` panics on
-a held parent-queue borrow and strands B, the already-exited-A skip drops B,
-and a post-admission native error drops the child's CPU. The checkpoint
+The [2026-10-17 pre-deferral rerun](../evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+confirmed three still-ignored offline reds on one earlier seal: `Completed`
+panicked on a held parent-queue borrow and stranded B; the already-exited-A
+skip dropped B; and a post-admission native error dropped the child's CPU. The checkpoint
 refusal's seven former ignores are now [ordinary green tests](../evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
 in complete release and no-default suites. This does not change the staging
 order: inventory and migrate the callback-scoped Kernel/framebuffer port by
@@ -202,9 +205,12 @@ not an implemented owner. Stage its connected source cut in this order:
    Distinguish real CE zero-slice creation completion from retryable failure;
    neither may lose an already-published exact-birth launch.
 2. Settle the callback-scoped machine-state port before claiming a sound
-   lease: parent A's paused native hook may call child B, but neither a
-   directory nor a mutable Kernel/framebuffer loan may span B's run. Replace
-   or narrowly audit the current raw `kernel_ptr`/framebuffer reentry with
+   lease. Successful `CreateProcessW` now stops A's native attempt at its
+   staged return PC and runs B post-native, rather than through A's raw hook
+   pointers. Other hook reentry remains, and the post-native helper still
+   holds a mutable Kernel reference across B's run. Neither a directory nor
+   a mutable Kernel/framebuffer loan may span B's run. Replace or narrowly
+   audit the remaining raw `kernel_ptr`/framebuffer reentry with
    fallible, leaf-permit-qualified short loans, checked selected-process
    restoration and an exit-transaction event fence. A second guest-executable
    permit or a panicking `RefCell` conflict is a failed control, not a yield.
@@ -214,13 +220,14 @@ not an implemented owner. Stage its connected source cut in this order:
    active leaf permit, and forbid slot retirement/reuse while any loan or
    permit exists; a private `Rc` clone is not that gate. A checked
    `ParentSuspension` transfers the one executable leaf permit A→B while A's
-   native callback is paused; B is classified into custody before A may resume.
+   staged return context is pinned; a different nested path may still pause
+   A's native callback. B is classified into custody before A may resume.
    Keep a claimed launch in Kernel's original queue until admission/checked
    completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive
    parked CPU boxes and active/displaced/ready references to checked locators
-   together. Migrate the immediate parent-suspension/child
-   lease, deferred launch, `Completed`, run-state drain/return, process switch
+   together. Migrate the post-native parent/child lease, any remaining nested
+   callback path, `Completed`, run-state drain/return, process switch
    and both main-loop/CPU-loop selector call sites before claiming custody.
    Keep existing scheduling policy pending Stage 5; do not add a parallel
    pending-owner vector or use a queue borrow as the resource owner.
@@ -232,7 +239,7 @@ not an implemented owner. Stage its connected source cut in this order:
    expected reds green, then cover `Completed`, numeric duplicate pruning,
    framebuffer reentry and post-effect injection.
 5. Separately prove controlled first-slice `Exited` classification, B's later
-   PC resumability and the live-pump deferred-launch/later-exit route. Keep
+   PC resumability and the live-pump later-slice deferred-launch/exit route. Keep
    live iNavi/frame/footprint acceptance behind a newly sealed build and its
    own writable-mount backup/run approval.
 

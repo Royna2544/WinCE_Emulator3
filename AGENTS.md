@@ -236,12 +236,14 @@ typed terminal error but loses local A+B CPU ownership, not recovery. The
 final source passed release **2,147/0/10 ignored** and no-default
 **1,524/0/3 ignored** across 19 blocks each. A later
 [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
-executes guest `CreateProcessW`: A exits `0x63`, B stays Kernel-live but its
-original CPU is dropped by the already-exited A skip after rotation. The
+at its earlier source seal executed guest `CreateProcessW`: A exited `0x63`,
+B stayed Kernel-live, but its original CPU was dropped by the already-exited A
+skip after rotation. The
 fixture remains ignored; this does not exercise the live-pump route. The
 separate [post-admission native-fault red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-executes a synthetic child into `READ_UNMAPPED`; Kernel leaves it live but
-the ordinary first-slice error drops its CPU. It too remains ignored. The
+at its earlier seal executed a synthetic child into `READ_UNMAPPED`; Kernel
+left it live but the ordinary first-slice error dropped its CPU. It too remains
+ignored. The
 [pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
 now passes same-birth retry and queued-tail controls after file-view/path/PE
 setup errors; it does not retain an admitted CPU after a native failure. The
@@ -253,11 +255,15 @@ relineage exists. The gate is not general checkpoint acceptance. The
 [counted checkpoint validation](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md)
 passes 19-block no-default **1,532/0/3 ignored** and release-feature
 **2,157/0/13 ignored** with all seven former ignores now ordinary green tests.
-The [three current-source offline reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-still reproduce `Completed` borrow/panic, already-exited A dropping B, and
-native-fault child CPU loss; they remain ignored and do not establish live
-failure. The
-shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
+The [three pre-deferral offline reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+reproduced `Completed` borrow/panic, already-exited A dropping B, and
+native-fault child CPU loss at that earlier seal; they remain ignored and do
+not establish current-source or live failure. Successful `CreateProcessW` in
+the current D: source now stages a nonzero parent return PC and launches the
+child post-native in both modes, pending a final source/test gate. Non-live
+rotation may select the child before the parent resumes. This is not a CPU
+slot/Task port or Stage 5 scheduling gate. The shipped PE
+[REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
 identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
 analysis does not establish their runtime frequency. The
 dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
