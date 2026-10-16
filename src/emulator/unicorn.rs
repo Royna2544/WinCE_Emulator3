@@ -7085,11 +7085,20 @@ impl UnicornMips {
             .and_then(|launch| launch.process_birth)
             .or_else(|| {
                 (self.initial_thread_id == MAIN_GUEST_THREAD_ID)
-                    .then(|| kernel.current_process_birth_key())
+                    .then(|| {
+                        self.saved_context_thread_birth
+                            .filter(|primary| primary.thread_id() == MAIN_GUEST_THREAD_ID)
+                            .and_then(|primary| {
+                                kernel
+                                    .handles
+                                    .thread_creation_owner_by_id(primary.thread_id())
+                            })
+                    })
                     .flatten()
             })?;
-        if kernel.current_process_birth_key() != Some(owner)
-            || self.stopped_primary_thread_birth(kernel, owner).is_none()
+        if self.stopped_primary_thread_birth(kernel, owner).is_none()
+            || (self.owned_process_launch.is_some()
+                && kernel.current_process_birth_key() != Some(owner))
         {
             return None;
         }
@@ -48236,6 +48245,7 @@ mod guest_thread_stack_tests {
             exiting_cpu.owned_process_launch = Some(exiting.clone());
             exiting_cpu.set_initial_thread_id(exiting.thread_id);
             exiting_cpu.current_thread_id = exiting.thread_id;
+            exiting_cpu.saved_context_thread_birth = exiting.primary_thread_birth;
             exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
                 pc: THREAD_EXIT_STUB_ADDR,
                 v0: 0x63,
@@ -52792,6 +52802,7 @@ mod guest_thread_stack_tests {
         let mut kernel = CeKernel::boot(config);
         let launch = kernel.queue_process_launch(None, None);
         let thread_id = launch.thread_id;
+        let primary = launch.primary_thread_birth.expect("child primary birth");
         let mut memory = ModalTestMemory::default();
         let text_ptr = 0x2000;
         let caption_ptr = 0x2100;
@@ -52802,6 +52813,13 @@ mod guest_thread_stack_tests {
         cpu.set_initial_thread_id(thread_id);
         cpu.current_thread_id = thread_id;
         cpu.owned_process_launch = Some(launch.clone());
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x1234;
+        cpu.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        cpu.saved_context_thread_birth = Some(primary);
         cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             ra: THREAD_EXIT_STUB_ADDR,
@@ -52850,7 +52868,11 @@ mod guest_thread_stack_tests {
     fn active_modal_message_box_does_not_report_terminal_child_return() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
-        let thread_id = 5;
+        let launch = kernel.queue_process_launch(None, None);
+        let thread_id = launch.thread_id;
+        let primary = launch.primary_thread_birth.expect("child primary birth");
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(launch.process_id);
         let mut memory = ModalTestMemory::default();
         let text_ptr = 0x2000;
         let caption_ptr = 0x2100;
@@ -52858,8 +52880,14 @@ mod guest_thread_stack_tests {
         memory.write_wide_z(caption_ptr, "Button");
 
         let mut cpu = UnicornMips::new()?;
+        cpu.owned_process_launch = Some(launch);
         cpu.set_initial_thread_id(thread_id);
         cpu.current_thread_id = thread_id;
+        cpu.saved_context = Some(SavedCpuContext {
+            pc: GUEST_THREAD_RETURN_STUB_ADDR,
+            regs: MipsGuestContext::zero(),
+        });
+        cpu.saved_context_thread_birth = Some(primary);
         cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
             ra: GUEST_THREAD_RETURN_STUB_ADDR,
@@ -53049,6 +53077,13 @@ mod guest_thread_stack_tests {
         child_cpu.owned_process_launch = Some(child.clone());
         child_cpu.set_initial_thread_id(child.thread_id);
         child_cpu.current_thread_id = child.thread_id;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x6b;
+        child_cpu.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        child_cpu.saved_context_thread_birth = Some(thread_birth);
         child_cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x6b,
@@ -53384,6 +53419,7 @@ mod guest_thread_stack_tests {
         exiting_cpu.owned_process_launch = Some(exiting.clone());
         exiting_cpu.set_initial_thread_id(exiting.thread_id);
         exiting_cpu.current_thread_id = exiting.thread_id;
+        exiting_cpu.saved_context_thread_birth = exiting.primary_thread_birth;
         exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x63,
@@ -53772,6 +53808,7 @@ mod guest_thread_stack_tests {
         exiting_cpu.owned_process_launch = Some(exiting.clone());
         exiting_cpu.set_initial_thread_id(exiting.thread_id);
         exiting_cpu.current_thread_id = exiting.thread_id;
+        exiting_cpu.saved_context_thread_birth = exiting.primary_thread_birth;
         exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x75,
@@ -54323,6 +54360,7 @@ mod guest_thread_stack_tests {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
             regs: MipsGuestContext::zero(),
         });
+        scheduler.saved_context_thread_birth = launch.primary_thread_birth;
         scheduler.last_debug = Some(UnicornDebugSnapshot {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
             ra: GUEST_THREAD_RETURN_STUB_ADDR,
@@ -54620,6 +54658,7 @@ mod guest_thread_stack_tests {
             pc: THREAD_EXIT_STUB_ADDR,
             regs,
         });
+        scheduler.saved_context_thread_birth = launch.primary_thread_birth;
         scheduler.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x45,
@@ -54909,6 +54948,7 @@ mod guest_thread_stack_tests {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
             regs: MipsGuestContext::zero(),
         });
+        scheduler.saved_context_thread_birth = launch.primary_thread_birth;
         scheduler.last_debug = Some(UnicornDebugSnapshot {
             pc: GUEST_THREAD_RETURN_STUB_ADDR,
             ra: GUEST_THREAD_RETURN_STUB_ADDR,
@@ -55429,6 +55469,13 @@ mod guest_thread_stack_tests {
         child_cpu.set_initial_thread_id(launch.thread_id);
         child_cpu.current_thread_id = launch.thread_id;
         child_cpu.owned_process_launch = Some(launch.clone());
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x24;
+        child_cpu.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        child_cpu.saved_context_thread_birth = launch.primary_thread_birth;
         child_cpu.last_debug = Some(UnicornDebugSnapshot {
             pc: THREAD_EXIT_STUB_ADDR,
             v0: 0x24,
