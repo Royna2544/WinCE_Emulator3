@@ -1925,6 +1925,9 @@ checkpoint is restored. Compatible retry succeeds in the
 bounded controls. This does not prove canonical Task/VM retirement after a
 root pseudo signal or whole-exit atomicity after successful preflight. No
 live iNavi run, writable-mount operation or LAN session occurred.
+The later live-checkpoint lineage refusal gate below supersedes the proposed
+in-session restore recovery: an earlier live checkpoint cannot safely be
+restored by the present monitor.
 
 ## Stage 2 writable main-image VM and mutable-code source gates (2026-10-16, executed offline)
 
@@ -2053,6 +2056,23 @@ identified, and no emulator source gate or live-app run follows from this
 static check. All three temporary NTFS analysis copies were removed after
 their evidence bundles were exported.
 
+## CE6 wait/child-lifetime REA/source follow-up (2026-10-16, observed)
+
+The [bounded follow-up](../../evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
+reopened exact-SHA dumped `kernel.dll` and `coredll.dll` through temporary
+NTFS copies, exported 12 REA records per target, verified bundle hashes and
+removed both exact scratch copies. Dumped COREDLL's `WaitForSingleObject`
+wrapper calls `0xffffbb9a`; `GetExitCodeProcess` resolves its handle before
+calling `0xffffba8e` and conditionally releases the temporary resolution.
+The bounded kernel string/callsite pass identified a secure-stack-failure
+thread path, **not** `PROCTerminate`; the ROM exit body remains unknown. Local
+CE6 source shows child loader-completion signaling, process-event wait pins,
+exit signaling after resource cleanup but before final object/thread teardown,
+and termination-request/actual-exit separation.
+The implication for O-T7 is independent child CPU custody across creator
+exit and alias closure. Static wrappers plus source are not a ROM-to-source
+function mapping or emulator/live-app acceptance.
+
 ## Bounded parked-CPU survivor and saved-CPU-owner source gate (2026-10-16, executed offline)
 
 The [preserved natural-parked/active duplicate expected reds](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
@@ -2106,6 +2126,87 @@ guest MIPS first slice, establish classifier reachability or iNavi behavior.
 The [CE6/REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
 is static ownership context, not a decompilation of the dumped kernel exit
 body. No app or writable-mount run was made.
+
+## Real-MIPS nested first-slice survivor expected-red (2026-10-16, executed offline)
+
+The [four-attempt receipt](../../evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+preserves the on-disk MIPS PE/IAT fixture, stamped raw logs and hashes. In
+attempt 03 A calls the real import trap for `CreateProcessW`, launches B, and
+returns through its saved startup RA with `0x63`. B is separately exact-birth
+Kernel-live and unsignaled; after B is activated and A is pruned, the outer A
+launch sees `CreateProcessChildParkSkipped(already_exited)` and discards the
+local CPU now belonging to B. The asserted parent CPU queue is zero versus
+one required owner. The final source test is ignored expected-red; the normal
+focused selection passes with one ignored. The natural route uses
+`parked_prune_exit`, not the synthetic `initial_child_exit` arm, and covers
+only `live_pump=false`. No production repair or app/mount run occurred.
+
+## Post-admission first-slice native-fault custody red (2026-10-16, executed offline)
+
+The [five-attempt receipt](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+seals a test-only ignored synthetic MIPS child fixture. The child enters a
+native slice and faults on `lw` at unmapped `0x2000_0000`; the trace requires
+`READ_UNMAPPED`, while its exact Kernel birth remains live, `STILL_ACTIVE`
+and unsignaled. The current error route returns without publishing or
+retaining its CPU: parent custody queue **0**, expected **1**. Final
+`unicorn.rs` SHA-256 is
+`508101e2942f997472de99c1765905756104e06caf6313ac96717292e3250c79`;
+attempt 04 is the source-sealed expected red (exit 101), attempt 05 confirms
+normal focused selection has one ignored/zero failures. Future-green checks
+also require the faulting PC and nonzero saved PC. The attempt-local scratch
+directory was verified absent after the panic. No production path, app or
+writable mount was run or changed; no broad suite was run on this test-only
+addition.
+
+## Pre-CPU published-launch retention (2026-10-16, bounded source gate)
+
+The [preserved expected red](../../evidence/stage3-pre-cpu-launch-retention-20261016/validation.receipt.md)
+made outgoing lazy file-view validation fail before path resolution or child
+CPU construction. It left the child's exact Kernel birth live and unsignaled
+but drained its pending launch (zero retained versus one required). The
+[green receipt](../../evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
+seals a bounded source cut: pre-CPU file-view, birth, path, PE-inspection and
+CPU-constructor errors restore the current exact launch ahead of its tail.
+The same-birth retry and malformed-PE tail controls passed 2/0, two related
+pending-child controls passed 2/0, and normal/no-default feature checks
+passed. Post-construction DLL-load, native and publication errors still need
+machine-owned CPU custody; no app or writable mount was run.
+
+## Live checkpoint lineage refusal (2026-10-16, bounded source gate)
+
+The [live CPU expected reds](../../evidence/stage3-live-checkpoint-lineage-20261016/validation.receipt.md)
+showed that monitor save/restore cloned a live CPU while retaining its exact
+process birth. The separate [pristine-CPU Kernel reds](../../evidence/stage3-kernel-checkpoint-lineage-20261016/validation.receipt.md)
+showed that boot, active Task and queued-child births could likewise be
+duplicated without a live CPU. The [green receipt](../../evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+seals a fail-closed monitor guard: save and restore refuse live CPU custody,
+pending launches or canonical Kernel process/thread records; restore checks
+both source and destination CPUs. Five former reds passed under release and
+no-default profiles, and the existing checkpoint selection passed 4/0 with
+five ignored under both profiles. Positive selection is now synthetic and
+fully retired; it does not demonstrate live machine relineage. Once D-011
+requires recovery, the monitor cannot currently rewind a live machine in
+session; quit, repair and restart remain necessary. No app or writable mount
+was run.
+
+The subsequent [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
+used the same four-file source seal for five stamped attempts. The four
+normal-feature integration suites passed **908/0**, and serial no-feature
+`cargo test -j 1` passed **1,525/0/8 ignored**. Each closed raw-log hash was
+verified against the receipt. This does not execute the ignored post-admission
+owner-loss reds, a full release-feature suite, or the mounted app.
+
+## Shipped iNavi process-launch REA check (2026-10-16, static artifact)
+
+The [hash-preserved REA finding](../../evidence/ce6-rea-inavi-20261016/findings.md)
+uses the original MIPS PE SHA-256 and 30 retained REA Evidence records. A
+direct `CreateProcessW` branch checks a `happyway_win` window, builds
+`%s\happyway_win.exe` and stores four return words; a second checks `iSearch`,
+builds `%s\iSearch.exe` and likewise stores the result. This corroborates
+child-process custody as a shipped-app requirement, but neither branch was
+executed in this check. Ghidra's MIPS calling convention and MIPS III decoding
+remain assumptions/limitations. The original, mounts and emulator were not
+run or modified; the temporary exact-hash NTFS analysis copy was removed.
 
 ## Chat-project validation notes (not in this repository)
 

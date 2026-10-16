@@ -105,8 +105,10 @@ canonical Task retirement or whole-exit atomicity. The later bounded
 rejects an un-restorable saved backing before stopped-exit effects and
 propagates recovery through tested scheduler paths. It also fails closed when
 the stopped boot CPU's saved owner differs from the selected process. The
-monitor refuses a new checkpoint after recovery is required; only restoring
-an earlier checkpoint clears the hold.
+monitor refuses a new checkpoint after recovery is required. The later
+live-lineage guard refuses save/restore while Task/launch or CPU custody is
+present; no earlier live checkpoint can currently clear the hold. Repair and
+restart are the safe recovery route until atomic machine relineage lands.
 The bounded [native COREDLL pseudo self-exit gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
 source-tested guest CPU stop, native owner closure, exact caller and
 launch/boot witnesses, and D-011 preflight before child or boot Task/VM
@@ -143,9 +145,69 @@ nonmodal B CPU after accepted A exit and refuse mismatched saved ownership
 before effects. A held parent queue borrow yields a typed terminal error
 without Kernel exit or host panic, but drops the local CPU tree; it is not a
 recovery hold. The older test-seam requirement is thus met for this one shape,
-not for real-MIPS classifier reachability. Exact live primary birth,
+not for real-MIPS classifier reachability. Final-source suites passed release
+2,147/0/10 ignored and no-default 1,524/0/3 ignored over 19 blocks each.
+Exact live primary birth,
 `Completed` publication borrow, custom framebuffer reentry, other survivor
 shapes and live iNavi remain open.
+
+The next preparatory Stage 3/4 cross-boundary source cut requires a
+[machine-owned CPU-custody design](subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
+before production custody code: inventory every boot/child/displaced/parked/Completed/switch/
+failure/exit owner, settle [O-T7](DECISIONS.md), and stage expected reds for
+held-queue publication and ordinary first-slice failure losing a live CPU.
+The read-only owner audit found pre-CPU drained-launch errors, an unconditional
+`Completed` queue borrow, numeric prune/drop sites and independently cloned
+checkpoints. Add controls for those boundaries and a late post-effect failure
+before admitting a machine-owned slot cut. A live-custody checkpoint fails
+closed until CPU and Kernel/VM identities can be relineaged atomically.
+The current Kernel exit path has no safe ordinary failure injection after
+GWE/window/framebuffer effects and before canonical completion: its dirty
+callback is infallible, and a panic or unsafe reentry would test a different
+contract. Add a fallible, test-injectable commit seam before claiming a typed
+partial-effects quarantine gate; neither the seam nor that gate exists yet.
+The [ignored native-fault expected-red](../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+now executes an admitted synthetic child through `READ_UNMAPPED`: Kernel
+keeps its exact birth live/unsignaled, but the ordinary error discards its
+only CPU. This is offline non-live-pump evidence, not a source fix or app run.
+The [real-MIPS non-live control](../evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+adds an executed third red: A launches B, exits, and the already-exited-A
+park skip drops B's CPU while B stays Kernel-live. The slot must be a resource
+owner behind the canonical Task directory,
+not a new lifecycle registry or another pending vector. Review exact-birth,
+clone and post-effect failures before connecting all consumers. This is not
+full Stage 4 acceptance or a bypass of unfinished Stage 3 Task authority. A
+controlled fixture for the `Exited` classifier remains separate: the real-MIPS
+non-live A→B shape rotates and prunes A first, then returns B as `Parked` to
+the outer launch handler. Live-pump defers the child launch and needs its own
+later-slice survivor fixture. Neither source gate grants live-app
+acceptance or a writable-mount run.
+
+O-T7 is now a [reviewable candidate contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists),
+not an implemented owner. Stage its connected source cut in this order:
+
+1. Add focused pre-CPU pending-claim/return, same-process multi-slot,
+   stale-generation/PID-reuse and live-custody checkpoint-refusal controls.
+   Distinguish real CE zero-slice creation completion from retryable failure;
+   neither may lose an already-published exact-birth launch.
+2. Admit boot and child CPU payloads into one machine-owned slot directory;
+   convert recursive parked CPU boxes and active/displaced/ready references to
+   checked locators together. Migrate the immediate parent-suspension/child
+   lease, deferred launch, `Completed`, run-state drain/return, process switch
+   and both main-loop/CPU-loop selector call sites before claiming custody.
+   Keep existing scheduling policy pending Stage 5; do not add a parallel
+   pending-owner vector or use a queue borrow as the resource owner.
+3. Make every exit/prune path preflight exact-birth survivors and reserve the
+   destination before effects, then move original locators infallibly after
+   accepted exit. Native/load/publication failures retain non-runnable CPU
+   custody; a late post-effect failure quarantines it and reports partial
+   effects. Turn the held-borrow, native-error and real-MIPS A-exits/B-live
+   expected reds green, then cover `Completed`, numeric duplicate pruning,
+   framebuffer reentry and post-effect injection.
+4. Separately prove controlled first-slice `Exited` classification, B's later
+   PC resumability and the live-pump deferred-launch/later-exit route. Keep
+   live iNavi/frame/footprint acceptance behind a newly sealed build and its
+   own writable-mount backup/run approval.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit

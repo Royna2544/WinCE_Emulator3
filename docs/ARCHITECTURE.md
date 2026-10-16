@@ -145,6 +145,21 @@ Native context payloads may live in the backend, but they are reachable only
 through canonical task/frame references; an old container's membership does
 not decide whether the task is runnable.
 
+The machine must also keep every live CPU execution resource reachable for its
+whole admitted lifetime. A machine-owned custody slot is a resource owner,
+not a second task registry: it refers to canonical births at context use,
+while the CPU backend owns the opaque engine/context implementation. The slot
+itself binds the exact process birth and a checked owner generation; active
+and displaced context locators separately carry task/frame provenance.
+Scheduler decisions revalidate the canonical HandleTable, never infer
+lifecycle from custody membership.
+Scheduler ready/parked indexes may hold checked slot locators but never become
+the sole owners of CPU boxes. A slot has a checked incarnation so an old
+locator cannot acquire a replacement; one slot per process is not assumed
+while same-process displaced contexts exist. A run lease borrows custody
+without moving the only owner into an unprotected local variable. This is a
+target contract, not a description of the current parked queues.
+
 ## A2. Shared identity and lifetime
 
 Names below are proposed contracts, not newly implemented APIs.
@@ -228,8 +243,11 @@ source-tests this refusal for saved live and already-destroyed HWND backing,
 including partial multi-window failure and active/parked/pending scheduler
 propagation. The later selected-owner control refuses a boot/root exit whose
 saved CPU owner no longer matches the selected process. The monitor blocks a
-new checkpoint after refusal and permits only an earlier checkpoint restore
-to clear its execution hold. It does not make later teardown effects atomic or complete the
+new checkpoint after refusal. The later live-lineage guard also refuses
+save/restore while canonical Task/launch or CPU custody exists; an earlier
+live checkpoint cannot currently clear the hold. Until atomic machine
+relineage exists, recovery means repairing the cause and restarting rather
+than cloning stopped execution. It does not make later teardown effects atomic or complete the
 machine-owned Task/VM lifecycle. The later
 [modal-presence cut](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
 refuses affected modal CPU subtrees in three red-to-green stopped-exit shapes;
@@ -284,6 +302,28 @@ explicit suspension overlays ready/blocked state rather than erasing it.
 Do not infer CE suspension from the legacy SuspendedGuestThread queue name.
 Prepared waits revalidate their exact live task birth at publication; a stale
 candidate releases its prepared pins without becoming a scheduler frame.
+
+Admitting a child CPU, running its first slice and classifying its stop are
+one custody lifetime even if the parent launches it synchronously. A failure
+before a CPU exists resolves as either an explicit CE creation failure with
+no CPU or a retryable error with the exact pending launch retained; neither
+may orphan an admitted child. After admission, a refused exit, native error
+or publication conflict leaves the exact CPU tree in custody and reports a
+stopped/terminal outcome. A synchronous in-hook launch suspends/pins the
+parent's execution lease while the child takes the exclusive active lease;
+the parent is restored only after the child is classified and safely in
+custody, without a mutable frame/queue borrow across the nested run. The
+machine cannot leave Kernel execution live while dropping its only CPU owner.
+Prepare a survivor's checked destination before irreversible exit effects;
+after accepted completion its ownership move must be infallible, or a
+partial-effect failure must retain
+custody and be reported honestly rather than claiming rollback. An
+already-exited launch handle is not proof that the returned CPU belongs to
+that launch: rotation may have selected a different still-live process, so
+discard requires verification of the CPU's own exact birth. The machine
+sequencer must not allow host/framebuffer reentry to mutate a queue during
+this transition. The current first-slice helper's terminal owner-loss branch
+does not yet satisfy this contract.
 
 ## A4. Guest memory and publication
 

@@ -233,7 +233,30 @@ later [first-slice `Exited` helper gate](evidence/stage3-first-slice-survivor-gr
 synthetically preserves one A→B survivor shape; it does not execute guest
 MIPS or prove classifier reachability. Its held-parent-queue conflict returns
 typed terminal error but loses local A+B CPU ownership, not recovery. The
-separate `Completed` borrow, exact primary birth, framebuffer reentry and
+final source passed release **2,147/0/10 ignored** and no-default
+**1,524/0/3 ignored** across 19 blocks each. A later
+[real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+executes guest `CreateProcessW`: A exits `0x63`, B stays Kernel-live but its
+original CPU is dropped by the already-exited A skip after rotation. The
+fixture remains ignored; this does not exercise the live-pump route. The
+separate [post-admission native-fault red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+executes a synthetic child into `READ_UNMAPPED`; Kernel leaves it live but
+the ordinary first-slice error drops its CPU. It too remains ignored. The
+[pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
+now passes same-birth retry and queued-tail controls after file-view/path/PE
+setup errors; it does not retain an admitted CPU after a native failure. The
+[live-checkpoint lineage gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+now refuses save/restore for retained canonical Kernel Task/launch authority
+or CPU custody. A real monitor session cannot currently rewind; D-011
+recovery requires repairing the cause and restarting until whole-machine
+relineage exists. The gate is not general checkpoint acceptance. The
+shipped PE [REA check](evidence/ce6-rea-inavi-20261016/findings.md) separately
+identifies `happyway_win.exe` and `iSearch.exe` launch branches; static
+analysis does not establish their runtime frequency. The
+dumped COREDLL [REA wait/exit-code follow-up](evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
+and local CE6 source further distinguish loader completion, process waits,
+termination requests and accepted exit; the ROM kernel exit body is unknown.
+The separate `Completed` borrow, exact primary birth, framebuffer reentry and
 other exit paths remain open. No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),

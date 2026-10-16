@@ -409,6 +409,182 @@ gates, then a real-MIPS CreateProcess→parent-exit fixture. No one of these
 tests is iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
 supports per-process exit ownership; the dumped ROM kernel's exit body is
 still unidentified.
+The shipped iNavi PE [REA callsite check](../../evidence/ce6-rea-inavi-20261016/findings.md)
+independently identifies `FindWindowW`-guarded `happyway_win.exe` and
+`iSearch.exe` creation branches that retain process/thread return words. It
+is static evidence of real child-launch dependencies, not a new live run.
+The [bounded CE6 wait/child-lifetime follow-up](../../evidence/ce6-rea-exit-20261016/findings.md#2026-10-16-bounded-waitchild-lifetime-follow-up)
+corroborates the COREDLL wait/exit-code syscall wrappers. The local CE6
+source additionally shows that process creation waits for loader completion,
+not child lifetime; wait pins a process event, and termination request is not
+accepted execution exit. An emulator public handle or parent queue therefore
+cannot substitute for exact-birth CPU custody. The dumped kernel exit body
+is still unidentified.
+
+#### Next custody and reachability design gate (proposed, not implemented)
+
+The [common anchor](../ARCHITECTURE.md) A1/A3 requires machine-owned custody
+of every admitted live CPU resource. This is not a new Task authority or a
+second pending-CPU vector. The canonical HandleTable remains lifecycle truth;
+an execution-resource slot owns the opaque CPU box/context, binds it to exact
+process birth and a checked owner generation, and gives Scheduler queues only
+locators. Active and displaced context locators bind task/frame provenance at
+lease/use; each readiness and exit decision revalidates canonical HandleTable
+births rather than deriving Task life from custody membership. Do not assume
+one slot per process: current same-process displaced contexts and nested parked
+records need an ownership inventory before choosing slot cardinality. The CPU
+backend still owns engine
+internals. A run lease returns its resource to that same custody on each
+non-retiring stop, including ordinary native errors, so a queue borrow cannot
+drop the only child owner. Verified exit retires custody after preflight;
+unexpected post-effect failure retains/quarantines it non-runnable.
+
+The connected migration inventory is boot CPU, pending-launch admission,
+first-slice child, nested parked descendants, `Completed`, process rotation,
+same-process displaced contexts, native failure, stopped exit and checkpoint
+clone. Before CPU admission, distinguish terminal CE creation failure (no CPU)
+from retryable error (exact pending launch retained), and never orphan a child.
+A source audit found that the current pending-launch drain has fallible steps
+before CPU construction; because an already-returned guest `CreateProcessW`
+cannot be undone as a failed parent call, such an error needs an explicit
+retained-launch or child-completion outcome. It also found that `Completed`
+borrows the parent queue unconditionally, while post-construction load/native
+errors and numeric duplicate pruning can drop local or nested CPU boxes.
+A post-admission failure retains the exact stopped CPU tree and Kernel live/wait
+state. A successful A exit must reserve a checked survivor destination before
+Kernel effects, then move original B custody without a fallible publication.
+An already-exited A launch handle cannot authorize discarding a returned B
+CPU; the resource's own exact birth is checked before any skip/retirement.
+Unexpected post-effect failure is a terminal partial-effect report with CPU
+custody retained, not an invented rollback. The event sequencer must prevent
+framebuffer reentry from borrowing/mutating the same queue while the exit
+transaction holds it. The read-only owner inventory has been independently
+reviewed; [O-T7](../DECISIONS.md) keeps slot/lease and clone semantics open
+until their exact failure policies and source gates are settled.
+The current Kernel exit helper can retire window/host metadata before a later
+completion check fails; this requires an effects-started, non-runnable
+quarantine result rather than treating that case as a cleanly refused exit.
+The bounded read-only exit audit found no safe ordinary `Result` failure seam
+there today: `try_destroy_process_windows_with_backing_restore_for_birth`
+destroys GWE windows/sends and restores framebuffer pixels before canonical
+Task/VM completion, but `Framebuffer::mark_dirty` is infallible and the later
+completion checks cannot be injected under the exclusive Kernel borrow.
+A panic-only callback or unsafe reentry is not a valid expected-red control.
+An explicit fallible, test-injectable commit boundary after a real effect is
+needed to prove typed partial-effects quarantine; it is not implemented.
+Until a checkpoint atomically relineages Kernel births, CPU slots/locators,
+frames, waits and VM, live-custody checkpoint must fail closed instead of
+duplicating an executable owner with the old birth.
+For synchronous `CreateProcessW` inside a parent import, suspend/pin the parent
+lease while the child exclusively runs, then restore the parent only after the
+child is classified and in custody. No mutable parent queue/frame borrow may
+cross that nested run.
+
+##### Candidate O-T7 slot and lease contract (for review; no Rust API exists)
+
+One machine-owned `CpuCustody` directory would hold each CPU payload exactly
+once. A proposed `CpuSlotKey` contains machine/checkpoint lineage, a slot
+index and a checked generation; generation exhaustion fails closed rather than
+wrapping. Each slot freezes its `ProcessBirthKey` at admission and retains the
+CPU payload plus the process-image/launch metadata now carried by
+`ParkedProcess`. A process may own several slots: rotation can displace a
+same-PID CPU with a different thread context, and a parked CPU may itself
+contain displaced contexts. The slot is resource custody, not a second
+Process/Task record. Canonical HandleTable remains the only lifecycle authority.
+
+Parked-tree edges and Scheduler ready/wait indexes would hold checked slot
+locators, not CPU boxes. A slot has at most one structural parent/location;
+distinct task/frame continuations within it may have separate Scheduler
+references, but one `(slot, frame)` cannot acquire duplicate executable
+membership. An active or displaced context locator carries the exact
+`ThreadBirthKey`, optional `TaskFrameKey` and attempt generation in addition
+to its slot key. Selection checks the slot generation and machine lineage,
+the slot's exact live process birth, and the selected task/frame against the
+canonical directory. A numeric PID/TID, process handle, representative parked
+TID or queue position is never sufficient. Exactly one machine-wide run lease
+may execute guest instructions; every admitted slot is reachable from custody
+even when it is not runnable or its queue locator is being rewritten.
+
+The proposed operations are `reserve_launch` (exact-birth pending claim and
+capacity), `admit_cpu` (put the newly constructed payload in its slot before
+fallible DLL load or native entry), `begin_run`/`finish_run` (validated
+task/frame lease and typed stop), `suspend_parent_for_child` (exclusive token
+transfer during an in-hook `CreateProcessW`), `prepare_exit_exact` and
+`commit_exit` (preflight/reserve before Kernel effects, then infallible
+original-locator splice), and `quarantine_exact`/`retire_exact` (never infer
+retirement from queue absence). These names describe responsibilities, not
+implemented methods or a promise about their Rust signatures. The pending
+claim returns an unadmitted launch to Kernel on a retryable pre-CPU error; a
+real, evidenced CE creation/zero-slice failure completes only that exact
+birth. Once admitted, even a DLL-load, native, `Completed` publication or
+queue-borrow failure leaves the original CPU/context and Kernel live/wait
+state reachable, stopped and non-runnable until a checked recovery. D-011
+pre-effect refusal remains a recovery hold. A failure after an irreversible
+Kernel/GWE/framebuffer effect becomes an explicit partial-effects quarantine,
+not a claimed rollback or successful process exit.
+
+Accepted exit targets every CPU slot of the verified exiting birth and hoists
+foreign-birth survivor locators at the removed structural position without
+copying their contexts or waits. Duplicate pruning may remove redundant
+locators for the **same** slot/frame; distinct slot keys are not disposable
+because their public PID/TID sets overlap. In particular, an already-exited
+launch A cannot dispose the returned CPU until that CPU's **own** slot birth
+is verified as A: a first-slice handoff may have selected still-live B.
+
+This is a connected ownership cut, not a first-slice-only queue patch.
+`run_pending_process_launches`, the import-hook and deferred launch calls,
+`Completed` and first-slice exit, `persist_run_state*`, all park/activate/
+switch/rotate selectors, duplicate/exit pruning and survivor hoists, the
+`main.rs` CPU loop and monitor checkpoint boundary must use the same slot
+contract. The current `UnicornMips` recursively contains boxed
+`ParkedProcess.cpu` owners, so that recursive owner field must become checked
+locators as part of this cut. The two existing rotation-policy sites may
+retain their present policy until Stage 5, but cannot bypass custody or the
+canonical Task/Frame checks. A conventional long-lived `&mut CpuCustody`
+borrow cannot span parent A's native hook and also admit/run B; whichever
+stable per-slot interior or scoped guard representation is chosen must release
+directory and parent queue/frame borrows before the nested run, use fallible
+reentry checks rather than panicking `RefCell` borrows, and return every lease
+to custody on all typed errors. An exposed cloneable pointer to a slot would
+not itself confer execution authority.
+
+`ProcessBirthKey` currently has no machine lineage, and the monitor's clone
+path copies `UnicornMips` and `CeKernel` independently. Until one checkpoint
+transaction can relineage Kernel process/thread births, frames/waits, VM,
+slots and locators together, save **and** restore must refuse any live or
+retained canonical Task/launch authority and unresolved CPU custody. An empty
+CPU wrapper is insufficient: boot PID 1/TID 1 already have live births, and a
+queued child has its own birth before a CPU exists. A cloned slot key from the
+original machine must be rejected in its clone. The bounded fail-closed
+source guard does not provide live in-session rewind; after D-011 refusal the
+operator must repair the cause and restart until atomic relineage exists.
+O-T7 remains open on the exact representation and recovery interface; this
+candidate fixes the invariants to review first.
+
+The preserved [real-MIPS non-live expected-red](../../evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+now executes A's actual COREDLL `CreateProcessW` IAT call to launch B and
+returns through A's saved startup RA. A exits `0x63`, B stays exact-birth
+Kernel-live and unsignaled, but slice-end rotation/pruning makes B the local
+CPU before the outer launch handler sees A's exited handle. Its
+`CreateProcessChildParkSkipped(already_exited)` drops B instead of publishing
+it to the parent (queue length zero, expected one). This is a CPU-custody red,
+not merely a missing `initial_child_exit` trace label.
+
+Acceptance starts with that red and the held-borrow red, plus a separately
+staged [injected first-slice native-error control](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md).
+That ignored expected-red executes the child's first native slice to
+`READ_UNMAPPED`, then finds the exact child Kernel-live/unsignaled but the
+parent custody queue empty. It covers the non-live-pump launch helper only.
+Turn each green without drops; also require exact-birth/PID-reuse and
+cloned-lineage negatives, and A→B success preserving original B CPU, context
+and wait. A controlled fixture
+must separately exercise the `Exited` classifier: this natural real-MIPS
+shape rotates and prunes A first and returns B as `Parked`. B's later PC
+resumability is another gate. The immediate in-hook launch exists only with
+`live_pump=false`; live-pump defers launch to a later boundary and needs its
+own later-slice A exit/survivor fixture plus eventual approved app observation.
+Neither fixture substitutes for a matched iNavi map, GPS, frame, latency or
+footprint run.
 
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval

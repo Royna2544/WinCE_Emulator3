@@ -59,6 +59,7 @@ image/DLL, safe heap reuse, clone-lineage or full Stage 2 gates.
 | O-T4 | Scope of termination-in-progress and pending-suspend parity with CE6. | open |
 | O-T5 | Priority-inheritance/ceiling coverage (shared with O-K6). | open |
 | O-T6 | OEM default quantum configuration; extract from dumped kernel/OAL evidence, not a guessed 10 ms or the shim's 100 ms. | open |
+| O-T7 | Review the [candidate machine-owned CPU slot/lease contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists): one centrally owned payload per slot, key = machine lineage + index + checked generation, exact process birth fixed at admission, task/frame provenance checked on each context lease, and Scheduler queues containing only locators. Multiple slots per process and distinct frames per slot are allowed, but executable lease and structural locator cardinality must be checked. Settle a Rust representation that permits exclusive parent-to-child in-hook transfer without a long-lived directory/queue borrow, exact pending-launch claim/return, non-runnable post-admission failure custody, partial-effect quarantine, infallible accepted-exit survivor splice, and atomic checkpoint relineage or fail-closed live-custody save/restore. This candidate is not implementation or a decision to change Stage 5 policy. | open |
 
 ### Clock and timers ([page](subsystems/clock-timers.md)) - needed before Stage 6
 
