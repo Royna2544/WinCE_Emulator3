@@ -2189,12 +2189,25 @@ requires recovery, the monitor cannot currently rewind a live machine in
 session; quit, repair and restart remain necessary. No app or writable mount
 was run.
 
-The subsequent [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
+A later [orphaned-frame expected red](../../evidence/stage3-checkpoint-orphan-frame-20261016/validation.receipt.md)
+proved that filtered process/thread snapshots were an incomplete refusal
+predicate: an exited, aliasless thread could retain a finite-Sleep frame
+while both lists appeared empty, and save/restore copied its original birth.
+The [canonical-map green receipt](../../evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
+seals a direct process/thread-record guard. The seven lineage controls passed
+under release and no-default profiles; ordinary checkpoint selection passed
+4/0/7 ignored, serial no-feature passed **1,525/0/10 ignored**, raw Kernel
+integration **133/0**, and four feature checks passed. It does not clean up
+the synthetic orphan, make live rewind safe, or establish whole-machine
+checkpoint relineage. No app or mount run occurred.
+
+Separately, the earlier [combined boundary regression](../../evidence/stage3-custody-boundary-combined-20261016/validation.receipt.md)
 used the same four-file source seal for five stamped attempts. The four
 normal-feature integration suites passed **908/0**, and serial no-feature
 `cargo test -j 1` passed **1,525/0/8 ignored**. Each closed raw-log hash was
-verified against the receipt. This does not execute the ignored post-admission
-owner-loss reds, a full release-feature suite, or the mounted app.
+verified against the receipt. This earlier seal predates the direct-map
+checkpoint guard and does not execute the ignored post-admission owner-loss
+reds, a full release-feature suite, or the mounted app.
 
 ## Shipped iNavi process-launch REA check (2026-10-16, static artifact)
 

@@ -492,6 +492,22 @@ same-PID CPU with a different thread context, and a parked CPU may itself
 contain displaced contexts. The slot is resource custody, not a second
 Process/Task record. Canonical HandleTable remains the only lifecycle authority.
 
+One implementable *candidate*, not a selected Rust API, is a private directory
+of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
+a separately inspectable checked state header, and a `RefCell<CpuPayload>`;
+only the directory owns/exposes the slot, while other subsystems receive its
+copyable `CpuSlotKey`. A `with_cpu(key, closure)` operation resolves and clones
+the private cell under a short, fallible directory borrow, releases that borrow,
+then uses `try_borrow_mut` on **that slot only** for the closure. It does not
+build a self-referential guard containing both an `Rc` and a `RefMut`, return an
+unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry. A
+parent's payload loan may stay on the paused import-hook stack while a
+different child slot is admitted and run; metadata/readiness queries must use
+the separate header, not try to reborrow the paused parent payload. Attempted
+same-slot reentry stops or defers with a typed conflict, never creates a
+second executable loan. The directory remains the sole durable CPU owner;
+the closure loan cannot retire or replace its slot while in use.
+
 Parked-tree edges and Scheduler ready/wait indexes would hold checked slot
 locators, not CPU boxes. A slot has at most one structural parent/location;
 distinct task/frame continuations within it may have separate Scheduler
@@ -505,6 +521,20 @@ TID or queue position is never sufficient. Exactly one machine-wide run lease
 may execute guest instructions; every admitted slot is reachable from custody
 even when it is not runnable or its queue locator is being rewritten.
 
+The candidate machine run permit is a checked *leaf* token, distinct from a
+backend native-engine lease. `suspend_parent_for_child` changes A's permit to
+`SuspendedForChild` and issues a scoped `ParentSuspension`; B may then become
+the one executable leaf. A's Unicorn `emu_start` may remain paused in its
+import callback, but it cannot execute another guest instruction until B has
+finished/classified and the parent token explicitly resumes after exact
+birth/frame revalidation. Nested B→C repeats the transfer; no directory,
+parent queue or canonical Task borrow spans the child run. A typed
+execution/custody error or
+abandoned guard leaves the admitted slot stopped/non-runnable in custody and
+stops the parent instead of silently resuming either actor. Infallible
+drop-time state fencing needs a non-borrowing slot/leaf latch; diagnostic
+details and checked recovery remain explicit operations, not `Drop` success.
+
 The proposed operations are `reserve_launch` (exact-birth pending claim and
 capacity), `admit_cpu` (put the newly constructed payload in its slot before
 fallible DLL load or native entry), `begin_run`/`finish_run` (validated
@@ -514,9 +544,13 @@ transfer during an in-hook `CreateProcessW`), `prepare_exit_exact` and
 original-locator splice), and `quarantine_exact`/`retire_exact` (never infer
 retirement from queue absence). These names describe responsibilities, not
 implemented methods or a promise about their Rust signatures. The pending
-claim returns an unadmitted launch to Kernel on a retryable pre-CPU error; a
-real, evidenced CE creation/zero-slice failure completes only that exact
-birth. Once admitted, even a DLL-load, native, `Completed` publication or
+claim should stay represented in Kernel's existing launch queue with a checked
+claim phase/token, not move into a second owner vector. Reserve slot capacity
+before CPU construction, then make payload admission into that reservation
+non-fallible; a failed pre-CPU claim releases the exact original launch for
+retry without leaving a live but unreachable child. A real, evidenced CE
+creation/zero-slice failure completes only that exact birth. Once admitted,
+even a DLL-load, native, `Completed` publication or
 queue-borrow failure leaves the original CPU/context and Kernel live/wait
 state reachable, stopped and non-runnable until a checked recovery. D-011
 pre-effect refusal remains a recovery hold. A failure after an irreversible
@@ -547,6 +581,26 @@ directory and parent queue/frame borrows before the nested run, use fallible
 reentry checks rather than panicking `RefCell` borrows, and return every lease
 to custody on all typed errors. An exposed cloneable pointer to a slot would
 not itself confer execution authority.
+
+The slot representation alone does **not** make current nested execution a
+sound whole-machine lease. `run_with_unicorn_attempt` currently holds
+`&mut CeKernel` across native entry, gives hooks a raw `kernel_ptr`, and
+`run_pending_process_launches` passes a mutable Kernel reference into the
+child run. The connected cut needs a single-thread, callback-scoped
+`MachineKernelPort`: each fallible `try_with_kernel` loan is short, carries the
+current leaf/task authority, and ends before `emu_start`, a nested child run,
+or a reentrant host callback. Multi-step operations retain exact claims and
+checked versions rather than an open Kernel borrow. Parent/child selected
+process compatibility state is restored by a checked scoped token, never used
+as the CPU's birth witness. Framebuffer access needs the same scoped or
+non-reentrant event-publication rule; callbacks during an exit transaction may
+enqueue observations but cannot mutate Kernel/custody/topology under its
+borrow. Busy or forbidden reentry is typed and fail-closed, not a `RefCell`
+panic or an unchecked raw-pointer alias. Until those hook/Kernel/framebuffer
+loans are removed or explicitly proven at one narrowly audited unsafe
+boundary, O-T7 cannot claim a sound machine lease even if CPU owner-loss reds
+turn green. The native owner may remain open while A's hook is paused, but
+only the checked leaf permit grants guest execution to B.
 
 `ProcessBirthKey` currently has no machine lineage, and the monitor's clone
 path copies `UnicornMips` and `CeKernel` independently. Until one checkpoint

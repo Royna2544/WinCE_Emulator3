@@ -160,6 +160,18 @@ while same-process displaced contexts exist. A run lease borrows custody
 without moving the only owner into an unprotected local variable. This is a
 target contract, not a description of the current parked queues.
 
+Nested native callbacks require a stronger loan boundary than CPU custody
+alone. A suspended parent may retain its native call stack while a different
+child slot holds the one executable machine permit. A's per-slot CPU payload
+loan may remain on that paused stack, but no mutable custody directory or
+topology, Kernel, Task/frame or framebuffer loan may span the child run; A's
+payload cannot execute while its permit is suspended. Hook access to
+machine state must be callback-scoped, fallible and tied to the current leaf
+permit; reentrant or busy access fails closed rather than borrowing an
+already-loaned object through a raw pointer. A checked parent-suspension token
+resumes only after the child is classified and its resource is in custody.
+The current raw Kernel/framebuffer hook pointers do not yet meet this target.
+
 ## A2. Shared identity and lifetime
 
 Names below are proposed contracts, not newly implemented APIs.
@@ -243,8 +255,10 @@ source-tests this refusal for saved live and already-destroyed HWND backing,
 including partial multi-window failure and active/parked/pending scheduler
 propagation. The later selected-owner control refuses a boot/root exit whose
 saved CPU owner no longer matches the selected process. The monitor blocks a
-new checkpoint after refusal. The later live-lineage guard also refuses
-save/restore while canonical Task/launch or CPU custody exists; an earlier
+new checkpoint after refusal. The later
+[canonical-map checkpoint guard](../evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
+also refuses save/restore while any canonical Task record/launch or CPU
+custody exists, including an exited thread retaining a Task frame; an earlier
 live checkpoint cannot currently clear the hold. Until atomic machine
 relineage exists, recovery means repairing the cause and restarting rather
 than cloning stopped execution. It does not make later teardown effects atomic or complete the

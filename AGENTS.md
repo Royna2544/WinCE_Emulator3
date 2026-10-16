@@ -245,7 +245,7 @@ the ordinary first-slice error drops its CPU. It too remains ignored. The
 [pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
 now passes same-birth retry and queued-tail controls after file-view/path/PE
 setup errors; it does not retain an admitted CPU after a native failure. The
-[live-checkpoint lineage gate](evidence/stage3-kernel-checkpoint-lineage-green-20261016/validation.receipt.md)
+[live-checkpoint lineage gate](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
 now refuses save/restore for retained canonical Kernel Task/launch authority
 or CPU custody. A real monitor session cannot currently rewind; D-011
 recovery requires repairing the cause and restarting until whole-machine

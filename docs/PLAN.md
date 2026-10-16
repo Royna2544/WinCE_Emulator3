@@ -106,8 +106,10 @@ rejects an un-restorable saved backing before stopped-exit effects and
 propagates recovery through tested scheduler paths. It also fails closed when
 the stopped boot CPU's saved owner differs from the selected process. The
 monitor refuses a new checkpoint after recovery is required. The later
-live-lineage guard refuses save/restore while Task/launch or CPU custody is
-present; no earlier live checkpoint can currently clear the hold. Repair and
+live-lineage [canonical-map guard](../evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
+refuses save/restore while Task records/launches or CPU custody are present,
+including an exited thread retaining a frame; no earlier live checkpoint can
+currently clear the hold. Repair and
 restart are the safe recovery route until atomic machine relineage lands.
 The bounded [native COREDLL pseudo self-exit gate](../evidence/stage3-native-pseudo-self-exit-20261016/validation.receipt.md)
 source-tested guest CPU stop, native owner closure, exact caller and
@@ -190,21 +192,34 @@ not an implemented owner. Stage its connected source cut in this order:
    stale-generation/PID-reuse and live-custody checkpoint-refusal controls.
    Distinguish real CE zero-slice creation completion from retryable failure;
    neither may lose an already-published exact-birth launch.
-2. Admit boot and child CPU payloads into one machine-owned slot directory;
-   convert recursive parked CPU boxes and active/displaced/ready references to
+2. Settle the callback-scoped machine-state port before claiming a sound
+   lease: parent A's paused native hook may call child B, but neither a
+   directory nor a mutable Kernel/framebuffer loan may span B's run. Replace
+   or narrowly audit the current raw `kernel_ptr`/framebuffer reentry with
+   fallible, leaf-permit-qualified short loans, checked selected-process
+   restoration and an exit-transaction event fence. A second guest-executable
+   permit or a panicking `RefCell` conflict is a failed control, not a yield.
+3. Admit boot and child CPU payloads into one machine-owned slot directory;
+   review private stable per-slot cells with short directory borrowing and
+   closure-scoped fallible payload loans. A checked `ParentSuspension` transfers
+   the one executable leaf permit A→B while A's native callback is paused;
+   B is classified into custody before A may resume. Keep a claimed launch in
+   Kernel's original queue until admission/checked completion, and reserve
+   slot capacity before moving a constructed payload. Convert recursive
+   parked CPU boxes and active/displaced/ready references to
    checked locators together. Migrate the immediate parent-suspension/child
    lease, deferred launch, `Completed`, run-state drain/return, process switch
    and both main-loop/CPU-loop selector call sites before claiming custody.
    Keep existing scheduling policy pending Stage 5; do not add a parallel
    pending-owner vector or use a queue borrow as the resource owner.
-3. Make every exit/prune path preflight exact-birth survivors and reserve the
+4. Make every exit/prune path preflight exact-birth survivors and reserve the
    destination before effects, then move original locators infallibly after
    accepted exit. Native/load/publication failures retain non-runnable CPU
    custody; a late post-effect failure quarantines it and reports partial
    effects. Turn the held-borrow, native-error and real-MIPS A-exits/B-live
    expected reds green, then cover `Completed`, numeric duplicate pruning,
    framebuffer reentry and post-effect injection.
-4. Separately prove controlled first-slice `Exited` classification, B's later
+5. Separately prove controlled first-slice `Exited` classification, B's later
    PC resumability and the live-pump deferred-launch/later-exit route. Keep
    live iNavi/frame/footprint acceptance behind a newly sealed build and its
    own writable-mount backup/run approval.
