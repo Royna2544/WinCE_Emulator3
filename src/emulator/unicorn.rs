@@ -47551,6 +47551,100 @@ mod guest_thread_stack_tests {
         }
     }
 
+    fn parked_blocked_foreign_exit_survivor(
+        kernel: &mut CeKernel,
+        launch: &crate::ce::kernel::PendingProcessLaunch,
+        pc: u32,
+        sp: u32,
+    ) -> Result<(ParkedProcess, u64)> {
+        let birth = launch.primary_thread_birth.expect("foreign primary birth");
+        let event = kernel.create_event_w(None, true, false);
+        let wait_started_ms = kernel.timers.tick_count();
+        let wait_id = kernel
+            .try_register_opaque_waiter_for_birth(
+                birth,
+                launch.thread_handle,
+                vec![event],
+                crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+                wait_started_ms,
+                crate::ce::timer::INFINITE,
+            )
+            .expect("exact foreign wait owner");
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[29] = sp;
+        regs.regs[16] = 0x71a0_0000 | launch.thread_id;
+        regs.hi = 0x1357_2468;
+        regs.lo = 0x2468_1357;
+        let mut cpu = UnicornMips::new()?;
+        cpu.owned_process_launch = Some(launch.clone());
+        cpu.set_initial_thread_id(launch.thread_id);
+        cpu.current_thread_id = launch.thread_id;
+        cpu.saved_context_thread_birth = Some(birth);
+        cpu.saved_context = Some(SavedCpuContext {
+            pc,
+            regs: regs.clone(),
+        });
+        cpu.run_slice_generation = 1;
+        cpu.entry = Some(pc - 0x1000);
+        cpu.blocked_wait_threads.push(BlockedWaitThread {
+            frame_ref: None,
+            wait_id,
+            thread_id: launch.thread_id,
+            thread_handle: launch.thread_handle,
+            wait_handles: vec![event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc: pc,
+        });
+        let mut parked = parked_process_for_cpu(launch.thread_id, cpu);
+        parked.process_state.process_id = launch.process_id;
+        parked.process_handle = Some(launch.process_handle);
+        parked.thread_handle = Some(launch.thread_handle);
+        assert!(!UnicornMips::parked_process_can_run(&parked, kernel));
+        Ok((parked, wait_id))
+    }
+
+    fn assert_parked_foreign_exit_survivor(
+        parked: &ParkedProcess,
+        launch: &crate::ce::kernel::PendingProcessLaunch,
+        original_cpu: *const UnicornMips,
+        wait_id: u64,
+        pc: u32,
+        sp: u32,
+    ) {
+        assert_eq!(parked.cpu.as_ref() as *const UnicornMips, original_cpu);
+        assert_eq!(parked.process_state.process_id, launch.process_id);
+        assert_eq!(parked.process_handle, Some(launch.process_handle));
+        assert_eq!(
+            parked
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            launch.process_birth
+        );
+        assert_eq!(
+            parked.cpu.saved_context_thread_birth,
+            launch.primary_thread_birth
+        );
+        let saved = parked
+            .cpu
+            .saved_context
+            .as_ref()
+            .expect("survivor CPU context");
+        assert_eq!(saved.pc, pc);
+        assert_eq!(saved.regs.regs[29], sp);
+        assert_eq!(saved.regs.regs[16], 0x71a0_0000 | launch.thread_id);
+        assert_eq!(saved.regs.hi, 0x1357_2468);
+        assert_eq!(saved.regs.lo, 0x2468_1357);
+        assert_eq!(parked.cpu.blocked_wait_threads.len(), 1);
+        assert_eq!(parked.cpu.blocked_wait_threads[0].wait_id, wait_id);
+        assert_eq!(parked.cpu.blocked_wait_threads[0].return_pc, pc);
+        assert_eq!(parked.cpu.blocked_wait_threads[0].regs.regs[29], sp);
+    }
+
     #[test]
     fn finite_sleep_ready_probes_require_exact_native_frame_but_keep_legacy_waits() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
@@ -52553,6 +52647,235 @@ mod guest_thread_stack_tests {
         assert_eq!(destination.pixels(), pixels_before);
         assert_eq!(destination.dirty_rects(), dirty_before.as_slice());
         assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        Ok(())
+    }
+
+    #[test]
+    fn natural_parked_exit_preserves_live_nonmodal_foreign_cpu() -> Result<()> {
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let exiting = kernel.queue_process_launch(Some("\\Test\\exiting.exe".to_owned()), None);
+        let foreign = kernel.queue_process_launch(Some("\\Test\\survivor.exe".to_owned()), None);
+        let exiting_birth = exiting.process_birth.expect("exiting birth");
+        let foreign_birth = foreign.process_birth.expect("foreign birth");
+        assert_ne!(exiting_birth, foreign_birth);
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(foreign.process_id);
+        let (foreign_parked, wait_id) =
+            parked_blocked_foreign_exit_survivor(&mut kernel, &foreign, 0x0050_2340, 0x7ffb_1000)?;
+        let foreign_cpu_before = foreign_parked.cpu.as_ref() as *const UnicornMips;
+
+        let mut exiting_cpu = UnicornMips::new()?;
+        exiting_cpu.owned_process_launch = Some(exiting.clone());
+        exiting_cpu.set_initial_thread_id(exiting.thread_id);
+        exiting_cpu.current_thread_id = exiting.thread_id;
+        exiting_cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x63,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        exiting_cpu.parked_child_processes.push_back(foreign_parked);
+        let mut exiting_parked = parked_process_for_cpu(exiting.thread_id, exiting_cpu);
+        exiting_parked.process_state.process_id = exiting.process_id;
+        exiting_parked.process_handle = Some(exiting.process_handle);
+        exiting_parked.thread_handle = Some(exiting.thread_handle);
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        scheduler.current_thread_id = MAIN_GUEST_THREAD_ID;
+        scheduler.parked_child_processes.push_back(exiting_parked);
+        let exiting_cpu_before =
+            scheduler.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
+        kernel.set_current_process_id(1);
+        let trace_before = kernel.recent_process_ops().len();
+        let attempt = scheduler
+            .try_prune_exited_and_active_processes_from_parked_with_framebuffer(&mut kernel, None);
+        match attempt {
+            Ok(()) => {
+                assert!(
+                    !kernel
+                        .handles
+                        .process_execution_live_by_birth(exiting_birth)
+                );
+                assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x63));
+                assert_eq!(
+                    kernel
+                        .recent_process_ops()
+                        .iter()
+                        .filter(|record| {
+                            record.op == "CreateProcessChildReturned"
+                                && record.process_id == Some(exiting.process_id)
+                        })
+                        .count(),
+                    1
+                );
+                assert_eq!(scheduler.parked_child_processes.len(), 1);
+                assert_parked_foreign_exit_survivor(
+                    &scheduler.parked_child_processes[0],
+                    &foreign,
+                    foreign_cpu_before,
+                    wait_id,
+                    0x0050_2340,
+                    0x7ffb_1000,
+                );
+            }
+            Err(error) => {
+                assert!(
+                    matches!(
+                        &error,
+                        Error::HostExitAuthorityRecoveryRequired { .. }
+                            | Error::HostExitRecoveryRequired { .. }
+                    ),
+                    "unexpected refusal: {error:?}"
+                );
+                assert!(
+                    kernel
+                        .handles
+                        .process_execution_live_by_birth(exiting_birth)
+                );
+                assert_eq!(
+                    kernel.process_exit_code(exiting.process_handle),
+                    Some(crate::ce::kernel::STILL_ACTIVE)
+                );
+                assert_eq!(kernel.recent_process_ops().len(), trace_before);
+                assert_eq!(scheduler.parked_child_processes.len(), 1);
+                let retained = &scheduler.parked_child_processes[0];
+                assert_eq!(
+                    retained.cpu.as_ref() as *const UnicornMips,
+                    exiting_cpu_before
+                );
+                assert_eq!(retained.cpu.parked_child_processes.len(), 1);
+                assert_parked_foreign_exit_survivor(
+                    &retained.cpu.parked_child_processes[0],
+                    &foreign,
+                    foreign_cpu_before,
+                    wait_id,
+                    0x0050_2340,
+                    0x7ffb_1000,
+                );
+            }
+        }
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn requested_active_exit_preserves_foreign_cpu_under_same_birth_duplicate() -> Result<()> {
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let exiting = kernel.queue_process_launch(Some("\\Test\\exiting.exe".to_owned()), None);
+        let foreign = kernel.queue_process_launch(Some("\\Test\\survivor.exe".to_owned()), None);
+        let exiting_birth = exiting.process_birth.expect("exiting birth");
+        let foreign_birth = foreign.process_birth.expect("foreign birth");
+        assert_ne!(exiting_birth, foreign_birth);
+        let _ = kernel.take_pending_process_launches();
+        kernel.set_current_process_id(foreign.process_id);
+        let (foreign_parked, wait_id) =
+            parked_blocked_foreign_exit_survivor(&mut kernel, &foreign, 0x0060_3450, 0x7ffa_2000)?;
+        let foreign_cpu_before = foreign_parked.cpu.as_ref() as *const UnicornMips;
+
+        let mut duplicate_cpu = UnicornMips::new()?;
+        duplicate_cpu.owned_process_launch = Some(exiting.clone());
+        duplicate_cpu.set_initial_thread_id(exiting.thread_id);
+        duplicate_cpu.current_thread_id = exiting.thread_id;
+        duplicate_cpu
+            .parked_child_processes
+            .push_back(foreign_parked);
+        let mut duplicate_parked = parked_process_for_cpu(exiting.thread_id, duplicate_cpu);
+        duplicate_parked.process_state.process_id = exiting.process_id;
+        duplicate_parked.process_handle = Some(exiting.process_handle);
+        duplicate_parked.thread_handle = Some(exiting.thread_handle);
+
+        let mut active = UnicornMips::new()?;
+        active.owned_process_launch = Some(exiting.clone());
+        active.set_initial_thread_id(exiting.thread_id);
+        active.current_thread_id = exiting.thread_id;
+        active.parked_child_processes.push_back(duplicate_parked);
+        let duplicate_cpu_before =
+            active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips;
+        kernel.set_current_process_id(exiting.process_id);
+        assert!(kernel.terminate_process(exiting.process_handle, 0x6e));
+        let trace_before = kernel.recent_process_ops().len();
+
+        let attempt = active.complete_requested_active_child_termination(&mut kernel, None);
+        match attempt {
+            Ok(true) => {
+                assert!(active.active_process_execution_completed());
+                assert!(
+                    !kernel
+                        .handles
+                        .process_execution_live_by_birth(exiting_birth)
+                );
+                assert_eq!(kernel.process_exit_code(exiting.process_handle), Some(0x6e));
+                assert_eq!(
+                    kernel
+                        .recent_process_ops()
+                        .iter()
+                        .filter(|record| {
+                            record.op == "CreateProcessTerminationCompleted"
+                                && record.process_id == Some(exiting.process_id)
+                        })
+                        .count(),
+                    1
+                );
+                assert_eq!(active.parked_child_processes.len(), 1);
+                assert_parked_foreign_exit_survivor(
+                    &active.parked_child_processes[0],
+                    &foreign,
+                    foreign_cpu_before,
+                    wait_id,
+                    0x0060_3450,
+                    0x7ffa_2000,
+                );
+            }
+            Err(error) => {
+                assert!(
+                    matches!(
+                        &error,
+                        Error::HostExitAuthorityRecoveryRequired { .. }
+                            | Error::HostExitRecoveryRequired { .. }
+                    ),
+                    "unexpected refusal: {error:?}"
+                );
+                assert!(!active.active_process_execution_completed());
+                assert!(
+                    kernel
+                        .handles
+                        .process_execution_live_by_birth(exiting_birth)
+                );
+                assert_eq!(
+                    kernel.process_exit_code(exiting.process_handle),
+                    Some(crate::ce::kernel::STILL_ACTIVE)
+                );
+                assert_eq!(kernel.recent_process_ops().len(), trace_before);
+                assert_eq!(active.parked_child_processes.len(), 1);
+                let retained = &active.parked_child_processes[0];
+                assert_eq!(
+                    retained.cpu.as_ref() as *const UnicornMips,
+                    duplicate_cpu_before
+                );
+                assert_eq!(retained.cpu.parked_child_processes.len(), 1);
+                assert_parked_foreign_exit_survivor(
+                    &retained.cpu.parked_child_processes[0],
+                    &foreign,
+                    foreign_cpu_before,
+                    wait_id,
+                    0x0060_3450,
+                    0x7ffa_2000,
+                );
+            }
+            Ok(false) => panic!("checked termination was neither completed nor refused"),
+        }
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_some());
         Ok(())
     }
 
