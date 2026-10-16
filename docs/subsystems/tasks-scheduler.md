@@ -662,7 +662,7 @@ even if CPU owner-loss reds turn green. In any remaining nested in-hook path,
 A's native owner may remain open while its callback is paused, but only the
 checked leaf permit grants guest execution to B.
 
-##### Cut 3a quarantine resource lifetime (focused source cut; final broad pending)
+##### Cut 3a quarantine resource lifetime (bounded source-test gate)
 
 The first CPU-custody production cut is narrower than wholesale parked-tree
 conversion: the main run loop owns a directory that accepts
@@ -710,11 +710,14 @@ release passed but is superseded. Current source seals the CPU inside
 `CpuCustody::quarantine_reserved` under Unicorn on `Reserved`→`Quarantined`,
 with the exit consumer's poison backstop retained. This forced precondition
 does not prove natural reachability or general error-path closure. Earlier
-focused debug/release fault controls passed; final-source focused/broad suites
-remain pending.
-The pre-seal a03 release broad
-**2,183/0/9 ignored** is development-only; final sealed broad/no-default
-receipt and counts are pending. Neither this witness nor the directory proves
+focused debug/release fault controls passed. The
+[owner-sealed receipt](../../evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+passes a11 focused release **1/0**, 19-block a12 release
+**2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
+feature checks, with six source hashes matching the seal. The final-source
+real-MIPS control is counted in a12, not a separate focused final-source run.
+Pre-seal a03 release broad **2,183/0/9 ignored** remains development-only.
+Neither this witness nor the directory proves
 the Step 2 port, complete view/VM cleanup, full O-T7 leaf authority, measured
 RSS retention or live-app acceptance. No app or writable-mount run was made.
 
@@ -935,8 +938,8 @@ parent borrow; it does not prove a nonempty descendant splice or live-pump
 later-slice behavior.
 [Attempt 18](../../evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
 exited 101 at the admitted child's sole-CPU-owner assertion after an ordinary
-native fault at that earlier seal. Cut 3a now has an ordinary focused green
-replacement, pending final broad validation.
+native fault at that earlier seal. Cut 3a now has an ordinary green
+replacement in the owner-sealed a12 release suite.
 
 Full O-T7 acceptance still needs the held-borrow and later-slice shapes. The
 historical [injected first-slice native-error red](../../evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)

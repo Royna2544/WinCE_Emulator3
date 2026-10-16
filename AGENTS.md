@@ -324,8 +324,10 @@ a producer-side pre-entry seal, same-source a08 synthetic pre-entry and a09
 real-MIPS fault debug controls passed (`unicorn.rs` SHA-256 `1AAE8A66…33090`).
 The superseded producer-only a10 focused release also passed. Current source
 moves the terminal seal into `CpuCustody::quarantine_reserved` under Unicorn
-on `Reserved`→`Quarantined`; final-source focused/broad release and no-default
-counts and receipt are **pending**. A
+on `Reserved`→`Quarantined`. Its [counted receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+passes a11 focused release **1/0**, 19-block a12 release
+**2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
+feature checks, with six source hashes matching throughout. A
 `TerminateProcess` request does not retire B; checked accepted exit retires
 the slot and its fixed-stack page in the focused native-fault shape. Stamped
 a07 expected red reproduced post-load/pre-native-entry unpoisoned quarantine;

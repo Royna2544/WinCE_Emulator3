@@ -2439,7 +2439,7 @@ receipt's suggested shared import/block flag is superseded by the current
 source audit: those hook families execute sequentially in the sole native
 entry. No live app or mount run was made.
 
-## Cut 3a non-runnable admitted-child CPU quarantine (2026-10-17, focused; final seal pending)
+## Cut 3a non-runnable admitted-child CPU quarantine (2026-10-17, bounded source/test gate)
 
 An ordinary real-MIPS guest A calls `CreateProcessW`; its nonzero return stays
 staged after the parent native attempt's clean sync/finish while B is launched
@@ -2461,8 +2461,13 @@ on superseded `unicorn.rs` SHA-256
 Intermediate producer-only a10 focused release passed but is superseded.
 Current source makes `CpuCustody::quarantine_reserved` seal the CPU under
 Unicorn on `Reserved`→`Quarantined`, retaining the exit consumer's poison
-backstop. Final-source focused/broad checks remain pending. This forced
-precondition does not prove natural reachability or general error-path
+backstop. The [owner-sealed receipt](../../evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+passes a11 focused release **1/0**, 19-block a12 release
+**2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and a14–a16
+three feature checks exiting 0; all six source hashes matched before and
+after each counted attempt. The final-source real-MIPS control is in a12, not
+a separate final-source focused run. This forced precondition does not prove
+natural reachability or general error-path
 closure. The main run loop owns
 the directory; monitor save/restore refuse it; status/debug publish keys,
 birth, state and retained mapped-blob bytes. These bytes are not a measured
@@ -2473,9 +2478,8 @@ separate [open bugs](../../KNOWN_BUGS.md). Runnable/parked custody, public-run
 bypass removal, the callback-scoped Kernel/framebuffer port, full O-T7 and
 live-app acceptance remain open.
 
-The pre-seal a03 release broad **2,183/0/9 ignored** is development evidence,
-not the final source gate. Final source-sealed broad release/no-default counts
-and receipt: **pending**. No app or writable-mount run was made.
+The pre-seal a03 release broad **2,183/0/9 ignored** remains development
+evidence, not this final source gate. No app or writable-mount run was made.
 
 ## Chat-project validation notes (not in this repository)
 
