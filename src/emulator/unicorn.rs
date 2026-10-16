@@ -71033,6 +71033,50 @@ mod unicorn_tests {
         }
     }
 
+    struct BorrowParentQueueOnRestore<'a> {
+        inner: VirtualFramebuffer,
+        parent_queue: &'a RefCell<VecDeque<super::ParkedProcess>>,
+        held_parent_borrow: Option<std::cell::Ref<'a, VecDeque<super::ParkedProcess>>>,
+        restore_dirty_calls: usize,
+    }
+
+    impl<'a> Framebuffer for BorrowParentQueueOnRestore<'a> {
+        fn info(&self) -> FramebufferInfo {
+            self.inner.info()
+        }
+
+        fn pixels(&self) -> &[u8] {
+            self.inner.pixels()
+        }
+
+        fn pixels_mut(&mut self) -> &mut [u8] {
+            self.inner.pixels_mut()
+        }
+
+        fn mark_dirty(&mut self, rect: FramebufferRect) {
+            self.inner.mark_dirty(rect);
+            self.restore_dirty_calls += 1;
+            // The decoded exit's genuine saved-window restore is after the
+            // nested CreateProcessW has parked B in A's local CPU queue.
+            // Hold only the outer queue through Completed's append attempt.
+            if self.held_parent_borrow.is_none() {
+                self.held_parent_borrow = Some(self.parent_queue.borrow());
+            }
+        }
+
+        fn dirty_rects(&self) -> &[FramebufferRect] {
+            self.inner.dirty_rects()
+        }
+
+        fn take_dirty_rects(&mut self) -> Vec<FramebufferRect> {
+            self.inner.take_dirty_rects()
+        }
+
+        fn emulator_tick(&mut self) -> crate::Result<()> {
+            self.inner.emulator_tick()
+        }
+    }
+
     #[test]
     fn create_structw_bytes_match_ce_sdk_layout() {
         let args = [
@@ -72045,6 +72089,24 @@ mod unicorn_tests {
         ];
         for (index, word) in words.into_iter().enumerate() {
             write_vec_u32(&mut bytes, 0x200 + index * 4, word);
+        }
+        bytes
+    }
+
+    fn tiny_mips_create_process_then_pseudo_exit_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_create_process_then_return_pe();
+        // Keep the real CreateProcessW IAT call above, but follow it with the
+        // decoded current-process exit used by the existing MIPS exit control.
+        for (index, word) in [
+            0x2405_0063_u32, // addiu a1,zero,0x63: guest exit code
+            0x2408_f3fa,     // addiu t0,zero,-3078: encoded CE syscall target
+            0x0100_f809,     // jalr t0
+            0x2404_0042,     // delay slot: current-process pseudo handle
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut bytes, 0x200 + (18 + index) * 4, word);
         }
         bytes
     }
@@ -84748,6 +84810,167 @@ mod unicorn_tests {
             kernel.process_exit_code(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "expected red: Completed panics on a held parent queue and drops guest-created B CPU"]
+    fn real_mips_completed_child_with_held_parent_queue_preserves_survivor() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let first_path = test_root.join("first-slice.exe");
+        let survivor_path = test_root.join("survivor.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&first_path, tiny_mips_create_process_then_pseudo_exit_pe()).unwrap();
+        std::fs::write(&survivor_path, tiny_mips_spinner_pe()).unwrap();
+
+        let image = crate::pe::PeImage::inspect(&first_path)?;
+        assert!(matches!(
+            image.imports[0].imports[0].import,
+            crate::pe::ImportBy::Ordinal(493)
+        ));
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let first = kernel.queue_process_launch(Some("first-slice.exe".to_owned()), None);
+        let first_birth = first.process_birth.expect("first process birth");
+        let first_thread_birth = first.primary_thread_birth.expect("first thread birth");
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = BorrowParentQueueOnRestore {
+            inner: VirtualFramebuffer::default_primary()?,
+            parent_queue: parked.as_ref(),
+            held_parent_borrow: None,
+            restore_dirty_calls: 0,
+        };
+        let root_process_state = kernel.current_process_state();
+        kernel.set_current_process_id(first.process_id);
+        let hwnd = kernel
+            .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+                first_thread_birth,
+                "COMPLETED_BORROW",
+                "saved image",
+                None,
+                None,
+                0,
+                crate::ce::gwe::WS_VISIBLE,
+                0,
+                crate::ce::gwe::Rect::from_origin_size(0, 0, 4, 4),
+            )
+            .expect("A birth-owned window");
+        assert!(kernel.capture_window_backing_store(hwnd, &framebuffer));
+        kernel.set_current_process_state(root_process_state);
+
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        // This must be the real pending-launch path: A executes the imported
+        // CreateProcessW, parks B, then executes its decoded pseudo self-exit.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::run_pending_process_launches(
+                &mut root_uc,
+                &mut kernel,
+                root_pid,
+                &guard,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &[],
+                &parked,
+            )
+        }));
+
+        assert_eq!(framebuffer.restore_dirty_calls, 1);
+        assert!(framebuffer.held_parent_borrow.is_some());
+        assert!(!kernel.gwe.is_window(hwnd));
+        let trace = kernel.recent_process_ops();
+        let exited: Vec<_> = trace
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessExited"
+                    && record.process_id == Some(first.process_id)
+            })
+            .collect();
+        assert_eq!(exited.len(), 1, "A's decoded exit must commit exactly once");
+        assert_eq!(exited[0].result, Some(0x63));
+        assert!(!kernel.handles.process_execution_live_by_birth(first_birth));
+        assert!(!kernel.handles.thread_execution_live_by_id(first.thread_id));
+        assert_eq!(kernel.process_exit_code(first.process_handle), Some(0x63));
+        assert_eq!(kernel.is_wait_ready(first.process_handle, 1), Some(true));
+
+        let queued_survivors: Vec<_> = trace
+            .iter()
+            .filter(|record| {
+                record.op == "CreateProcessWQueued"
+                    && record.application.as_deref() == Some("survivor.exe")
+            })
+            .collect();
+        assert_eq!(queued_survivors.len(), 1, "guest IAT call must queue B once");
+        let survivor_pid = queued_survivors[0].process_id.expect("survivor PID");
+        let survivor_handle = queued_survivors[0].process_handle.expect("survivor handle");
+        let survivor_tid = queued_survivors[0].thread_id.expect("survivor TID");
+        let survivor_birth = kernel
+            .handles
+            .process_birth_key_for_handle(survivor_handle)
+            .expect("survivor exact birth");
+        assert_ne!(survivor_birth, first_birth);
+        assert!(kernel.handles.process_execution_live_by_birth(survivor_birth));
+        assert!(kernel.handles.thread_execution_live_by_id(survivor_tid));
+        assert_eq!(
+            kernel.handles.thread_creation_owner_by_id(survivor_tid),
+            Some(survivor_birth)
+        );
+        assert_eq!(
+            kernel.process_exit_code(survivor_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(survivor_handle, 1), Some(false));
+        assert_eq!(kernel.current_process_id(), root_pid);
+        assert!(trace.iter().any(|record| {
+            record.op == "CreateProcessChildParked" && record.process_id == Some(survivor_pid)
+        }));
+
+        let retained = parked.borrow();
+        assert_eq!(
+            retained.len(),
+            1,
+            "Completed must retain B's CPU despite the held parent borrow; panicked={} trace={:?}",
+            attempt.is_err(),
+            trace
+                .iter()
+                .map(|record| (record.op, record.process_id, record.detail.as_deref()))
+                .collect::<Vec<_>>()
+        );
+        let survivor = &retained[0];
+        assert_eq!(survivor.process_state.process_id, survivor_pid);
+        assert_eq!(survivor.process_handle, Some(survivor_handle));
+        assert_eq!(survivor.module_host_path, survivor_path);
+        assert_eq!(
+            survivor
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|launch| launch.process_birth),
+            Some(survivor_birth)
+        );
+        assert_eq!(survivor.cpu.initial_thread_id, survivor_tid);
+        assert_eq!(survivor.cpu.current_thread_id, survivor_tid);
+        assert!(survivor.cpu.saved_context.is_some());
+        assert_eq!(
+            survivor.cpu.saved_context_thread_birth,
+            kernel.handles.thread_birth_key_by_id(survivor_tid)
+        );
+        assert!(survivor.cpu.last_debug_snapshot().is_some());
+        assert!(survivor.cpu.native_engine_identity_for_test().is_none());
+        drop(retained);
+        assert!(!attempt.is_err(), "Completed must not panic on held parent borrow");
+        attempt.expect("no host panic")?;
         Ok(())
     }
 

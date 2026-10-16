@@ -211,3 +211,254 @@ fn timer_boundary_fresh_owner_sweep() {
         "inconclusive hook/timer overlap: retune timing; this is not an AV diagnosis"
     );
 }
+
+#[cfg(feature = "native-timer-diagnostic")]
+mod controlled_rendezvous {
+    use super::{CODE, NATIVE_TIMEOUT_US, emit};
+    use std::{
+        cell::Cell,
+        ffi::c_void,
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        thread,
+        time::{Duration, Instant},
+    };
+    use unicorn_engine::{
+        RegisterMIPS, Unicorn,
+        unicorn_const::{Arch, Mode, Prot, Query},
+    };
+
+    // The symbol is absent from the normal vendored build. This test only
+    // links when the root's native-timer-diagnostic feature enables its C gate.
+    unsafe extern "C" {
+        fn uc_native_timer_diag_set_probe(
+            uc: *mut c_void,
+            probe: Option<unsafe extern "C" fn(u32, *mut c_void)>,
+            user_data: *mut c_void,
+        ) -> i32;
+    }
+
+    const RENDEZVOUS_WAIT: Duration = Duration::from_secs(2);
+    const CONTROLLER_WAIT: Duration = Duration::from_secs(1);
+    const ITERATIONS_PER_ARM: usize = 16;
+
+    #[derive(Clone, Copy, Debug)]
+    enum ReleaseOrder {
+        TimerFirst,
+        HookFirst,
+        Together,
+    }
+
+    impl ReleaseOrder {
+        fn label(self) -> &'static str {
+            match self {
+                Self::TimerFirst => "timer_first",
+                Self::HookFirst => "hook_first",
+                Self::Together => "together",
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct Gate {
+        timer_ready: AtomicUsize,
+        hook_ready: AtomicUsize,
+        timer_returned: AtomicUsize,
+        hook_returned: AtomicUsize,
+        release_timer: AtomicBool,
+        release_hook: AtomicBool,
+        rendezvous_failed: AtomicBool,
+    }
+
+    fn wait_for(mut condition: impl FnMut() -> bool, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            thread::yield_now();
+        }
+        condition()
+    }
+
+    unsafe extern "C" fn probe(event: u32, user_data: *mut c_void) {
+        // The Arc owning this pointer outlives uc_emu_start, its joined timer,
+        // and the controller thread. Never call back into Unicorn here.
+        let gate = unsafe { &*user_data.cast::<Gate>() };
+        let release = match event {
+            1 => {
+                gate.timer_ready.fetch_add(1, Ordering::SeqCst);
+                Some(&gate.release_timer)
+            }
+            2 => {
+                gate.hook_ready.fetch_add(1, Ordering::SeqCst);
+                Some(&gate.release_hook)
+            }
+            3 => {
+                gate.timer_returned.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+            4 => {
+                gate.hook_returned.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+            _ => {
+                gate.rendezvous_failed.store(true, Ordering::SeqCst);
+                None
+            }
+        };
+        if let Some(release) = release
+            && !wait_for(|| release.load(Ordering::SeqCst), RENDEZVOUS_WAIT)
+        {
+            gate.rendezvous_failed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn release_in_order(gate: &Gate, order: ReleaseOrder) {
+        if !wait_for(
+            || {
+                gate.timer_ready.load(Ordering::SeqCst) == 1
+                    && gate.hook_ready.load(Ordering::SeqCst) == 1
+            },
+            CONTROLLER_WAIT,
+        ) {
+            gate.rendezvous_failed.store(true, Ordering::SeqCst);
+            gate.release_timer.store(true, Ordering::SeqCst);
+            gate.release_hook.store(true, Ordering::SeqCst);
+            return;
+        }
+
+        match order {
+            ReleaseOrder::TimerFirst => {
+                gate.release_timer.store(true, Ordering::SeqCst);
+                if !wait_for(
+                    || gate.timer_returned.load(Ordering::SeqCst) == 1,
+                    CONTROLLER_WAIT,
+                ) {
+                    gate.rendezvous_failed.store(true, Ordering::SeqCst);
+                }
+                gate.release_hook.store(true, Ordering::SeqCst);
+            }
+            ReleaseOrder::HookFirst => {
+                gate.release_hook.store(true, Ordering::SeqCst);
+                if !wait_for(
+                    || gate.hook_returned.load(Ordering::SeqCst) == 1,
+                    CONTROLLER_WAIT,
+                ) {
+                    gate.rendezvous_failed.store(true, Ordering::SeqCst);
+                }
+                gate.release_timer.store(true, Ordering::SeqCst);
+            }
+            ReleaseOrder::Together => {
+                gate.release_timer.store(true, Ordering::SeqCst);
+                gate.release_hook.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    fn one_iteration(sequence: usize, order: ReleaseOrder) {
+        emit(&format!(
+            "CONTROL_ITER_BEGIN seq={sequence} order={} timeout_us={NATIVE_TIMEOUT_US}",
+            order.label()
+        ));
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .expect("create fresh native owner");
+        uc.mem_map(CODE, 0x1000, Prot::ALL).expect("map loop page");
+        let words = [0x2610_0001_u32, 0x0800_0400, 0];
+        let bytes: Vec<u8> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        uc.mem_write(CODE, &bytes).expect("write MIPS loop");
+
+        let gate = Arc::new(Gate::default());
+        let probe_result = unsafe {
+            uc_native_timer_diag_set_probe(
+                uc.get_handle().cast(),
+                Some(probe),
+                Arc::as_ptr(&gate).cast_mut().cast(),
+            )
+        };
+        assert_eq!(probe_result, 0, "attach per-engine diagnostic probe");
+
+        let hook_seen = Rc::new(Cell::new(0usize));
+        let hook_stop_ok = Rc::new(Cell::new(None::<bool>));
+        let seen = Rc::clone(&hook_seen);
+        let stop_ok = Rc::clone(&hook_stop_ok);
+        uc.add_block_hook(1, 0, move |uc, address, _size| {
+            if address == CODE && seen.get() == 0 {
+                seen.set(1);
+                stop_ok.set(Some(uc.emu_stop().is_ok()));
+            }
+        })
+        .expect("install one-shot native stop hook");
+
+        // The controller owns only the probe's atomics, never a Unicorn handle.
+        let controller_gate = Arc::clone(&gate);
+        let controller = thread::spawn(move || release_in_order(&controller_gate, order));
+        let started = Instant::now();
+        let native_result = uc.emu_start(CODE, 0, NATIVE_TIMEOUT_US, 0);
+        let elapsed_us = started.elapsed().as_micros();
+        controller.join().expect("controller thread");
+        let timeout_query = uc.query(Query::TIMEOUT);
+        let count_query = uc.query(Query::COUNT_STOP);
+        let pc = uc.reg_read(RegisterMIPS::PC);
+        drop(uc); // Native timer joined before the owner and Arc can close.
+
+        let timer_ready = gate.timer_ready.load(Ordering::SeqCst);
+        let hook_ready = gate.hook_ready.load(Ordering::SeqCst);
+        let timer_returned = gate.timer_returned.load(Ordering::SeqCst);
+        let hook_returned = gate.hook_returned.load(Ordering::SeqCst);
+        let rendezvous_failed = gate.rendezvous_failed.load(Ordering::SeqCst);
+        emit(&format!(
+            "CONTROL_ITER_END seq={sequence} order={} elapsed_us={elapsed_us} timer_ready={timer_ready} hook_ready={hook_ready} timer_returned={timer_returned} hook_returned={hook_returned} rendezvous_failed={rendezvous_failed} hook_seen={} hook_stop_ok={:?} native_result={native_result:?} timeout_query={timeout_query:?} count_query={count_query:?} pc={pc:?} owner_closed=1",
+            order.label(),
+            hook_seen.get(),
+            hook_stop_ok.get(),
+        ));
+        assert!(
+            !rendezvous_failed,
+            "rendezvous was inconclusive at seq={sequence}"
+        );
+        assert_eq!((timer_ready, hook_ready), (1, 1));
+        assert_eq!((timer_returned, hook_returned), (1, 1));
+        assert_eq!(hook_seen.get(), 1);
+        assert_eq!(hook_stop_ok.get(), Some(true));
+        assert!(native_result.is_ok(), "native error at seq={sequence}");
+        assert_eq!(
+            timeout_query,
+            Ok(1),
+            "timer decision was lost at seq={sequence}"
+        );
+        assert_eq!(
+            count_query,
+            Ok(0),
+            "unexpected count stop at seq={sequence}"
+        );
+        assert_ne!(pc.expect("read PC"), 0, "guest PC zero at seq={sequence}");
+    }
+
+    #[test]
+    #[ignore = "test-only native C rendezvous; run alone with a stamped log and external watchdog"]
+    fn timer_and_hook_stop_controlled_overlap() {
+        emit(&format!(
+            "CONTROL_SWEEP_BEGIN timeout_us={NATIVE_TIMEOUT_US} iterations_per_arm={ITERATIONS_PER_ARM} arms=timer_first,hook_first,together"
+        ));
+        let mut completed = 0;
+        for order in [
+            ReleaseOrder::TimerFirst,
+            ReleaseOrder::HookFirst,
+            ReleaseOrder::Together,
+        ] {
+            for _ in 0..ITERATIONS_PER_ARM {
+                one_iteration(completed + 1, order);
+                completed += 1;
+            }
+            emit(&format!(
+                "CONTROL_ARM_END order={} completed={completed}",
+                order.label()
+            ));
+        }
+        emit(&format!("CONTROL_SWEEP_END completed={completed}"));
+    }
+}
