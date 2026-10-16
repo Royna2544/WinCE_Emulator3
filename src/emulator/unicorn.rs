@@ -2541,6 +2541,17 @@ impl UnicornMips {
         self.completed_active_process_exit
     }
 
+    #[cfg(feature = "unicorn")]
+    fn seal_for_quarantine(&mut self) {
+        // Admission can precede the first native attempt. The transfer to
+        // machine custody, not a particular error path, must make this CPU
+        // terminal. Repeating the seal leaves fault/debug evidence intact.
+        self.private_slab_attempt_poisoned = true;
+        self.saved_context = None;
+        self.saved_context_thread_birth = None;
+        self.saved_worker_exit_birth = None;
+    }
+
     #[cfg(all(test, feature = "unicorn"))]
     fn native_engine_identity_for_test(&self) -> Option<usize> {
         self.native_engine.identity()
@@ -20792,6 +20803,7 @@ fn run_pending_process_launches_with_custody<D>(
                         // A failure is a broken internal invariant. Report
                         // terminal ownership loss explicitly instead of
                         // panicking or claiming a recoverable child stop.
+                        child.seal_for_quarantine();
                         if let Err((failure, original_cpu)) =
                             directory.quarantine_reserved(key, launch_birth, child)
                         {
@@ -86681,6 +86693,112 @@ mod unicorn_tests {
             "the poisoned private attempt must discard unsafe restart registers"
         );
         assert!(retained.cpu.run_slice_generation > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_child_pre_entry_refusal_can_retire_quarantined_cpu() -> crate::Result<()> {
+        const EXIT_CODE: u32 = 0x6c;
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("pre-entry-child.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("pre-entry-child.exe".to_owned()), None);
+        let child_birth = launch.process_birth.expect("exact child birth");
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("create fixture CPU custody: {error}")))?;
+        let mut quarantined_child_fault = false;
+
+        // Synthetic precondition refusal: normal deferred launch occurs only
+        // after the parent releases its native-entry permit. This exercises
+        // the producer/consumer contract before B ever executes guest MIPS.
+        let outer_native_entry = super::NativeGuestExecutionGuard::enter()?;
+        let error = super::run_pending_process_launches_with_custody(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+        )
+        .expect_err("nested native entry must refuse B before its first slice");
+        drop(outer_native_entry);
+        assert!(
+            error.to_string().contains("nested native guest execution"),
+            "pre-entry refusal: {error}"
+        );
+        assert!(quarantined_child_fault);
+        assert_eq!(kernel.current_process_id(), root_pid);
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert_eq!(custody.counts().reserved, 0);
+        assert_eq!(custody.counts().quarantined, 1);
+        assert!(parked.borrow().is_empty(), "B has no legacy parked CPU");
+        let snapshot = custody.snapshots().pop().expect("sole original B CPU");
+        assert_eq!(snapshot.birth, child_birth);
+        assert_eq!(snapshot.state, super::CpuCustodyState::Quarantined);
+        assert_eq!(
+            snapshot.native_outcome,
+            Some(super::NativeSliceOutcome::NoAttempt)
+        );
+        assert!(snapshot.memory_fault.is_none());
+        assert!(snapshot.mapped_blob_bytes > 0, "loaded B image is retained");
+        custody
+            .with_quarantined(snapshot.key, child_birth, |retained| {
+                assert_eq!(retained.owned_process_launch.as_ref(), Some(&launch));
+                assert_eq!(retained.run_slice_generation, 0);
+                assert!(retained.private_slab_attempt_poisoned);
+                assert!(retained.saved_context.is_none());
+                assert_eq!(retained.saved_context_thread_birth, None);
+                assert_eq!(retained.saved_worker_exit_birth, None);
+                assert_eq!(retained.native_engine_identity_for_test(), None);
+            })
+            .map_err(|error| Error::Backend(format!("borrow child CPU custody: {error}")))?;
+
+        assert!(kernel.terminate_process(launch.process_handle, EXIT_CODE));
+        assert_eq!(
+            custody.counts().quarantined,
+            1,
+            "request is not accepted exit"
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        let mut root_cpu = super::UnicornMips::new()?;
+        assert_eq!(
+            root_cpu.try_complete_requested_quarantined_process_exits_with_framebuffer(
+                &mut kernel,
+                Some(&mut framebuffer),
+                &mut custody,
+            )?,
+            1
+        );
+        assert!(!custody.has_any_custody());
+        assert!(!kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(EXIT_CODE)
+        );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
         Ok(())
     }
 
