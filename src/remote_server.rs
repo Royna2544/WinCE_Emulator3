@@ -14,7 +14,8 @@
 //   running, guestWidth, guestHeight, guestFps, videoEnabled, videoCodec,
 //   audioEnabled, audioCodec, audioSampleRate, audioChannels, audioFormat,
 //   gpsEnabled, gpsTarget, paused, queuedTouchEvents, queuedKeyEvents,
-//   queuedSerialBytes, audioClients, queuedAudioChunks, pendingControlMessages.
+//   queuedSerialBytes, audioClients, queuedAudioChunks, pendingControlMessages,
+//   cpuCustody (separate machine-owned CPU quarantine observation).
 // - GET /status is a legacy alias for /api/v1/status.
 //
 // Frame/video:
@@ -22,6 +23,7 @@
 //   JPEG, or 503 {"ok":false,"error":"no framebuffer"} before the first frame.
 // - GET /api/v1/debug/screenshot.png returns the latest framebuffer as PNG.
 // - GET /api/v1/debug/summary.txt returns the latest emulator debug summary.
+// - GET /api/v1/debug/cpu-custody.txt returns reserved/quarantined CPU slots.
 // - GET /api/v1/debug/windows.txt returns the latest GWE window snapshot text.
 // - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
 // - GET /api/v1/debug/queues.txt returns current GWE posted/sent queues.
@@ -176,6 +178,7 @@ struct RemoteServerState {
     pending_control: Mutex<VecDeque<Value>>,
     pending_control_ready: Condvar,
     latest_status: Mutex<Value>,
+    latest_cpu_custody_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
     latest_debug: Mutex<BTreeMap<String, String>>,
     debug_publish: Mutex<DebugPublishState>,
@@ -245,6 +248,13 @@ impl RemoteServer {
                     queued_serial_bytes: 0,
                     audio_clients: 0,
                     queued_audio_chunks: 0,
+                })),
+                latest_cpu_custody_status: Mutex::new(json!({
+                    "machineLineage": 0,
+                    "reserved": 0,
+                    "quarantined": 0,
+                    "retainedCpuBlobBytes": 0,
+                    "slots": [],
                 })),
                 latest_framebuffer: Mutex::new(None),
                 latest_debug: Mutex::new(BTreeMap::new()),
@@ -339,12 +349,39 @@ impl RemoteServer {
                 "pendingControlMessages".to_owned(),
                 json!(self.pending_control_count()),
             );
+            object.insert(
+                "cpuCustody".to_owned(),
+                self.state
+                    .latest_cpu_custody_status
+                    .lock()
+                    .expect("remote CPU custody status mutex")
+                    .clone(),
+            );
         }
         *self
             .state
             .latest_status
             .lock()
             .expect("remote status mutex") = value;
+    }
+
+    /// Update the independently owned CPU-custody observation without waiting
+    /// for the next guest status or framebuffer publication.
+    pub fn publish_cpu_custody_status(&self, custody: Value) {
+        *self
+            .state
+            .latest_cpu_custody_status
+            .lock()
+            .expect("remote CPU custody status mutex") = custody.clone();
+        if let Some(object) = self
+            .state
+            .latest_status
+            .lock()
+            .expect("remote status mutex")
+            .as_object_mut()
+        {
+            object.insert("cpuCustody".to_owned(), custody);
+        }
     }
 
     pub fn publish_framebuffer(&self, framebuffer: &dyn Framebuffer) {
@@ -548,6 +585,9 @@ impl RemoteServer {
             ("GET", "/api/v1/frame.jpg") => self.latest_jpeg_response(&request).into(),
             ("GET", "/api/v1/debug/screenshot.png") => self.latest_png_response().into(),
             ("GET", "/api/v1/debug/summary.txt") => self.latest_debug_text("summary").into(),
+            ("GET", "/api/v1/debug/cpu-custody.txt") => {
+                self.latest_debug_text("cpu-custody").into()
+            }
             ("GET", "/api/v1/debug/windows.txt") => self.latest_debug_text("windows").into(),
             ("GET", "/api/v1/debug/messages.txt") => self.latest_debug_text("messages").into(),
             ("GET", "/api/v1/debug/queues.txt") => self.latest_debug_text("queues").into(),
@@ -652,6 +692,7 @@ impl RemoteServer {
                     "frame": "GET /api/v1/frame.jpg",
                     "screenshot": "GET /api/v1/debug/screenshot.png",
                     "debugSummary": "GET /api/v1/debug/summary.txt",
+                    "debugCpuCustody": "GET /api/v1/debug/cpu-custody.txt",
                     "debugWindows": "GET /api/v1/debug/windows.txt",
                     "debugMessages": "GET /api/v1/debug/messages.txt",
                     "debugMessageBoxes": "GET /api/v1/debug/message-boxes.txt",
@@ -1967,6 +2008,78 @@ mod tests {
         assert!(response.contains("200 OK"));
         assert!(response.contains(r#""guestWidth":800"#));
         assert!(response.contains(r#""guestHeight":480"#));
+
+        server.publish_cpu_custody_status(json!({
+            "machineLineage": 7,
+            "reserved": 0,
+            "quarantined": 1,
+            "retainedCpuBlobBytes": 4096,
+            "slots": [{"index": 2, "generation": 9}],
+        }));
+        server.publish_debug_text("cpu-custody", "slot=7:2:9 retained_cpu_blob_bytes=4096\n");
+        let status = http_request(
+            server.local_addr(),
+            "GET /api/v1/status HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        let status_body: Value = serde_json::from_str(
+            status
+                .split_once("\r\n\r\n")
+                .expect("status has HTTP headers")
+                .1,
+        )
+        .expect("status has JSON body");
+        assert_eq!(status_body["cpuCustody"]["machineLineage"], 7);
+        assert_eq!(status_body["cpuCustody"]["quarantined"], 1);
+        assert_eq!(status_body["cpuCustody"]["retainedCpuBlobBytes"], 4096);
+        assert_eq!(status_body["cpuCustody"]["slots"][0]["generation"], 9);
+        let debug = http_request(
+            server.local_addr(),
+            "GET /api/v1/debug/cpu-custody.txt HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(debug.contains("slot=7:2:9 retained_cpu_blob_bytes=4096"));
+
+        // Ordinary status refresh must retain the independently published
+        // custody observation until a later custody publication changes it.
+        server.publish_status(&RemoteStatus {
+            running: true,
+            guest_width: 800,
+            guest_height: 480,
+            guest_fps: 15,
+            video_enabled: true,
+            video_codec: "mjpeg",
+            audio_enabled: false,
+            audio_codec: "pcm",
+            audio_sample_rate: 44_100,
+            audio_channels: 2,
+            audio_format: "s16le".to_owned(),
+            gps_enabled: true,
+            gps_target: "COM7:".to_owned(),
+            paused: false,
+            queued_touch_events: 0,
+            queued_key_events: 0,
+            queued_serial_bytes: 0,
+            audio_clients: 0,
+            queued_audio_chunks: 0,
+        });
+        let refreshed = http_request(
+            server.local_addr(),
+            "GET /api/v1/status HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(refreshed.contains(r#""retainedCpuBlobBytes":4096"#));
+
+        server.publish_cpu_custody_status(json!({
+            "machineLineage": 7,
+            "reserved": 0,
+            "quarantined": 0,
+            "retainedCpuBlobBytes": 0,
+            "slots": [],
+        }));
+        let retired = http_request(
+            server.local_addr(),
+            "GET /api/v1/status HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(retired.contains(r#""retainedCpuBlobBytes":0"#));
+        assert!(retired.contains(r#""quarantined":0"#));
     }
 
     #[test]

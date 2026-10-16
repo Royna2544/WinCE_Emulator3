@@ -43,6 +43,7 @@ use wince_emulation_v3::{
             AttemptExecution, UnicornDebugSnapshot, UnicornMips, UnicornRunLimits,
             UnicornWindowSnapshot,
         },
+        cpu_custody::CpuCustody,
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         memory::MemoryPerms,
     },
@@ -171,6 +172,10 @@ fn main() -> Result<()> {
         args.mount_config.as_deref(),
     )?;
     let mut kernel = CeKernel::boot(config);
+    // This owner is independent of whichever UnicornMips wrapper is selected
+    // by the current scheduler rotation or monitor command.
+    let mut cpu_custody =
+        CpuCustody::new().map_err(|err| wince_emulation_v3::Error::Backend(err.to_string()))?;
     let mut host_audio_status = attach_audio_for_desktop(&mut kernel, args.desktop);
     let mut desktop = create_desktop(args.desktop, args.image.as_deref())?;
     kernel.remote.set_framebuffer_size(
@@ -196,6 +201,7 @@ fn main() -> Result<()> {
             None,
             true,
         );
+        publish_cpu_custody_observation(kernel.remote_server.as_ref(), &cpu_custody);
     }
 
     let mut cpu = UnicornMips::new()?;
@@ -332,11 +338,18 @@ fn main() -> Result<()> {
 
     let _companions = launch_delayed_companion_processes(&args)?;
     if args.run_cpu {
-        run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args, None)?;
+        run_cpu_loop(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &args,
+            &mut cpu_custody,
+            None,
+        )?;
         write_requested_tracefiles(&cpu, &args.tracefiles)?;
     }
     if args.monitor {
-        run_monitor(&mut cpu, &mut kernel, &mut desktop, &args)?;
+        run_monitor(&mut cpu, &mut kernel, &mut desktop, &args, &mut cpu_custody)?;
     }
     if let Some(path) = args.framebuffer_dump.as_ref() {
         desktop.framebuffer().write_ppm(path)?;
@@ -351,12 +364,22 @@ fn run_cpu_loop(
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
     args: &Args,
+    cpu_custody: &mut CpuCustody,
     mut attempt_observer: Option<&mut dyn FnMut(&AttemptExecution)>,
 ) -> Result<()> {
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
     let run_started = Instant::now();
     loop {
+        #[cfg(feature = "unicorn")]
+        if cpu.try_complete_requested_quarantined_process_exits_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+            cpu_custody,
+        )? != 0
+        {
+            publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
+        }
         // Scheduler maintenance can rotate/continue without a CPU slice.
         // The requested bound applies to that host work as well as emu_start.
         if wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed()) {
@@ -850,10 +873,14 @@ fn run_cpu_loop(
                 stop_pc: args.cpu_stop_pc,
                 live_pump: live_pump_slice,
             },
+            cpu_custody,
         );
         if let Some(observer) = attempt_observer.as_mut() {
             observer(&execution);
         }
+        // Native errors and accepted child retirement both change custody
+        // inside this attempt. Publish before an error exits the live loop.
+        publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
         if let Err(err) = execution.result {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {}", snapshot.summary());
@@ -2034,6 +2061,65 @@ fn publish_remote_debug_after_scheduler_change(
     );
 }
 
+fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
+    let counts = cpu_custody.counts();
+    let mut out = format!(
+        "  cpu_custody: lineage={} reserved={} quarantined={} retained_cpu_blob_bytes={}\n",
+        cpu_custody.machine_lineage(),
+        counts.reserved,
+        counts.quarantined,
+        cpu_custody.retained_cpu_blob_bytes(),
+    );
+    for snapshot in cpu_custody.snapshots() {
+        let _ = writeln!(
+            out,
+            "    slot={}:{}:{} birth={}:{} state={:?} mapped_blob_bytes={} virtual_region_bytes={} native_outcome={:?} memory_fault={:?}",
+            snapshot.key.machine_lineage(),
+            snapshot.key.index(),
+            snapshot.key.generation(),
+            snapshot.birth.process_id(),
+            snapshot.birth.incarnation(),
+            snapshot.state,
+            snapshot.mapped_blob_bytes,
+            snapshot.virtual_region_bytes,
+            snapshot.native_outcome,
+            snapshot.memory_fault,
+        );
+    }
+    out
+}
+
+fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &CpuCustody) {
+    let Some(server) = server else {
+        return;
+    };
+    let counts = cpu_custody.counts();
+    let slots = cpu_custody
+        .snapshots()
+        .into_iter()
+        .map(|snapshot| {
+            serde_json::json!({
+                "machineLineage": snapshot.key.machine_lineage(),
+                "index": snapshot.key.index(),
+                "generation": snapshot.key.generation(),
+                "processId": snapshot.birth.process_id(),
+                "processIncarnation": snapshot.birth.incarnation(),
+                "state": format!("{:?}", snapshot.state),
+                "mappedBlobBytes": snapshot.mapped_blob_bytes,
+                "virtualRegionBytes": snapshot.virtual_region_bytes,
+            })
+        })
+        .collect::<Vec<_>>();
+    server.publish_cpu_custody_status(serde_json::json!({
+        "machineLineage": cpu_custody.machine_lineage(),
+        "reserved": counts.reserved,
+        "quarantined": counts.quarantined,
+        "retainedCpuBlobBytes": cpu_custody.retained_cpu_blob_bytes(),
+        "slots": slots,
+    }));
+    server.publish_debug_text("cpu-custody", cpu_custody_debug_text(cpu_custody));
+}
+
 fn live_active_process_text(cpu: &UnicornMips, kernel: &CeKernel) -> String {
     use std::fmt::Write as _;
 
@@ -2178,6 +2264,7 @@ fn run_monitor(
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
     args: &Args,
+    cpu_custody: &mut CpuCustody,
 ) -> Result<()> {
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     println!("  monitor: interactive commands enabled; type `help`");
@@ -2230,6 +2317,7 @@ fn run_monitor(
                     cpu,
                     kernel,
                     desktop,
+                    cpu_custody,
                     UnicornRunLimits {
                         instruction_limit,
                         wall_clock_limit_ms,
@@ -2266,6 +2354,7 @@ fn run_monitor(
                     cpu,
                     kernel,
                     desktop,
+                    cpu_custody,
                     UnicornRunLimits {
                         instruction_limit,
                         wall_clock_limit_ms,
@@ -2317,7 +2406,9 @@ fn run_monitor(
                 } else {
                     println!("  no Unicorn snapshot yet");
                 }
+                print!("{}", cpu_custody_debug_text(cpu_custody));
             }
+            "custody" => print!("{}", cpu_custody_debug_text(cpu_custody)),
             "trace" | "detail" => {
                 let selector = words.next().unwrap_or("all");
                 let Some(snapshot) = cpu.preferred_trace_snapshot() else {
@@ -2416,11 +2507,12 @@ fn run_monitor(
                     .next()
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| format!("#{}", checkpoints.len()));
-                let checkpoint = match try_monitor_checkpoint_save(
+                let checkpoint = match try_monitor_checkpoint_save_with_custody(
                     name.clone(),
                     cpu,
                     kernel,
                     desktop.framebuffer(),
+                    cpu_custody,
                 ) {
                     Ok(checkpoint) => checkpoint,
                     Err(err) => {
@@ -2447,7 +2539,12 @@ fn run_monitor(
                     continue;
                 };
                 let (restored_cpu, restored_kernel, restored_framebuffer) =
-                    match try_monitor_checkpoint_restore(checkpoint, cpu, kernel) {
+                    match try_monitor_checkpoint_restore_with_custody(
+                        checkpoint,
+                        cpu,
+                        kernel,
+                        cpu_custody,
+                    ) {
                         Ok(restored) => restored,
                         Err(err) => {
                             println!("  checkpoint not restored: {err}");
@@ -2477,7 +2574,12 @@ fn monitor_command_blocked_by_recovery(command: &str) -> bool {
     )
 }
 
-fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
+fn ensure_monitor_checkpointable(kernel: &CeKernel, cpu_custody: &CpuCustody) -> Result<()> {
+    if cpu_custody.has_any_custody() {
+        return Err(wince_emulation_v3::Error::Unsupported(
+            "CPU custody needs machine-level checkpoint relineage".to_owned(),
+        ));
+    }
     if kernel.memory.has_stable_private_slabs() {
         return Err(wince_emulation_v3::Error::Unsupported(
             "slab-backed private VM needs machine-level checkpoint relineage".to_owned(),
@@ -2498,13 +2600,14 @@ fn ensure_monitor_checkpointable(kernel: &CeKernel) -> Result<()> {
     Ok(())
 }
 
-fn try_monitor_checkpoint_save(
+fn try_monitor_checkpoint_save_with_custody(
     name: String,
     cpu: &UnicornMips,
     kernel: &CeKernel,
     framebuffer: &VirtualFramebuffer,
+    cpu_custody: &CpuCustody,
 ) -> Result<MonitorCheckpoint> {
-    ensure_monitor_checkpointable(kernel)?;
+    ensure_monitor_checkpointable(kernel, cpu_custody)?;
     if cpu.has_sealed_image_runs() {
         return Err(wince_emulation_v3::Error::Unsupported(
             "sealed main image needs machine-level checkpoint relineage".to_owned(),
@@ -2523,13 +2626,14 @@ fn try_monitor_checkpoint_save(
     })
 }
 
-fn try_monitor_checkpoint_restore(
+fn try_monitor_checkpoint_restore_with_custody(
     checkpoint: &MonitorCheckpoint,
     destination_cpu: &UnicornMips,
     destination_kernel: &CeKernel,
+    cpu_custody: &CpuCustody,
 ) -> Result<(UnicornMips, CeKernel, VirtualFramebuffer)> {
-    ensure_monitor_checkpointable(destination_kernel)?;
-    ensure_monitor_checkpointable(&checkpoint.kernel)?;
+    ensure_monitor_checkpointable(destination_kernel, cpu_custody)?;
+    ensure_monitor_checkpointable(&checkpoint.kernel, cpu_custody)?;
     if checkpoint.cpu.has_sealed_image_runs() {
         return Err(wince_emulation_v3::Error::Unsupported(
             "sealed main image needs machine-level checkpoint relineage".to_owned(),
@@ -2547,6 +2651,34 @@ fn try_monitor_checkpoint_restore(
         checkpoint.kernel.clone(),
         checkpoint.framebuffer.clone(),
     ))
+}
+
+#[cfg(test)]
+fn try_monitor_checkpoint_save(
+    name: String,
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+    framebuffer: &VirtualFramebuffer,
+) -> Result<MonitorCheckpoint> {
+    let empty_custody =
+        CpuCustody::new().map_err(|err| wince_emulation_v3::Error::Backend(err.to_string()))?;
+    try_monitor_checkpoint_save_with_custody(name, cpu, kernel, framebuffer, &empty_custody)
+}
+
+#[cfg(test)]
+fn try_monitor_checkpoint_restore(
+    checkpoint: &MonitorCheckpoint,
+    destination_cpu: &UnicornMips,
+    destination_kernel: &CeKernel,
+) -> Result<(UnicornMips, CeKernel, VirtualFramebuffer)> {
+    let empty_custody =
+        CpuCustody::new().map_err(|err| wince_emulation_v3::Error::Backend(err.to_string()))?;
+    try_monitor_checkpoint_restore_with_custody(
+        checkpoint,
+        destination_cpu,
+        destination_kernel,
+        &empty_custody,
+    )
 }
 
 fn select_checkpoint<'a>(
@@ -2569,6 +2701,7 @@ fn monitor_run_once(
     cpu: &mut UnicornMips,
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
+    cpu_custody: &mut CpuCustody,
     limits: UnicornRunLimits,
     framebuffer_dump: Option<&Path>,
     mut attempt_observer: Option<&mut dyn FnMut(&AttemptExecution)>,
@@ -2580,6 +2713,15 @@ fn monitor_run_once(
     let mut continued = 0usize;
     let run_started = Instant::now();
     loop {
+        #[cfg(feature = "unicorn")]
+        if cpu.try_complete_requested_quarantined_process_exits_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+            cpu_custody,
+        )? != 0
+        {
+            publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
+        }
         let current_limits = UnicornRunLimits {
             wall_clock_limit_ms: remaining_wall_clock_limit_ms(
                 limits.wall_clock_limit_ms,
@@ -2587,10 +2729,11 @@ fn monitor_run_once(
             ),
             ..limits
         };
-        let execution = desktop.run_cpu_until_report(cpu, kernel, current_limits);
+        let execution = desktop.run_cpu_until_report(cpu, kernel, current_limits, cpu_custody);
         if let Some(observer) = attempt_observer.as_mut() {
             observer(&execution);
         }
+        publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
         if let Err(err) = execution.result {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {}", snapshot.summary());
@@ -2746,10 +2889,26 @@ fn monitor_run_and_report(
     cpu: &mut UnicornMips,
     kernel: &mut CeKernel,
     desktop: &mut DesktopRuntime,
+    cpu_custody: &mut CpuCustody,
     limits: UnicornRunLimits,
     framebuffer_dump: Option<&Path>,
 ) -> bool {
-    if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump, None) {
+    if let Err(err) = monitor_run_once(
+        cpu,
+        kernel,
+        desktop,
+        cpu_custody,
+        limits,
+        framebuffer_dump,
+        None,
+    ) {
+        if cpu_custody.has_any_custody() {
+            eprint!("{}", cpu_custody_debug_text(cpu_custody));
+            eprintln!(
+                "  retained CPU custody requires recovery; quit, repair the cause, and restart before continuing"
+            );
+            return true;
+        }
         if err.is_host_exit_recovery_required() {
             eprintln!("  stopped for host-exit recovery: {err}");
             return true;
@@ -2774,6 +2933,7 @@ fn print_monitor_help() {
         "  trace [kind]                print detailed trace: all/imports/calls/code/blocks/messages/render"
     );
     println!("  tracefile KIND PATH         write selected trace detail to a file");
+    println!("  custody                     list reserved/quarantined CPU slots");
     println!("  map                         list memory regions and mapped static blobs");
     println!("  x ADDRESS [LEN]             hexdump mapped static PE/DLL/trap bytes");
     println!("  disasm ADDRESS [WORDS]      print mapped static MIPS instruction words");
@@ -3449,6 +3609,7 @@ impl DesktopRuntime {
         cpu: &mut UnicornMips,
         kernel: &mut CeKernel,
         limits: UnicornRunLimits,
+        cpu_custody: &mut CpuCustody,
     ) -> wince_emulation_v3::emulator::cpu::AttemptExecution {
         match self {
             Self::Virtual(desktop) => {
@@ -3457,16 +3618,20 @@ impl DesktopRuntime {
                 {
                     let mut live_framebuffer =
                         RemoteLiveFramebuffer::new(desktop.framebuffer_mut(), server);
-                    cpu.run_until_import_trap_with_framebuffer_limits_report(
+                    run_cpu_attempt_with_custody(
+                        cpu,
                         kernel,
                         &mut live_framebuffer,
                         limits,
+                        cpu_custody,
                     )
                 } else {
-                    cpu.run_until_import_trap_with_framebuffer_limits_report(
+                    run_cpu_attempt_with_custody(
+                        cpu,
                         kernel,
                         desktop.framebuffer_mut(),
                         limits,
+                        cpu_custody,
                     )
                 }
             }
@@ -3483,10 +3648,12 @@ impl DesktopRuntime {
                 }
                 let mut live_framebuffer =
                     HostLiveFramebuffer::new(framebuffer, presenter, kernel.remote_server.clone());
-                cpu.run_until_import_trap_with_framebuffer_limits_report(
+                run_cpu_attempt_with_custody(
+                    cpu,
                     kernel,
                     &mut live_framebuffer,
                     limits,
+                    cpu_custody,
                 )
             }
             #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
@@ -3505,10 +3672,12 @@ impl DesktopRuntime {
                     presenter,
                     kernel.remote_server.clone(),
                 );
-                cpu.run_until_import_trap_with_framebuffer_limits_report(
+                run_cpu_attempt_with_custody(
+                    cpu,
                     kernel,
                     &mut live_framebuffer,
                     limits,
+                    cpu_custody,
                 )
             }
         }
@@ -3532,6 +3701,29 @@ impl DesktopRuntime {
             #[cfg(all(target_os = "linux", feature = "linux-x11-desktop"))]
             Self::Host(_) => "linux X11 host presenter",
         }
+    }
+}
+
+fn run_cpu_attempt_with_custody(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    limits: UnicornRunLimits,
+    cpu_custody: &mut CpuCustody,
+) -> AttemptExecution {
+    #[cfg(feature = "unicorn")]
+    {
+        cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            kernel,
+            framebuffer,
+            limits,
+            cpu_custody,
+        )
+    }
+    #[cfg(not(feature = "unicorn"))]
+    {
+        let _ = cpu_custody;
+        cpu.run_until_import_trap_with_framebuffer_limits_report(kernel, framebuffer, limits)
     }
 }
 
@@ -4576,6 +4768,62 @@ mod tests {
     }
 
     #[test]
+    fn monitor_checkpoint_refuses_machine_cpu_custody() {
+        let kernel = checkpointable_retired_kernel();
+        let cpu = UnicornMips::new().expect("checkpoint CPU initializes");
+        let framebuffer = VirtualFramebuffer::default();
+        let empty_custody = CpuCustody::new().expect("empty custody initializes");
+        let checkpoint = try_monitor_checkpoint_save_with_custody(
+            "clean".to_owned(),
+            &cpu,
+            &kernel,
+            &framebuffer,
+            &empty_custody,
+        )
+        .expect("empty machine checkpoint saves");
+
+        let mut births = wince_emulation_v3::ce::object::HandleTable::default();
+        births.create_process(77);
+        let birth = births
+            .process_birth_key(77)
+            .expect("reserved process birth");
+        let mut custody = CpuCustody::new().expect("custody initializes");
+        let key = custody.reserve(birth).expect("reserve exact birth");
+        for state in ["reserved", "quarantined"] {
+            assert!(matches!(
+                try_monitor_checkpoint_save_with_custody(
+                    state.to_owned(),
+                    &cpu,
+                    &kernel,
+                    &framebuffer,
+                    &custody,
+                ),
+                Err(wince_emulation_v3::Error::Unsupported(message))
+                    if message.contains("CPU custody needs machine-level checkpoint relineage")
+            ));
+            assert!(matches!(
+                try_monitor_checkpoint_restore_with_custody(
+                    &checkpoint,
+                    &cpu,
+                    &kernel,
+                    &custody,
+                ),
+                Err(wince_emulation_v3::Error::Unsupported(message))
+                    if message.contains("CPU custody needs machine-level checkpoint relineage")
+            ));
+            if state == "reserved" {
+                custody
+                    .quarantine_reserved(
+                        key,
+                        birth,
+                        UnicornMips::new().expect("held CPU initializes"),
+                    )
+                    .expect("quarantine original CPU");
+            }
+        }
+    }
+
+    #[test]
     fn monitor_checkpoint_save_rejects_slab_backed_private_vm() {
         let kernel = kernel_with_committed_private_slab();
         let owner = kernel
@@ -5337,6 +5585,7 @@ mod tests {
         let mut desktop = DesktopRuntime::Virtual(
             VirtualDesktop::default_primary().expect("virtual desktop initializes"),
         );
+        let mut cpu_custody = CpuCustody::new().expect("test custody initializes");
         let mut observed = Vec::new();
         let result = {
             let mut observe = |execution: &AttemptExecution| {
@@ -5346,6 +5595,7 @@ mod tests {
                 &mut cpu,
                 &mut kernel,
                 &mut desktop,
+                &mut cpu_custody,
                 UnicornRunLimits {
                     wall_clock_limit_ms: 100,
                     ..Default::default()
@@ -5406,6 +5656,7 @@ mod tests {
         let mut desktop = DesktopRuntime::Virtual(
             VirtualDesktop::default_primary().expect("virtual desktop initializes"),
         );
+        let mut cpu_custody = CpuCustody::new().expect("test custody initializes");
         let mut observed = Vec::new();
         let result = {
             let mut observe = |execution: &AttemptExecution| {
@@ -5416,6 +5667,7 @@ mod tests {
                 &mut kernel,
                 &mut desktop,
                 &args,
+                &mut cpu_custody,
                 Some(&mut observe),
             )
         };

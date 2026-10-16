@@ -3,6 +3,7 @@ pub mod arch;
 pub mod cpu;
 #[cfg(feature = "unicorn")]
 pub mod cpu_arm;
+pub mod cpu_custody;
 #[cfg(feature = "unicorn")]
 pub mod cpu_mips;
 pub mod dll_search;

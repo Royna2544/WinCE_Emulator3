@@ -37,6 +37,7 @@ use crate::{
         kernel::{CeKernel, FreeLibraryResult, LoadedModule},
     },
     emulator::{
+        cpu_custody::{CpuCustody, CpuCustodyState},
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         imports::{
             ExternalImportTable, IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE, ImportTrap,
@@ -6217,6 +6218,136 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn legacy_parked_tree_has_process_birth_or_pid(
+        queue: &VecDeque<ParkedProcess>,
+        birth: crate::ce::object::ProcessBirthKey,
+    ) -> bool {
+        queue.iter().any(|parked| {
+            parked.process_state.process_id == birth.process_id()
+                || parked
+                    .cpu
+                    .owned_process_launch
+                    .as_ref()
+                    .and_then(|launch| launch.process_birth)
+                    == Some(birth)
+                || Self::legacy_parked_tree_has_process_birth_or_pid(
+                    &parked.cpu.parked_child_processes,
+                    birth,
+                )
+        })
+    }
+
+    /// A termination request is not an exit. A quarantined CPU stays owned
+    /// until its exact stopped birth passes display/survivor preflight and
+    /// Kernel commits completion. This does not schedule or resume the CPU.
+    #[cfg(feature = "unicorn")]
+    pub fn try_complete_requested_quarantined_process_exits_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        mut framebuffer: Option<&mut dyn Framebuffer>,
+        custody: &mut CpuCustody,
+    ) -> Result<usize> {
+        let mut retired = 0usize;
+        for snapshot in custody.snapshots() {
+            if snapshot.state != CpuCustodyState::Quarantined {
+                continue;
+            }
+            let birth = snapshot.birth;
+            let Some(requested_code) = kernel
+                .handles
+                .process_termination_requested_exit_code_by_birth(birth)
+            else {
+                continue;
+            };
+            if kernel.handles.process_birth_key(birth.process_id()) != Some(birth)
+                || !kernel.handles.process_execution_live_by_birth(birth)
+                || Self::legacy_parked_tree_has_process_birth_or_pid(
+                    &self.parked_child_processes,
+                    birth,
+                )
+            {
+                return Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "quarantined exit has stale birth or duplicate legacy CPU owner",
+                });
+            }
+            let (launch, survivor_plan) = custody
+                .with_quarantined(snapshot.key, birth, |child| -> Result<_> {
+                    let launch = child.owned_process_launch.as_ref().ok_or(
+                        Error::HostExitAuthorityRecoveryRequired {
+                            reason: "quarantined CPU has no original process launch",
+                        },
+                    )?;
+                    let primary = kernel.handles.process_primary_thread_birth(birth).ok_or(
+                        Error::HostExitAuthorityRecoveryRequired {
+                            reason: "quarantined process lost canonical primary birth",
+                        },
+                    )?;
+                    if launch.process_birth != Some(birth)
+                        || launch.primary_thread_birth != Some(primary)
+                        || launch.process_id != birth.process_id()
+                        || launch.thread_id != primary.thread_id()
+                        || child.initial_thread_id != launch.thread_id
+                        || child.saved_context.is_some()
+                        || !child.private_slab_attempt_poisoned
+                        || child.completed_active_process_exit
+                    {
+                        return Err(Error::HostExitAuthorityRecoveryRequired {
+                            reason: "quarantined CPU lacks exact stopped owner and terminal fault",
+                        });
+                    }
+                    child.preflight_stopped_modal_display_tree(birth)?;
+                    let plan = Self::preflight_exit_survivors_in_queue(
+                        &child.parked_child_processes,
+                        birth,
+                        kernel,
+                        true,
+                    )?;
+                    Ok((launch.clone(), plan))
+                })
+                .map_err(|error| Error::Backend(format!("borrow quarantined CPU: {error}")))??;
+            self.parked_child_processes
+                .try_reserve(survivor_plan.output_len)
+                .map_err(|_| Error::Backend("reserve quarantine exit survivors".to_owned()))?;
+            let accepted = if let Some(framebuffer) = framebuffer.as_mut() {
+                kernel.try_mark_process_launch_exited_with_witness(
+                    &launch,
+                    requested_code,
+                    Some(&mut **framebuffer),
+                )?
+            } else {
+                kernel.try_mark_process_launch_exited_with_witness(&launch, requested_code, None)?
+            }
+            .ok_or(Error::HostExitAuthorityRecoveryRequired {
+                reason: "quarantined stopped exit was not accepted",
+            })?;
+            // The key, frozen birth and Kernel-minted witness were checked
+            // before committing; no fallible queue allocation follows this
+            // one-time transfer. The caller owns this same Kernel instance.
+            let mut child = custody
+                .retire_with_accepted_exit(snapshot.key, accepted)
+                .map_err(|error| Error::Backend(format!("retire quarantined CPU: {error}")))?;
+            survivor_plan.apply(&mut child.parked_child_processes);
+            self.parked_child_processes
+                .append(&mut child.parked_child_processes);
+            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                op: "QuarantinedProcessTerminationCompleted",
+                application: launch.application.clone(),
+                command_line: launch.command_line.clone(),
+                path: None,
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_id: Some(launch.process_id),
+                thread_id: Some(launch.thread_id),
+                result: Some(requested_code),
+                error: None,
+                detail: Some("terminal_cpu_custody_retired_after_exact_exit".to_owned()),
+            });
+            retired += 1;
+        }
+        Ok(retired)
+    }
+
+    #[cfg(feature = "unicorn")]
     #[cfg(test)]
     pub fn prune_exited_and_active_processes_from_parked(&mut self, kernel: &mut CeKernel) {
         self.prune_exited_and_active_processes_from_parked_with_framebuffer(kernel, None);
@@ -9170,6 +9301,39 @@ impl UnicornMips {
         framebuffer: &mut dyn Framebuffer,
         limits: UnicornRunLimits,
     ) -> AttemptExecution {
+        self.run_until_import_trap_with_framebuffer_limits_report_internal(
+            kernel,
+            framebuffer,
+            limits,
+            None,
+        )
+    }
+
+    /// Machine-run-loop entry for the transitional non-runnable child-fault
+    /// directory. The legacy direct entry remains for bounded fixtures;
+    /// runnable CPU permits are not introduced by this cut.
+    pub fn run_until_import_trap_with_framebuffer_limits_report_with_custody(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+        custody: &mut CpuCustody,
+    ) -> AttemptExecution {
+        self.run_until_import_trap_with_framebuffer_limits_report_internal(
+            kernel,
+            framebuffer,
+            limits,
+            Some(custody),
+        )
+    }
+
+    fn run_until_import_trap_with_framebuffer_limits_report_internal(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+        custody: Option<&mut CpuCustody>,
+    ) -> AttemptExecution {
         let mut report = NativeAttemptReport::no_attempt(limits);
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
         if self.writable_main_image.is_some() {
@@ -9303,10 +9467,10 @@ impl UnicornMips {
             );
         }
         #[cfg(not(feature = "unicorn"))]
-        let _ = limits;
+        let _ = (limits, custody);
         #[cfg(feature = "unicorn")]
         {
-            let result = self.run_with_unicorn(kernel, framebuffer, limits, &mut report);
+            let result = self.run_with_unicorn(kernel, framebuffer, limits, &mut report, custody);
             return AttemptExecution { report, result };
         }
 
@@ -9408,14 +9572,18 @@ impl UnicornMips {
         framebuffer: &mut dyn Framebuffer,
         limits: UnicornRunLimits,
         report: &mut NativeAttemptReport,
+        custody: Option<&mut CpuCustody>,
     ) -> Result<()> {
         let mut outcome_before_handoff = None;
+        let mut stopped_deferred_child_error = false;
         let result = self.run_with_unicorn_attempt(
             kernel,
             framebuffer,
             limits,
             report,
             &mut outcome_before_handoff,
+            &mut stopped_deferred_child_error,
+            custody,
         );
         if report.attempt_id.is_none() {
             report.final_outcome = NativeSliceOutcome::NoAttempt;
@@ -9462,8 +9630,10 @@ impl UnicornMips {
                 // owner, even when a checked tail reports a BackendError.
                 // Error paths never rotate, so this still poisons the
                 // outgoing process CPU rather than an incoming child.
-                self.private_slab_attempt_poisoned = true;
-                self.saved_context = None;
+                if !stopped_deferred_child_error {
+                    self.private_slab_attempt_poisoned = true;
+                    self.saved_context = None;
+                }
             }
         }
         // Do not overwrite the native ending owner with an incoming child.
@@ -9478,6 +9648,8 @@ impl UnicornMips {
         limits: UnicornRunLimits,
         report: &mut NativeAttemptReport,
         outcome_before_handoff: &mut Option<NativeSliceOutcome>,
+        stopped_deferred_child_error: &mut bool,
+        mut custody: Option<&mut CpuCustody>,
     ) -> Result<()> {
         use std::{
             cell::{Cell, RefCell},
@@ -14913,6 +15085,7 @@ impl UnicornMips {
         }
         .outcome();
         let mut deferred_launch_error = None;
+        let mut deferred_quarantined_child_fault = false;
         let mut deferred_view_sync_error = None;
         if result.is_ok()
             && native_count_stop_query.is_ok()
@@ -14923,7 +15096,7 @@ impl UnicornMips {
             && scheduler_block_access_failure.is_none()
             && deferred_process_launch.get()
         {
-            deferred_launch_error = run_pending_process_launches(
+            deferred_launch_error = run_pending_process_launches_with_custody(
                 &mut uc,
                 kernel,
                 native_owner_pid,
@@ -14932,6 +15105,8 @@ impl UnicornMips {
                 limits,
                 &deferred_process_dll_search_dirs,
                 &parked_child_processes,
+                custody.as_deref_mut(),
+                &mut deferred_quarantined_child_fault,
             )
             .err();
             if deferred_launch_error.is_none() {
@@ -15695,16 +15870,58 @@ impl UnicornMips {
         }
         if let Some(err) = deferred_launch_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
-            if diagnostic_private {
+            if diagnostic_private && !deferred_quarantined_child_fault {
                 reject_private_attempt!(err);
             }
-            self.persist_run_state(&run_state, kernel);
-            let _ = sync_file_mapping_views_from_unicorn_guarded(
+            let parent_state_clean = native_count_stop_query.is_ok()
+                && native_timeout_query.is_ok()
+                && matches!(report.raw_stop_pc, AttemptObservation::Value(_))
+                && native_capture_result.is_ok()
+                && snapshot_context_result.is_ok()
+                && native_hook_control_error.borrow().is_none()
+                && post_run_pc_repair_error.is_none()
+                && deferred_view_sync_error.is_none()
+                && mapped_blob_sync_error.is_none()
+                && framebuffer_error.is_none()
+                && staged_saved_context.is_some()
+                && staged_context_thread_birth.is_some();
+            if diagnostic_private && !parent_state_clean {
+                reject_private_attempt!(err);
+            }
+            if !diagnostic_private {
+                self.persist_run_state(&run_state, kernel);
+            }
+            let parent_view_sync = sync_file_mapping_views_from_unicorn_guarded(
                 &mut uc,
                 kernel,
                 native_owner_pid,
                 &sealed_host_write_guard,
             );
+            // A child fault must not erase the parent's independently
+            // captured return state. Only retain A's continuation after its
+            // own native owner has synchronized and closed cleanly. The
+            // child remains in its separate quarantined custody slot.
+            if parent_state_clean
+                && parent_view_sync.is_ok()
+                && mapped_blob_sync_error.is_none()
+                && framebuffer_error.is_none()
+                && sealed_host_write_guard.poison_error().is_none()
+                && uc.finish().is_ok()
+            {
+                if diagnostic_private {
+                    self.saved_context = staged_saved_context;
+                    self.saved_context_thread_birth = staged_context_thread_birth;
+                    self.saved_worker_exit_birth = staged_worker_exit_birth;
+                    self.persist_run_state_handles(&run_state);
+                    self.private_slab_attempt_poisoned = false;
+                }
+                *stopped_deferred_child_error = true;
+                report.failure_operation = Some("deferred child CPU execution");
+            } else if diagnostic_private {
+                // The child is already retained, but A itself did not close
+                // safely. Keep its ordinary private-attempt recovery fence.
+                self.persist_run_state_handles(&run_state);
+            }
             return Err(err);
         }
         if let Some(err) = deferred_view_sync_error {
@@ -20252,6 +20469,7 @@ fn restore_pre_cpu_launch_error(
 }
 
 #[cfg(feature = "unicorn")]
+#[cfg(all(test, feature = "unicorn"))]
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
@@ -20261,6 +20479,34 @@ fn run_pending_process_launches<D>(
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
     parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+) -> Result<()> {
+    let mut quarantined_child_fault = false;
+    run_pending_process_launches_with_custody(
+        parent_uc,
+        kernel,
+        parent_owner_pid,
+        sealed_host_write_guard,
+        framebuffer,
+        limits,
+        dll_search_dirs,
+        parked_child_processes,
+        None,
+        &mut quarantined_child_fault,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn run_pending_process_launches_with_custody<D>(
+    parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    parent_owner_pid: u32,
+    sealed_host_write_guard: &SealedHostWriteGuard,
+    framebuffer: &mut dyn Framebuffer,
+    limits: UnicornRunLimits,
+    dll_search_dirs: &[std::path::PathBuf],
+    parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    mut custody: Option<&mut CpuCustody>,
+    quarantined_child_fault: &mut bool,
 ) -> Result<()> {
     let mut launches: VecDeque<_> = kernel.take_pending_process_launches().into();
     if launches.is_empty() {
@@ -20416,9 +20662,34 @@ fn run_pending_process_launches<D>(
                 ));
             }
         };
+        // Hold a no-allocation terminal slot before the original child CPU
+        // exists. A loader/setup error cancels it and retries the launch;
+        // once the CPU is admitted, a native error cannot drop that owner.
+        let custody_key = if let Some(directory) = custody.as_deref_mut() {
+            match directory.reserve(launch_birth) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    return Err(restore_pre_cpu_launch_error(
+                        kernel,
+                        &mut launches,
+                        Some(launch),
+                        Error::Backend(format!("reserve child CPU custody: {error}")),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         let mut child = match UnicornMips::new() {
             Ok(child) => child,
             Err(error) => {
+                if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                    directory
+                        .cancel_reservation(key, launch_birth)
+                        .map_err(|cancel| {
+                            Error::Backend(format!("cancel unbuilt child CPU custody: {cancel}"))
+                        })?;
+                }
                 return Err(restore_pre_cpu_launch_error(
                     kernel,
                     &mut launches,
@@ -20452,17 +20723,31 @@ fn run_pending_process_launches<D>(
         kernel.set_current_process_id(launch.process_id);
         kernel.reset_current_process_exit_state();
 
-        let child_result = (|| -> Result<(ChildProcessRunOutcome, UnicornMips)> {
+        let mut child_admitted = false;
+        let child_result = (|| -> Result<ChildProcessRunOutcome> {
             child.owned_process_launch = Some(launch.clone());
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
             child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
-            if let Err(error) =
-                child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)
-            {
+            child_admitted = true;
+            let execution = if let Some(directory) = custody.as_deref_mut() {
+                child.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                    kernel,
+                    framebuffer,
+                    limits,
+                    directory,
+                )
+            } else {
+                child.run_until_import_trap_with_framebuffer_limits_report(
+                    kernel,
+                    framebuffer,
+                    limits,
+                )
+            };
+            if let Err(error) = execution.result {
                 if error.is_host_exit_recovery_required() {
-                    return Ok((ChildProcessRunOutcome::RecoveryRequired(error), child));
+                    return Ok(ChildProcessRunOutcome::RecoveryRequired(error));
                 }
                 return Err(error);
             }
@@ -20474,7 +20759,7 @@ fn run_pending_process_launches<D>(
             // Keep the CPU until the kernel accepts a checked completion. A
             // rejected exit must remain owned even if the child stopped at an
             // exit stub during this first slice.
-            Ok((outcome, child))
+            Ok(outcome)
         })();
         let child_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
 
@@ -20488,9 +20773,34 @@ fn run_pending_process_launches<D>(
         kernel.set_process_show_cmd(saved_show_cmd);
         kernel.set_current_process_state(saved_process_state);
 
-        let (outcome, mut child) = match child_result {
-            Ok((outcome, child)) => (outcome, child),
+        let outcome = match child_result {
+            Ok(outcome) => {
+                if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                    directory
+                        .cancel_reservation(key, launch_birth)
+                        .map_err(|cancel| {
+                            Error::Backend(format!("cancel runnable child CPU custody: {cancel}"))
+                        })?;
+                }
+                outcome
+            }
             Err(err) => {
+                if child_admitted {
+                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                        // This exact reservation was created above, and
+                        // recursive child launches use different births.
+                        // A failure is a broken internal invariant, not a
+                        // recoverable return that may drop the CPU payload.
+                        directory
+                            .quarantine_reserved(key, launch_birth, child)
+                            .expect("authentic reserved child CPU custody transfer");
+                        *quarantined_child_fault = true;
+                    }
+                } else if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                    directory
+                        .cancel_reservation(key, launch_birth)
+                        .expect("authentic unadmitted child custody reservation");
+                }
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildError",
                     application: launch.application.clone(),
@@ -20502,8 +20812,25 @@ fn run_pending_process_launches<D>(
                     thread_id: Some(launch.thread_id),
                     result: None,
                     error: Some(err.to_string()),
-                    detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
+                    detail: Some(format!(
+                        "show_cmd={:?} child_admitted={child_admitted} custody_key={custody_key:?}",
+                        launch.show_cmd
+                    )),
                 });
+                if !child_admitted {
+                    return Err(restore_pre_cpu_launch_error(
+                        kernel,
+                        &mut launches,
+                        Some(launch),
+                        err,
+                    ));
+                }
+                // The child has crossed its CPU admission boundary. Never
+                // replay this CreateProcess launch; only unattempted tail
+                // launches remain pending. The original CPU is quarantined
+                // in production, while legacy direct fixtures have no
+                // machine directory and retain their historical behavior.
+                kernel.restore_pending_process_launches(launches.into());
                 return Err(err);
             }
         };
@@ -86344,60 +86671,117 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: ordinary first-slice native error drops an admitted child CPU"]
     fn ordinary_first_slice_native_fault_retains_admitted_child_cpu() -> crate::Result<()> {
+        const STACK_VALUE: u32 = 0x7e31_a5c2;
+        const EXIT_CODE: u32 = 0x6b;
+        let stack_page = super::IMPORT_TRAP_BASE - 0x10000 - 0x3000;
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
         std::fs::create_dir_all(&test_root).unwrap();
-        eprintln!("FIXTURE_TEMP_ROOT={}", test_root.display());
         let parent_path = test_root.join("parent.exe");
-        let child_path = test_root.join("faulting-child.exe");
-        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        let child_path = test_root.join("survivor.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
         let mut child_bytes = tiny_mips_spinner_pe();
-        write_vec_u32(&mut child_bytes, 0x200, 0x3c08_2000); // lui t0,0x2000
-        write_vec_u32(&mut child_bytes, 0x204, 0x8d02_0000); // lw v0,0(t0), unmapped
-        write_vec_u32(&mut child_bytes, 0x208, 0x2403_55aa); // must not execute
+        for (index, word) in [
+            0x3c08_0000 | (stack_page >> 16),    // lui t0, fixed stack page high
+            0x3508_0000 | (stack_page & 0xffff), // ori t0, t0, fixed stack page low
+            0x3c09_0000 | (STACK_VALUE >> 16),   // lui t1, stack value high
+            0x3529_0000 | (STACK_VALUE & 0xffff), // ori t1, t1, stack value low
+            0xad09_0000,                         // sw t1, 0(t0): native first touch
+            0x8d0a_0000,                         // lw t2, 0(t0): guest readback
+            0x2550_0001,                         // addiu s0,t2,1: reached past load
+            0x3c0b_2000,                         // lui t3,0x2000
+            0x8d62_0000,                         // lw v0,0(t3): native read fault
+            0x2403_55aa,                         // must not execute
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut child_bytes, 0x200 + index * 4, word);
+        }
         std::fs::write(&child_path, child_bytes).unwrap();
 
         let mut kernel = phase1_kernel("parent.exe")?;
-        kernel.set_process_module_host_path(parent_path);
-        let parent_pid = kernel.current_process_id();
-        let launch = kernel.queue_process_launch(Some("faulting-child.exe".to_owned()), None);
-        // Kernel publishes this birth before the local child CPU is built.
-        // Publication is not itself admission to a machine-owned CPU slot.
-        let published_birth = launch.process_birth.expect("published child birth");
-        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
-            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
-        let guard = super::SealedHostWriteGuard::default();
-        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let parent_entry = cpu.entry.expect("parent entry");
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("create fixture CPU custody: {error}")))?;
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
-
-        let error = super::run_pending_process_launches(
-            &mut parent_uc,
+        assert!(
+            kernel
+                .handles
+                .file_mappings()
+                .all(|mapping| mapping.views.is_empty())
+        );
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
             &mut kernel,
-            parent_pid,
-            &guard,
             &mut framebuffer,
             super::UnicornRunLimits {
-                instruction_limit: 64,
+                instruction_limit: 128,
                 wall_clock_limit_ms: 500,
                 stop_pc: None,
                 live_pump: false,
             },
-            &[],
-            &parked,
-        )
-        .expect_err("the child must encounter its native read fault");
+            &mut custody,
+        );
+        let error = first
+            .result
+            .expect_err("guest-created child must encounter its native read fault");
         assert!(
             matches!(error, Error::Backend(_)),
             "ordinary fault: {error}"
+        );
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            first.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(parent_entry + 18 * 4),
+            "A executed its CreateProcessW import before the deferred B slice"
+        );
+        assert_eq!(
+            first.report.failure_operation(),
+            Some("deferred child CPU execution")
+        );
+        let parent_saved = cpu.saved_context.as_ref().expect("staged A return context");
+        assert_eq!(parent_saved.pc, parent_entry + 18 * 4);
+        assert_eq!(parent_saved.regs.regs[2], 1, "CreateProcessW BOOL return");
+        assert_eq!(
+            parent_saved.regs.regs[17], 0,
+            "A did not replay past the import"
+        );
+        assert!(!cpu.private_slab_attempt_poisoned);
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert!(!kernel.has_pending_process_launches());
+
+        let queued: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessWQueued")
+            .collect();
+        assert_eq!(queued.len(), 1, "one executed guest CreateProcessW");
+        let child_handle = queued[0].process_handle.expect("child process handle");
+        let child_tid = queued[0].thread_id.expect("child thread ID");
+        let child_birth = kernel
+            .handles
+            .process_birth_key_for_handle(child_handle)
+            .expect("exact child birth");
+        assert_eq!(queued[0].process_id, Some(child_birth.process_id()));
+        assert_eq!(
+            kernel
+                .handles
+                .process_primary_thread_birth(child_birth)
+                .map(|birth| birth.thread_id()),
+            Some(child_tid)
         );
         let child_error = kernel
             .recent_process_ops()
             .iter()
             .find(|record| {
                 record.op == "CreateProcessChildError"
-                    && record.process_id == Some(launch.process_id)
+                    && record.process_id == Some(child_birth.process_id())
             })
             .expect("child loaded and attempted its first native slice");
         assert_eq!(
@@ -86412,49 +86796,92 @@ mod unicorn_tests {
             "child failure must be the injected native read fault: {:?}",
             child_error.error
         );
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(
+            kernel.process_exit_code(child_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(child_handle, 1), Some(false));
+        assert_eq!(custody.counts().reserved, 0);
+        assert_eq!(custody.counts().quarantined, 1);
+        assert!(
+            cpu.parked_child_processes.is_empty(),
+            "B is not a legacy parked CPU"
+        );
+        let snapshots = custody.snapshots();
+        assert_eq!(snapshots.len(), 1, "sole original B CPU owner");
+        let child = &snapshots[0];
+        assert_eq!(child.birth, child_birth);
+        assert_eq!(child.state, super::CpuCustodyState::Quarantined);
+        assert_eq!(
+            custody
+                .snapshot_exact(child.key, child_birth)
+                .map_err(|error| Error::Backend(format!("inspect child CPU custody: {error}")))?,
+            *child
+        );
+        assert_eq!(
+            child.native_outcome,
+            Some(super::NativeSliceOutcome::NativeError)
+        );
+        let fault = child.memory_fault.as_ref().expect("native memory fault");
+        assert_eq!(fault.address, 0x2000_0000);
+        assert_eq!(fault.pc, 0x0040_1000 + 8 * 4);
+        assert!(fault.access.contains("READ_UNMAPPED"));
+        custody
+            .with_quarantined(child.key, child_birth, |retained| {
+                assert_eq!(
+                    retained
+                        .owned_process_launch
+                        .as_ref()
+                        .and_then(|launch| launch.process_birth),
+                    Some(child_birth)
+                );
+                assert!(retained.private_slab_attempt_poisoned);
+                assert!(retained.saved_context.is_none());
+                assert!(retained.run_slice_generation > 0);
+                assert!(retained.parked_child_processes.is_empty());
+                assert_eq!(retained.native_engine_identity_for_test(), None);
+            })
+            .map_err(|error| Error::Backend(format!("borrow child CPU custody: {error}")))?;
+        let pin = kernel
+            .memory
+            .private_page_pin(child_birth, stack_page)
+            .expect("B's real MIPS store committed its fixed stack page");
+        assert_eq!(pin.identity().owner(), child_birth);
+        assert!(pin.is_host_block_backed());
+        let mut stored = [0_u8; 4];
+        pin.read_bytes(0, &mut stored)
+            .expect("canonical B stack value");
+        assert_eq!(u32::from_le_bytes(stored), STACK_VALUE);
         assert!(
             kernel
                 .handles
-                .process_execution_live_by_birth(published_birth)
+                .file_mappings()
+                .all(|mapping| mapping.views.is_empty())
         );
-        assert_eq!(
-            kernel.process_exit_code(launch.process_handle),
-            Some(crate::ce::kernel::STILL_ACTIVE)
-        );
-        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
-        assert_eq!(kernel.current_process_id(), parent_pid);
 
-        let parked = parked.borrow();
+        assert!(kernel.terminate_process(child_handle, EXIT_CODE));
         assert_eq!(
-            parked.len(),
+            custody.counts().quarantined,
             1,
-            "ordinary native error must retain the sole admitted child CPU"
+            "request is not accepted exit"
         );
-        let child = &parked[0];
-        assert_eq!(child.process_state.process_id, launch.process_id);
-        assert_eq!(child.process_handle, Some(launch.process_handle));
-        assert_eq!(child.module_host_path, child_path);
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(child_handle, 1), Some(false));
         assert_eq!(
-            child
-                .cpu
-                .owned_process_launch
-                .as_ref()
-                .and_then(|owned| owned.process_birth),
-            Some(published_birth)
+            cpu.try_complete_requested_quarantined_process_exits_with_framebuffer(
+                &mut kernel,
+                Some(&mut framebuffer),
+                &mut custody,
+            )?,
+            1
         );
-        let snapshot = child
-            .cpu
-            .last_debug_snapshot()
-            .expect("faulting CPU snapshot");
-        let fault = snapshot.memory_fault.as_ref().expect("native memory fault");
-        assert_eq!(fault.address, 0x2000_0000);
-        assert_eq!(fault.pc, 0x0040_1004);
-        assert!(fault.access.contains("READ_UNMAPPED"));
-        assert_ne!(snapshot.pc, 0, "native fault is not a PC-zero exit");
-        assert_eq!(
-            child.cpu.last_native_slice_outcome(),
-            super::NativeSliceOutcome::NativeError
-        );
+        assert!(!custody.has_any_custody());
+        assert!(cpu.parked_child_processes.is_empty());
+        assert!(!kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.process_exit_code(child_handle), Some(EXIT_CODE));
+        assert_eq!(kernel.is_wait_ready(child_handle, 1), Some(true));
+        assert!(kernel.memory.private_page_pins_for(child_birth).is_empty());
         Ok(())
     }
 
