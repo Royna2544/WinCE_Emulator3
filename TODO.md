@@ -214,16 +214,22 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [current-source pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
      enumerates the remaining raw-loan sites and the native-fault CPU-drop
      path; it is source inventory, not a port implementation.
-      The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
-      routes that callback's 19 Kernel and two framebuffer dereferences
-      through one guarded raw adapter and rejects a preseeded busy service
-      point. Its fresh per-attempt flag is shared by no other hook family.
-      Current source has one native entry, sequential import/block hooks and
-      deferred child execution; there is no natural overlap to justify a
-      synthetic shared-flag gate. Audit reachable raw-alias/host-callback
-      loans instead. Preserve the whole-attempt
-      setup/tail, selected-birth, modal partial-effects, A-to-B handoff and
-      native-fault CPU-custody gates; do not count this as the port.
+     The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+     routes that callback's 19 Kernel and two framebuffer dereferences
+     through one guarded raw adapter and rejects a preseeded busy service
+     point. Its fresh per-attempt flag is shared by no other hook family.
+     Current source has one native entry, sequential import/block hooks and
+     deferred child execution; there is no natural overlap to justify a
+     synthetic shared-flag gate. The subsequent
+     [native-entry precondition](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+     refuses a second same-host-thread native entry before private CPU setup;
+     its forced-busy control retries on the same CPU, and sealed broad suites
+     pass. It is neither natural reentry nor a machine-owned leaf permit.
+     Audit reachable raw-alias/host-callback loans, including the post-native
+     child helper's Kernel loan and a child's first-touch memory fault.
+     Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
+     A-to-B handoff and native-fault CPU-custody gates; do not count either
+     guard as the connected port.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import

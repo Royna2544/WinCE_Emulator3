@@ -121,8 +121,8 @@ remote-control HTTP/WebSocket surface.
   already-exited-parent skip or ordinary first-slice error. The bounded
   [pre-CPU launch-retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
   keeps an already-published launch available for retry before any CPU
-  exists. Post-admission CPU owner loss remains open. Machine-owned
-  custody is the next connected Stage 3/4 source cut, not yet implemented.
+  exists. Post-admission CPU owner loss remains open. The callback-scoped
+  machine-state port precedes machine-owned custody; neither is implemented.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
 - The bounded [exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
@@ -137,6 +137,12 @@ remote-control HTTP/WebSocket surface.
    no-default suites (**2,176/0/10** and **1,539/0/2 ignored**). It refuses a
    preseeded-busy scheduler service with a typed error; natural self-reentry,
    other hook aliases, cross-hook reentry and machine-owned CPU custody remain open.
+- A [native-entry precondition](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+  now refuses same-host-thread nested guest execution before private CPU
+  setup; a preseeded-busy real-MIPS control verifies refusal and same-CPU
+  retry. Sealed 19-block release and no-default suites passed **2,178/0/10
+  ignored** and **1,539/0/2 ignored**. Natural reentry, a connected
+  Kernel/framebuffer port and child CPU custody remain unproved.
 - A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate

@@ -4,6 +4,20 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 bounded native-entry precondition
+
+The [source/test receipt](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
+seals `unicorn.rs` SHA-256 `55642d7b415f8227b2c6f8def2d3cd1f9cfde46d2d325edced803ef66932ed3d`.
+A same-host-thread guard now refuses a second native guest entry before private
+CPU setup; the preseeded-busy real-MIPS control returned typed Backend without
+guest execution, then the same CPU ran after the guard released. The initial
+late-guard retry failure is preserved. Sealed focused release passed **1/0**;
+complete release-feature and no-default suites passed **2,178/0/10 ignored**
+and **1,539/0/2 ignored** over 19 blocks each, with three feature checks
+exiting 0. This is a forced precondition control, not natural reentry or a
+machine-owned leaf permit. The connected Kernel/framebuffer port and
+post-admission child CPU custody remain open. No app or mount run was made.
+
 ## 2026-10-17 bounded scheduler-block self-reentry fence
 
 The [source/test receipt](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
