@@ -2542,7 +2542,7 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn seal_for_quarantine(&mut self) {
+    pub(crate) fn seal_for_quarantine(&mut self) {
         // Admission can precede the first native attempt. The transfer to
         // machine custody, not a particular error path, must make this CPU
         // terminal. Repeating the seal leaves fault/debug evidence intact.
@@ -20803,7 +20803,6 @@ fn run_pending_process_launches_with_custody<D>(
                         // A failure is a broken internal invariant. Report
                         // terminal ownership loss explicitly instead of
                         // panicking or claiming a recoverable child stop.
-                        child.seal_for_quarantine();
                         if let Err((failure, original_cpu)) =
                             directory.quarantine_reserved(key, launch_birth, child)
                         {

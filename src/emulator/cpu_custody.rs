@@ -218,6 +218,12 @@ impl CpuCustody {
         };
         match &slot.state {
             SlotState::Reserved { birth: frozen } if *frozen == birth => {
+                // The directory owns the terminal invariant, not whichever
+                // producer happened to transfer this exact admitted CPU.
+                #[cfg(feature = "unicorn")]
+                let mut cpu = cpu;
+                #[cfg(feature = "unicorn")]
+                cpu.seal_for_quarantine();
                 slot.state = SlotState::Quarantined { birth, cpu };
                 Ok(())
             }
