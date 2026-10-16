@@ -239,31 +239,27 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       [exact-primary stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
       covers its tested child/boot birth checks, not this descendant-publication
       or later-slice CPU-custody gap.
-      A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-      at its earlier seal executed an admitted synthetic MIPS child through its
-      first native slice. Its injected `READ_UNMAPPED` returned an ordinary
-      `Backend` error; the exact child birth stayed Kernel-live, `STILL_ACTIVE`
-      and unsignaled, but `run_pending_process_launches` dropped the local CPU
-      (queue 0 versus one required owner). Stamped final-source ignored
-      [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-      exited 101 at the sole-CPU-owner assertion (at
-      `unicorn.rs:85725` in that stamped source),
-      and [sealed-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
-      repeats the red (exit 101). The later
-      [current-source rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
-      still fails with zero parked CPU owners. This remains an offline source failure, not a
-      live iNavi or live-pump result. This native-fault control remains ignored;
-      the two stale
-      route-specific controls were retired.
-      The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
-      must cover it alongside the tested borrow conflict.
+      The [ignored native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
+      at its earlier seal dropped an admitted synthetic child's only CPU after
+      `READ_UNMAPPED`, with its exact Kernel birth still live and unsignaled.
+      Later historical reds [18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log),
+      [07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+      and the [pre-Cut-3a rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+      repeated that owner-loss result. The direct-helper ignored fixture has
+      since been replaced by an ordinary real-MIPS Cut 3a control, focused
+      debug/release green: it retains the original faulted B CPU in a
+      non-runnable machine slot, not the legacy parked tree. Final sealed broad
+      receipt/counts are pending. This bounded result does not repair the
+      nonempty descendant publication conflict above, other parked/active
+      owner-loss paths, or the public run wrapper's custody bypass. The two
+      stale route-specific controls were retired; none is a live iNavi result.
     - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
       refuses a preseeded busy block service but does not exclude raw
       code/import/memory-hook aliases or prove natural nested callbacks.
       Source order permits modal framebuffer restoration to consume a wait and
       publish pixels before a hypothetical nested fault is observed.
-      Whole-attempt access, partial-effects recovery, and the admitted-child
-      native-fault CPU drop remain open.
+      Whole-attempt access, partial-effects recovery, and full runnable/parked
+      CPU custody remain open despite the narrow Cut 3a fault quarantine.
     - The historical [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
       is fixed for the bounded Kernel query path by the
       [canonical birth gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).

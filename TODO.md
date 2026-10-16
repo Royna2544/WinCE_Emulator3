@@ -128,10 +128,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      The bounded [first-slice `Exited` source gate](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md)
      adds synthetic production-helper A→B preservation and a terminal
      held-parent-queue-borrow control; it does not execute the guest classifier.
-     First complete the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
-     and [O-T7](docs/DECISIONS.md) consumer inventory: both held-queue
-     publication and an ordinary post-admission first-slice error can drop
-     the only live child CPU owner. At its earlier source seal, the
+     Continue the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
+     and [O-T7](docs/DECISIONS.md) consumer inventory: held-queue
+     publication can still drop a live child CPU owner; the earlier ordinary
+     post-admission first-slice error was separately narrowed by Cut 3a
+     quarantine. At its earlier source seal, the
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
      proved a third route: after A's guest launch and exit, the
      already-exited-A skip dropped live B's CPU. Retain that receipt as
@@ -140,8 +141,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      still needs a reachable exact-owner fixture. The
      [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
      that proved an ordinary first-slice error left a still-live child
-     without CPU custody remains an ignored diagnostic, with its current-source
-     red noted below. The
+     without CPU custody is historical. An ordinary real-MIPS Cut 3a
+     replacement passes focused debug/release controls, with final broad
+     validation pending. The
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
@@ -184,11 +186,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [Attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
      first showed the admitted child's ordinary native fault losing its sole
      CPU owner. [Final-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
-     still exits 101 at that assertion. Keep the fixture ignored until
-     machine-owned custody repairs the path. The
+     still exited 101 at that earlier assertion. The ignored direct-helper
+     fixture is now replaced by an ordinary real-MIPS Cut 3a control; do not
+     treat the earlier red as the current narrow producer result. The
      [latest current-source rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
      again failed at zero parked child CPU owners after the canonical-primary
-     query fix; it is not a mounted-app result.
+     query fix at its earlier seal; it is not a mounted-app result.
      The current source stages a successful `CreateProcessW` parent return PC
      and defers the child launch until after native return in both modes,
      removing the former immediate in-hook child call. The bounded
@@ -207,13 +210,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      stage reentry/loan contract controls for the connected machine-state port;
      an isolated fault-hook `RefCell` wrapper cannot be sound while the native
      call retains `&mut CeKernel` and the other raw hooks bypass it. The raw
-     pointer, reentry and CPU custody remain unchanged. The first accepted
+     pointer and reentry boundaries remain unchanged; narrow non-runnable
+     Cut 3a custody does not make this a port. The first accepted
      port cut must span native setup, all hook families, post-native teardown
      and deferred child handoff with no loan held across reentry; a one-hook
      fault test alone is diagnostic, not O-T7 acceptance. The
      [current-source pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
-     enumerates the remaining raw-loan sites and the native-fault CPU-drop
-     path; it is source inventory, not a port implementation.
+     enumerates the remaining raw-loan sites and the then-native-fault
+     CPU-drop path; it is source inventory, not a port implementation.
      The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
      routes that callback's 19 Kernel and two framebuffer dereferences
      through one guarded raw adapter and rejects a preseeded busy service
@@ -228,17 +232,20 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Audit reachable raw-alias/host-callback loans, including the post-native
      child helper's Kernel loan and a child's first-touch memory fault.
      Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
-     A-to-B handoff and native-fault CPU-custody gates; do not count either
+     A-to-B handoff and full CPU-custody gates; do not count either
      guard as the connected port.
-     Stage [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-review-answer-not-implemented)
-     as a distinct non-runnable custody cut: first separate pre-CPU retry
-     errors from admitted native errors, then connect the exact-birth slot
-     producer to main's run-loop owner, checked exit/prune retirement,
-     checkpoint refusal, status/debug and one-owner controls. Only in that
-     same sealed cut replace the existing ignored direct-helper native-fault
-     red with a green real-MIPS post-native first-touch/fault witness. Do not
-     infer general VM/file-view cleanup or a runnable leaf permit from 3a;
-     the owner-page resource audit records the currently missing exit path.
+     Finish [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-focused-source-cut-final-broad-pending)
+     validation/receipt on one source seal. Its focused real-MIPS debug/release
+     control now executes A's `CreateProcessW` and B's fixed-stack first touch
+     plus native fault; the original B CPU stays in a non-runnable exact-birth
+     slot instead of being dropped or parked in the legacy tree. A's staged
+     return survives native sync/finish. The main run loop owns the slot,
+     status/debug show its identity and retained mapped-blob bytes (not RSS),
+     and checkpoint save/restore refuse it. A `TerminateProcess` request
+     leaves B live; same-Kernel accepted exit retires its slot and fixed stack.
+     The pre-seal a03 broad **2,183/0/9 ignored** is development-only; final
+     sealed broad/no-default counts and receipt remain pending. No general
+     private VM/file-view exit cleanup or runnable leaf permit follows.
      Separately, test and repair the
      [process-exit VM/view leak](KNOWN_BUGS.md#open-issues) with exact-birth
      cleanup, including legacy PID-only view ambiguity; do not fold it into
@@ -250,8 +257,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      generic `immediate_process_sync_error` and `synchronize native process
      mapping` label (`unicorn.rs:15092`); an import-register failure must not
      be reported as a mapping-sync failure.
-     Repair post-admission custody before unignoring those diagnostics, and
-     stage further expected reds
+     Keep the original direct-helper red as historical evidence; stage
+     further expected reds
      before replacing parked Box ownership with checked locators; do not add
      another pending owner vector. A controlled `Exited`-classifier fixture
      and separate live-pump deferred-launch/later-exit fixture remain.

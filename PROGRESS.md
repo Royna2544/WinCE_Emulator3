@@ -4,6 +4,29 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 Cut 3a non-runnable child CPU quarantine (focused; broad pending)
+
+An ordinary real-MIPS focused control passes under debug and release: A
+executes `CreateProcessW`, retains its staged nonzero return after native
+sync/finish, and B runs post-native. B's fixed-stack first-touch `SW`/`LW`
+commits an exact-birth page, then a `READ_UNMAPPED` native fault leaves its
+original CPU in one non-runnable, generation-checked machine custody slot,
+not the legacy parked tree. B remains Kernel-live and unsignaled; its native
+owner is closed and its unsafe saved continuation is cleared. A
+`TerminateProcess` request alone retains the slot; same-Kernel checked
+accepted exit retires it and the fixed-stack pin. The production run loop
+owns custody, monitor save/restore refuse while it exists, and status/debug
+publish slot identity and retained mapped-blob bytes. Those bytes are not a
+measured host RSS peak. The Kernel-minted exit witness carries exact birth,
+not independent machine lineage; its production use relies on the same
+Kernel instance. General private VM and mapped-file-view exit cleanup,
+runnable/parked custody, public-run bypass removal, a callback-scoped
+Kernel/framebuffer port and live-app behavior remain open.
+
+The pre-seal a03 broad release result (**2,183/0/9 ignored**) is development
+evidence only. Final source-sealed broad release/no-default counts and
+receipt: **pending**. No app or writable-mount run was made.
+
 ## 2026-10-17 bounded native-entry precondition
 
 The [source/test receipt](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
@@ -15,8 +38,9 @@ late-guard retry failure is preserved. Sealed focused release passed **1/0**;
 complete release-feature and no-default suites passed **2,178/0/10 ignored**
 and **1,539/0/2 ignored** over 19 blocks each, with three feature checks
 exiting 0. This is a forced precondition control, not natural reentry or a
-machine-owned leaf permit. The connected Kernel/framebuffer port and
-post-admission child CPU custody remain open. No app or mount run was made.
+machine-owned leaf permit. The connected Kernel/framebuffer port remained
+open at that seal; the later narrow Cut 3a quarantine is recorded above.
+No app or mount run was made.
 
 ## 2026-10-17 bounded scheduler-block self-reentry fence
 
@@ -89,8 +113,8 @@ on that failure. Sealed focused attempt 05 passed **1/0**; 19-block release
 attempt 04 passed **2,162/0/11 ignored** and no-default attempt 06 passed
 **1,532/0/3 ignored**. Source hash stayed unchanged throughout those
 attempts; HEAD changed during attempt 04 when the source was backed up.
-[Ignored current-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
-still fails at child CPU custody (exit 101). No later-slice,
+[Ignored attempt 07 at that seal](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+failed at child CPU custody (exit 101). No later-slice,
 nonempty-descendant or live-app result is claimed. The two old ignored
 A→B/held-borrow fixtures have been retired because they missed their
 post-deferral preconditions; their historical evidence remains retained.
@@ -114,9 +138,10 @@ and [17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first
 exited 101 at unmet preconditions of the old `Completed`/A-exit fixtures;
 neither reproduces nor repairs those pre-deferral failures. Ignored
 [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-still exits 101 when an admitted child's ordinary native fault loses its sole
+exited 101 when an admitted child's ordinary native fault lost its sole
 CPU owner. The two stale fixtures were subsequently retired; the native-fault
-fixture remains ignored. Machine-owned CPU custody, the
+fixture was later replaced by the narrow Cut 3a control above. Full machine-
+owned runnable/parked CPU custody, the
 callback-scoped Task/Kernel/framebuffer port, live-pump later-slice survivor
 behavior and Stage 5 scheduling remain open. No live app or writable-mount
 run occurred.
@@ -308,8 +333,8 @@ does not establish branch execution, boot timing or UI progress.
   seal and was later retired after missing the post-deferral route. This is
   not the live-pump route or a live iNavi result.
 - A [test-only first-slice native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-  now executes a synthetic child to `READ_UNMAPPED`. Its exact birth stays
-  Kernel-live, `STILL_ACTIVE` and unsignaled, but the ordinary error drops
+  executed a synthetic child to `READ_UNMAPPED` at its earlier seal. Its exact
+  birth stayed Kernel-live, `STILL_ACTIVE` and unsignaled, but the error dropped
   the constructed CPU (parent queue zero versus one required). The final
   ignored fixture is source-sealed at `unicorn.rs` SHA-256
   `508101e2942f997472de99c1765905756104e06caf6313ac96717292e3250c79`;
@@ -324,8 +349,8 @@ does not establish branch execution, boot timing or UI progress.
   errors before child CPU construction. The same-birth retry and malformed-PE
   tail controls pass **2/0**, two related pending-child controls pass **2/0**,
   and no-default and normal-feature checks pass. This does not retain a CPU
-  after DLL-load/native/publication failure; the post-admission reds above
-  remain open. No app or mount run followed.
+  after DLL-load/native/publication failure at that seal; the later narrow
+  Cut 3a fault quarantine is reported above. No app or mount run followed.
 - A [current-source, stamped primary-identity expected red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
   explicitly reran the ignored `task_ownership_primary_identity_outlives_launch_queue_and_trace_ring`
   control and failed at its intended assertion (exit 101) with unchanged
@@ -341,9 +366,9 @@ does not establish branch execution, boot timing or UI progress.
   supports durable identity but not complete exit semantics. Boot-main
   enumeration, broader exit reconstruction and CPU custody remained open at
   that gate; the later bounded stopped-exit gate is recorded above. No app ran.
-- A [current-source ignored native-fault rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
-  remains expected red (exit 101): a real-MIPS child faults on its first
-  admitted native slice, remains Kernel-live and has zero parked CPU owners.
+- A [pre-Cut-3a ignored native-fault rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+  was expected red (exit 101): a real-MIPS child faulted on its first
+  admitted native slice, remained Kernel-live and had zero parked CPU owners.
   The fixture's temporary directory was removed. This is not a live-app run.
 - The [v2 offline preflight gate](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
   passed **171/171** process-free source/build evidence controls and **83/83**

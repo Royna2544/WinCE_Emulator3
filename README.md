@@ -121,9 +121,15 @@ remote-control HTTP/WebSocket surface.
   already-exited-parent skip or ordinary first-slice error. The bounded
   [pre-CPU launch-retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
   keeps an already-published launch available for retry before any CPU
-  exists. Post-admission CPU owner loss remains open. The callback-scoped
-  machine-state port and machine-owned runnable custody are unimplemented; a
-  narrower non-runnable fault quarantine is planned as a separate cut.
+  exists. Those reds are historical: Cut 3a now passes focused debug/release
+  real-MIPS controls that keep the original faulted B CPU in non-runnable,
+  exact-birth custody after A's staged return and native sync/finish. A
+  termination request retains the CPU; same-Kernel accepted exit retires it
+  and B's fixed-stack pin. Final sealed broad/no-default counts and receipt
+  are pending; pre-seal a03 **2,183/0/9 ignored** is development evidence.
+  Status/debug report retained mapped-blob bytes, not measured RSS. The
+  callback-scoped machine-state port, runnable/parked custody, public-run
+  bypass removal and general private VM/file-view exit cleanup remain open.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
 - The bounded [exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
@@ -143,7 +149,8 @@ remote-control HTTP/WebSocket surface.
   setup; a preseeded-busy real-MIPS control verifies refusal and same-CPU
   retry. Sealed 19-block release and no-default suites passed **2,178/0/10
   ignored** and **1,539/0/2 ignored**. Natural reentry, a connected
-  Kernel/framebuffer port and child CPU custody remain unproved.
+  Kernel/framebuffer port and full child CPU custody remain unproved; the
+  later non-runnable Cut 3a quarantine is bounded above.
 - A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate
