@@ -150,12 +150,14 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
     - Modal pixels are neither prepared nor restored, and compatible retry is
       unproved; the modal-presence gate only refuses MessageBox/popup disposal
       ([design](docs/subsystems/gdi-framebuffer.md#d-011-modal-backing-presence-gate-bounded-source-test-cut)).
-    - Source audit, 2026-10-16: natural parked completion, initial-child
-      `Exited` and active exact-birth tree removal can drop nonmodal descendant
-      CPU queues (requested parked and initial-child `Completed` hoist them
-      instead). This is untested ownership loss, not an attributed live failure;
-      the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
-      has not yet been source-gated.
+    - The bounded [parked-survivor/saved-CPU-owner gate](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+      preserves tested nonmodal foreign CPU trees on natural parked and
+      requested-active stopped exit, with exact live saved-context thread
+      checks before effects. First-slice child `Exited`, other active exits,
+      requested parked siblings, already-exited skips and generic duplicate
+      pruning still lack this source gate and can lose descendants. Foreign
+      CPUs without saved context and PC resumability remain unproved. This
+      source-audited risk is not an attributed live-app failure.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.

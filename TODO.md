@@ -122,13 +122,16 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      and handle failures
      after successful preflight without claiming whole-exit
      atomicity, and settle foreign-link topology under O-G4.
-     Separately prove ownership of nonmodal descendant CPU queues on successful
-     natural parked, initial-child `Exited` and active exact-birth completion;
-     either hoist/extract them or fail closed before a destructive drop.
-     Use the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
-     and [CE6/REA boundary](evidence/ce6-rea-exit-20261016/findings.md)
-     for an expected-red connected source gate; no ROM kernel exit body was
-     identified and this is not live-app proof.
+     The bounded [parked-survivor/saved-CPU-owner gate](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+     now preserves tested nonmodal foreign CPU descendants on natural parked
+     and requested-active exits, and refuses a foreign saved context without
+     its matching execution-live current thread birth before exit effects.
+     Extend the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
+     to first-slice `Exited`, other active exits, requested parked siblings,
+     already-exited skips and generic duplicate pruning. Prove foreign CPUs
+     without saved context and PC resumability separately; no ROM kernel exit
+     body was identified by the [CE6/REA check](evidence/ce6-rea-exit-20261016/findings.md),
+     and this is not live-app proof.
      Give the already-exited parked-CPU cleanup branch a typed retention or
      quarantine rule for residual modal state; it has no earlier exit to
      preflight at that point.

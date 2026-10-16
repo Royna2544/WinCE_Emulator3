@@ -133,6 +133,20 @@ found per-process thread/handle cleanup and distinct dumped-COREDLL
 `TerminateProcess`/`CloseHandle` wrappers. It did not locate the dumped
 kernel's exit body or establish live child-process behavior. The current
 parked CPU tree is not process-lifetime authority.
+- Bounded parked-survivor and saved-CPU-owner source gate
+  ([receipt](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)):
+  natural parked and requested-active stopped exits preserve the original
+  nonmodal foreign CPU tree, context and wait after exact-birth process
+  retirement. A saved-context survivor must have a nonzero current TID
+  matching its saved exact thread birth, and that thread must still be
+  execution-live; otherwise exit refuses before effects. The parked record's
+  representative TID is not CPU authority. Four focused release controls
+  passed; the combined sealed source passed release **2,144/0/10 ignored**
+  and no-default **1,524/0/3 ignored**, each across 19 result blocks.
+  Earlier a09 passed on a superseded source. First-slice `Exited`, other
+  active exits, requested parked siblings, already-exited cleanup, generic
+  duplicate pruning, foreign CPUs without saved context and PC resumability
+  remain unproved. No live app or writable-mount run was made.
 - D-011 modal-presence refusal
   ([receipt](evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)):
   exact-birth stopped exits fail closed before Kernel effects when the affected
