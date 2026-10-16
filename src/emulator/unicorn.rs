@@ -80318,7 +80318,10 @@ mod unicorn_tests {
         let parent_path = test_root.join("parent.exe");
         let child_path = test_root.join("survivor.exe");
         std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
-        std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_image = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_image, 0x200, 0x03e0_0008); // jr ra: bounded child exit
+        write_vec_u32(&mut child_image, 0x204, 0); // delay slot
+        std::fs::write(&child_path, child_image).unwrap();
 
         let mut kernel = phase1_kernel("parent.exe")?;
         kernel.set_process_module_host_path(parent_path.clone());
@@ -80378,17 +80381,31 @@ mod unicorn_tests {
         assert_eq!(actual, expected, "parent-visible process information");
         assert!(!kernel.has_pending_process_launches());
         assert!(kernel.recent_process_ops().iter().any(|record| {
-            record.op == "CreateProcessChildParked" && record.process_id == Some(expected[2])
+            record.op == "CreateProcessResolved" && record.process_id == Some(expected[2])
         }));
         assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(
+            kernel
+                .handles
+                .process_birth_key_for_handle(expected[0])
+                .map(|birth| birth.process_id()),
+            Some(expected[2])
+        );
 
         let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
             &mut kernel,
             &mut framebuffer,
-            limits,
+            super::UnicornRunLimits {
+                stop_pc: Some(entry + 19 * 4),
+                ..limits
+            },
         );
         second.result?;
         assert_eq!(second.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            cpu.saved_context.as_ref().expect("resumed parent").pc,
+            entry + 19 * 4
+        );
         assert_eq!(
             cpu.saved_context
                 .as_ref()
@@ -80406,6 +80423,318 @@ mod unicorn_tests {
                 .count(),
             1,
             "parent must not replay CreateProcessW"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_live_create_process_query_failure_keeps_exact_pending_child() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("parent entry");
+        // The real native count query must be zero at the import stop. Only
+        // its Rust adapter result is replaced, after CreateProcessW queues B.
+        cpu.native_engine
+            .arm_count_stop_query_error_once_for_test(0);
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        let error = first
+            .result
+            .expect_err("count-query guard must fail closed");
+        assert!(format!("{error:#}").contains("query native count stop"));
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            first.report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert!(matches!(
+            first.report.count_stop_query(),
+            super::AttemptObservation::Error(message) if message.contains("RESOURCE")
+        ));
+        assert_eq!(
+            first.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(entry + 18 * 4)
+        );
+        assert_eq!(
+            first.report.final_outcome(),
+            super::NativeSliceOutcome::NativeError
+        );
+        assert_eq!(
+            first.report.failure_operation(),
+            Some("query native count stop")
+        );
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(cpu.saved_context.is_none());
+
+        let queued_pids: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessWQueued")
+            .map(|record| record.process_id)
+            .collect();
+        assert_eq!(queued_pids.len(), 1);
+        let pending = kernel.take_pending_process_launches();
+        assert_eq!(pending.len(), 1, "deferred guard did not take the child");
+        let launch = &pending[0];
+        let child_birth = launch.process_birth.expect("queued process birth");
+        let thread_birth = launch.primary_thread_birth.expect("queued thread birth");
+        assert_eq!(
+            child_birth,
+            kernel
+                .handles
+                .process_birth_key_for_handle(launch.process_handle)
+                .expect("handle birth")
+        );
+        assert_eq!(
+            thread_birth,
+            kernel
+                .handles
+                .thread_birth_key_for_handle(launch.thread_handle)
+                .expect("thread handle birth")
+        );
+        assert_eq!(queued_pids[0], Some(launch.process_id));
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(cpu.parked_child_processes.is_empty());
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.process_id == Some(launch.process_id)
+                && matches!(
+                    record.op,
+                    "CreateProcessResolved" | "CreateProcessChildParked"
+                )
+        }));
+        kernel.restore_pending_process_launches(pending.clone());
+
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        assert!(
+            second.result.is_err(),
+            "poisoned parent cannot replay import"
+        );
+        assert!(second.report.attempt_id().is_none());
+        assert_eq!(kernel.take_pending_process_launches(), pending);
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn non_live_create_process_bad_child_preserves_typed_error_and_birth() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), b"not a MIPS PE").unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let error = execution.result.expect_err("bad child PE must fail");
+        assert!(matches!(&error, Error::InvalidArgument(_)), "{error:#}");
+        assert_eq!(execution.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            execution.report.final_outcome(),
+            super::NativeSliceOutcome::BackendError
+        );
+        assert_eq!(
+            execution.report.failure_operation(),
+            Some("private native post-run tail")
+        );
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(cpu.saved_context.is_none());
+        assert!(cpu.parked_child_processes.is_empty());
+        let pending = kernel.take_pending_process_launches();
+        assert_eq!(pending.len(), 1);
+        let launch = &pending[0];
+        let child_birth = launch.process_birth.expect("original queued child birth");
+        assert_eq!(
+            kernel
+                .handles
+                .process_birth_key_for_handle(launch.process_handle),
+            Some(child_birth)
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessResolved" && record.process_id == Some(launch.process_id)
+        }));
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.process_id == Some(launch.process_id)
+                && matches!(
+                    record.op,
+                    "CreateProcessChildParked" | "CreateProcessChildError"
+                )
+        }));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "Stage 5 non-live scheduling: a spinning child can starve the parked creator"]
+    fn non_live_spin_child_retains_births_but_parent_can_starve() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&crate::pe::PeImage::inspect(&parent_path)?)?;
+        let entry = cpu.entry.expect("parent entry");
+        let parent_thread_birth = kernel
+            .handles
+            .thread_birth_key_by_id(cpu.current_thread_id())
+            .expect("parent thread birth");
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+        );
+        first.result?;
+        let queued: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessWQueued")
+            .collect();
+        assert_eq!(queued.len(), 1);
+        let child_birth = kernel
+            .handles
+            .process_birth_key_for_handle(queued[0].process_handle.expect("child handle"))
+            .expect("child birth");
+        assert_eq!(kernel.current_process_birth_key(), Some(child_birth));
+
+        let assert_custody = |cpu: &super::UnicornMips, kernel: &crate::ce::kernel::CeKernel| {
+            let selected = kernel.current_process_birth_key();
+            let parked_parent: Vec<_> = cpu
+                .parked_child_processes
+                .iter()
+                .filter(|process| {
+                    process.process_state.process_id == parent_birth.process_id()
+                        && process.cpu.saved_context_thread_birth == Some(parent_thread_birth)
+                        && kernel.handles.thread_birth_key_by_id(process.thread_id)
+                            == Some(parent_thread_birth)
+                })
+                .collect();
+            let parent_count = usize::from(selected == Some(parent_birth)) + parked_parent.len();
+            assert_eq!(parent_count, 1, "one exact parent continuation");
+            let parked_child_count = cpu
+                .parked_child_processes
+                .iter()
+                .filter(|process| {
+                    process
+                        .cpu
+                        .owned_process_launch
+                        .as_ref()
+                        .and_then(|launch| launch.process_birth)
+                        == Some(child_birth)
+                })
+                .count();
+            assert_eq!(
+                usize::from(selected == Some(child_birth)) + parked_child_count,
+                1,
+                "one exact child CPU"
+            );
+            if let Some(parent) = parked_parent.first() {
+                let saved = parent
+                    .cpu
+                    .saved_context
+                    .as_ref()
+                    .expect("parked parent context");
+                assert_eq!(saved.pc, entry + 18 * 4);
+                assert_eq!(saved.regs.regs[2], 1);
+                assert_eq!(saved.regs.regs[17], 0);
+            }
+        };
+        assert_custody(&cpu, &kernel);
+
+        let mut selected_births = vec![kernel.current_process_birth_key()];
+        let mut parent_progressed = false;
+        for _ in 0..4 {
+            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+            );
+            attempt.result?;
+            assert_custody(&cpu, &kernel);
+            selected_births.push(kernel.current_process_birth_key());
+            if kernel.current_process_birth_key() == Some(parent_birth)
+                && cpu
+                    .saved_context
+                    .as_ref()
+                    .is_some_and(|saved| saved.regs.regs[17] == 0x55aa)
+            {
+                parent_progressed = true;
+                break;
+            }
+        }
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1,
+            "parent must not replay CreateProcessW"
+        );
+        assert!(
+            parent_progressed,
+            "parent did not resume in four bounded non-live slices; selected={selected_births:?}"
         );
         Ok(())
     }
