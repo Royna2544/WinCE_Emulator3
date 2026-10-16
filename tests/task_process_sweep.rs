@@ -445,6 +445,167 @@ fn reconstructed_launch_without_birth_cannot_retire_live_process() -> Result<()>
 }
 
 #[test]
+fn reconstructed_launch_without_primary_birth_does_not_promote_reused_tid_worker() -> Result<()> {
+    let mut kernel = boot()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let process_birth = launch.process_birth.expect("original process birth");
+    let primary_birth = launch.primary_thread_birth.expect("original primary birth");
+    let (first_worker_handle, first_worker_tid) =
+        kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x407000, 0, false)?;
+    assert_ne!(first_worker_tid, launch.thread_id);
+
+    // Keep the process live while its original primary exits and loses its
+    // last alias. The new worker deliberately reuses that primary's public
+    // TID, but has a different exact birth in the same process.
+    assert!(kernel.mark_guest_thread_exited_by_id(launch.thread_id, 0x11));
+    assert!(kernel.close_handle(launch.thread_handle)?);
+    assert_eq!(
+        kernel.handles.thread_birth_key_by_id(launch.thread_id),
+        None
+    );
+    assert!(
+        kernel
+            .handles
+            .process_execution_live_by_birth(process_birth)
+    );
+    assert_eq!(
+        kernel.handles.process_primary_thread_birth(process_birth),
+        Some(primary_birth)
+    );
+    let reused_worker_handle = kernel.handles.try_create_thread_in_birth(
+        process_birth,
+        launch.thread_id,
+        0x408000,
+        0,
+        false,
+    )?;
+    let reused_worker_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(reused_worker_handle)
+        .expect("reused-TID worker birth");
+    assert_ne!(reused_worker_birth, primary_birth);
+    assert_eq!(reused_worker_birth.thread_id(), primary_birth.thread_id());
+    assert_eq!(
+        kernel.guest_thread_exit_code(reused_worker_handle),
+        Some(STILL_ACTIVE)
+    );
+
+    let mut reconstructed = launch.clone();
+    reconstructed.primary_thread_birth = None;
+    assert_eq!(reconstructed.process_birth, Some(process_birth));
+    assert!(kernel.mark_process_launch_exited(&reconstructed, 0x5a));
+    assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x5a));
+    assert_eq!(kernel.guest_thread_exit_code(first_worker_handle), Some(0));
+    assert_eq!(
+        kernel.guest_thread_exit_code(reused_worker_handle),
+        Some(0),
+        "a reused numeric TID cannot inherit the retired primary's process exit code"
+    );
+    Ok(())
+}
+
+#[test]
+fn supplied_reused_tid_worker_birth_cannot_replace_retired_canonical_primary() -> Result<()> {
+    let mut kernel = boot()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let process_birth = launch.process_birth.expect("original process birth");
+    let primary_birth = launch
+        .primary_thread_birth
+        .expect("canonical primary birth");
+    let (first_worker_handle, first_worker_tid) =
+        kernel.try_create_guest_thread_for_creator(launch.thread_id, 0x409000, 0, false)?;
+    assert_ne!(first_worker_tid, launch.thread_id);
+
+    assert!(kernel.mark_guest_thread_exited_by_id(launch.thread_id, 0x11));
+    assert!(kernel.close_handle(launch.thread_handle)?);
+    assert_eq!(
+        kernel.handles.thread_birth_key_by_id(launch.thread_id),
+        None
+    );
+    assert_eq!(
+        kernel.handles.process_primary_thread_birth(process_birth),
+        Some(primary_birth)
+    );
+    let reused_worker_handle = kernel.handles.try_create_thread_in_birth(
+        process_birth,
+        launch.thread_id,
+        0x40a000,
+        0,
+        false,
+    )?;
+    let reused_worker_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(reused_worker_handle)
+        .expect("reused-TID worker birth");
+    assert_ne!(reused_worker_birth, primary_birth);
+    assert_eq!(reused_worker_birth.thread_id(), primary_birth.thread_id());
+
+    kernel.set_current_process_id(launch.process_id);
+    let worker_window = kernel
+        .create_window_ex_w_with_parent_owner_and_rect_for_birth(
+            reused_worker_birth,
+            "reused_tid_worker",
+            "worker",
+            None,
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        )
+        .expect("reused worker exact-birth window");
+    kernel.set_current_process_id(1);
+
+    let mut wrong_primary = launch.clone();
+    wrong_primary.primary_thread_birth = Some(reused_worker_birth);
+    assert!(!kernel.mark_process_launch_exited(&wrong_primary, 0x4b));
+    assert!(
+        kernel
+            .handles
+            .process_execution_live_by_birth(process_birth)
+    );
+    assert_eq!(
+        kernel.handles.process_signaled_by_id(launch.process_id),
+        Some(false)
+    );
+    assert_eq!(
+        kernel.process_exit_code(launch.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(
+        kernel.guest_thread_exit_code(first_worker_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(
+        kernel.guest_thread_exit_code(reused_worker_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert!(
+        kernel
+            .gwe
+            .window(worker_window)
+            .is_some_and(|window| !window.destroyed)
+    );
+    assert!(!kernel.recent_process_ops().iter().any(|record| {
+        record.op == "CreateProcessExited" && record.process_id == Some(launch.process_id)
+    }));
+
+    // The canonical launch can still complete the same process after the
+    // rejected claim; refusal must not strand its live Task or windows.
+    assert!(kernel.mark_process_launch_exited(&launch, 0x4b));
+    assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x4b));
+    assert_eq!(kernel.guest_thread_exit_code(first_worker_handle), Some(0));
+    assert_eq!(kernel.guest_thread_exit_code(reused_worker_handle), Some(0));
+    assert!(
+        kernel
+            .gwe
+            .window(worker_window)
+            .is_none_or(|window| window.destroyed)
+    );
+    Ok(())
+}
+
+#[test]
 fn process_completion_removes_owned_waits_but_wakes_external_waiters() -> Result<()> {
     let mut kernel = boot()?;
     let launch = kernel.queue_process_launch(None, None);

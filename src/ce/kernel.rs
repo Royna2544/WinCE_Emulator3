@@ -1495,6 +1495,12 @@ impl CeKernel {
             .handles
             .register_boot_thread(1, boot_birth)
             .expect("boot thread birth");
+        let boot_primary = kernel.handles.thread_birth_key_by_id(1).unwrap();
+        assert!(
+            kernel
+                .handles
+                .bind_primary_thread_to_process(boot_birth, boot_primary)
+        );
         kernel.publish_configured_mount_device_interfaces(true);
         kernel
     }
@@ -3080,25 +3086,18 @@ impl CeKernel {
     }
 
     pub fn is_primary_thread_for_current_process(&self, thread_id: u32) -> bool {
-        self.primary_thread_id_for_current_process()
-            .is_some_and(|primary_thread_id| primary_thread_id == thread_id)
-    }
-
-    fn primary_thread_id_for_current_process(&self) -> Option<u32> {
-        if self.current_process_id == 1 {
-            return Some(1);
+        let Some(owner) = self.current_process_birth_key() else {
+            return false;
+        };
+        if !self.handles.process_execution_live_by_birth(owner) {
+            return false;
         }
-        self.pending_process_launches
-            .iter()
-            .find(|launch| launch.process_id == self.current_process_id)
-            .map(|launch| launch.thread_id)
-            .or_else(|| {
-                self.recent_process_ops.iter().rev().find_map(|record| {
-                    (record.process_id == Some(self.current_process_id))
-                        .then_some(record.thread_id)
-                        .flatten()
-                })
-            })
+        let Some(primary) = self.handles.process_primary_thread_birth(owner) else {
+            return false;
+        };
+        primary.thread_id() == thread_id
+            && self.handles.thread_birth_key_by_id(thread_id) == Some(primary)
+            && self.handles.live_thread_creation_owner_by_id(thread_id) == Some(owner)
     }
 
     pub fn toolhelp_process_snapshots(&self) -> Vec<ToolhelpProcessSnapshot> {
@@ -3290,6 +3289,10 @@ impl CeKernel {
             .handles
             .thread_birth_key_for_handle(thread_handle)
             .expect("new child primary thread birth");
+        assert!(
+            self.handles
+                .bind_primary_thread_to_process(child_birth, primary_thread_birth)
+        );
         let launch = PendingProcessLaunch {
             application,
             command_line,
@@ -3375,17 +3378,22 @@ impl CeKernel {
         let Some(exiting_birth) = self.handles.process_birth_key(launch.process_id) else {
             return Ok(false);
         };
-        if !self.handles.process_execution_live_by_birth(exiting_birth) {
+        if launch_birth != exiting_birth
+            || !self.handles.process_execution_live_by_birth(exiting_birth)
+        {
             return Ok(false);
         }
-        if launch_birth != exiting_birth
-            || launch.primary_thread_birth.is_some_and(|primary| {
-                self.handles.contains_thread_birth(primary)
-                    && self
-                        .handles
-                        .thread_creation_owner_by_id(primary.thread_id())
-                        != Some(exiting_birth)
-            })
+        // The process object retains its exact primary birth after that
+        // thread retires. A live worker reusing its numeric TID cannot take
+        // the process exit code, and a supplied birth is only a consistency
+        // witness against this canonical owner.
+        let Some(primary) = self.handles.process_primary_thread_birth(exiting_birth) else {
+            return Ok(false);
+        };
+        if launch.thread_id != primary.thread_id()
+            || launch
+                .primary_thread_birth
+                .is_some_and(|supplied| supplied != primary)
         {
             return Ok(false);
         }
@@ -3393,19 +3401,14 @@ impl CeKernel {
             .handles
             .process_termination_requested_exit_code_by_birth(exiting_birth)
             .unwrap_or(exit_code);
-        let primary = launch.primary_thread_birth.or_else(|| {
-            self.handles
-                .thread_birth_key_by_id(launch.thread_id)
-                .filter(|key| {
-                    self.handles.thread_creation_owner_by_id(key.thread_id()) == Some(exiting_birth)
-                })
-        });
-        let cleanup_thread_id = if launch.primary_thread_birth.is_some_and(|original| {
-            original.thread_id() == launch.thread_id
-                && self.handles.thread_birth_key_by_id(launch.thread_id) == Some(original)
-                && self.handles.thread_creation_owner_by_id(launch.thread_id) == Some(exiting_birth)
-        }) {
-            launch.thread_id
+        let cleanup_thread_id = if self.handles.thread_birth_key_by_id(primary.thread_id())
+            == Some(primary)
+            && self
+                .handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                == Some(exiting_birth)
+        {
+            primary.thread_id()
         } else {
             0
         };
@@ -3415,7 +3418,7 @@ impl CeKernel {
             framebuffer,
         )?;
         self.retire_process_host_metadata_for_birth(exiting_birth);
-        let completed = self.complete_process_execution_by_birth(exiting_birth, primary, exit_code);
+        let completed = self.complete_process_execution_by_birth(exiting_birth, exit_code);
         debug_assert!(completed, "preflighted process birth must complete");
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessExited",
@@ -3452,6 +3455,13 @@ impl CeKernel {
         {
             return Ok(false);
         }
+        if self
+            .handles
+            .process_primary_thread_birth(expected_birth)
+            .is_none()
+        {
+            return Ok(false);
+        }
         let effective_exit_code = self
             .handles
             .process_termination_requested_exit_code_by_birth(expected_birth)
@@ -3462,13 +3472,8 @@ impl CeKernel {
             framebuffer,
         )?;
         self.retire_process_host_metadata_for_birth(expected_birth);
-        let primary = self.handles.thread_birth_key_by_id(1).filter(|primary| {
-            self.handles
-                .thread_creation_owner_by_id(primary.thread_id())
-                == Some(expected_birth)
-        });
         let completed =
-            self.complete_process_execution_by_birth(expected_birth, primary, effective_exit_code);
+            self.complete_process_execution_by_birth(expected_birth, effective_exit_code);
         if !completed {
             return Err(Error::Backend(
                 "preflighted stopped process birth failed canonical Task/VM completion".to_owned(),
@@ -3550,18 +3555,16 @@ impl CeKernel {
     fn complete_process_execution_by_birth(
         &mut self,
         owner: ProcessBirthKey,
-        primary: Option<ThreadBirthKey>,
         exit_code: u32,
     ) -> bool {
         if !self.handles.contains_process_birth(owner) {
             return false;
         }
+        let Some(primary) = self.handles.process_primary_thread_birth(owner) else {
+            return false;
+        };
         for thread in self.handles.live_thread_births_for_owner(owner) {
-            let thread_exit_code = if Some(thread) == primary {
-                exit_code
-            } else {
-                0
-            };
+            let thread_exit_code = if thread == primary { exit_code } else { 0 };
             // Canonical thread completion below cancels only this exact
             // birth's registered waits before dispatching its exit wake.
             if !self.mark_guest_thread_exited_by_birth(thread, thread_exit_code) {

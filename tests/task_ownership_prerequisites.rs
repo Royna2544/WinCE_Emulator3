@@ -1,12 +1,13 @@
 //! D-007 historical Stage 3 E-8 task-ownership controls.
 //! These call real Kernel lifecycle consumers, not a test-only state model.
-//! Alias-sharing and creation-owner controls are active; primary identity reds stay ignored.
+//! Alias-sharing, creation-owner, and canonical-primary identity controls are active.
+//! Boot-main Toolhelp enumeration remains a separate expected red.
 
 use wince_emulation_v3::{
     Result,
     ce::{
         kernel::CeKernel,
-        object::{ThreadResumeResult, ThreadSuspendResult},
+        object::{HandleTable, ThreadResumeResult, ThreadSuspendResult},
         scheduler::SchedulerBlockedWaitKind,
         timer::{INFINITE, WAIT_OBJECT_0},
     },
@@ -170,7 +171,6 @@ fn task_ownership_boot_main_is_retained_without_a_public_thread_handle() -> Resu
 }
 
 #[test]
-#[ignore = "expected red: child primary identity still depends on launch queue or trace ring"]
 fn task_ownership_primary_identity_outlives_launch_queue_and_trace_ring() -> Result<()> {
     let mut kernel = kernel()?;
     let first = kernel.queue_process_launch(None, None);
@@ -185,6 +185,142 @@ fn task_ownership_primary_identity_outlives_launch_queue_and_trace_ring() -> Res
     kernel.take_pending_process_launches();
     assert!(kernel.is_primary_thread_for_current_process(first.thread_id));
     assert!(!kernel.is_primary_thread_for_current_process(1));
+    Ok(())
+}
+
+#[test]
+fn task_ownership_primary_identity_outlives_public_aliases() -> Result<()> {
+    let mut kernel = kernel()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let owner = launch.process_birth.unwrap();
+    let primary = launch.primary_thread_birth.unwrap();
+    let thread_alias = kernel.duplicate_handle(launch.thread_handle, launch.process_id, true)?;
+    let process_alias = kernel.duplicate_handle(launch.process_handle, launch.process_id, true)?;
+    kernel.take_pending_process_launches();
+    assert_eq!(
+        kernel.handles.process_primary_thread_birth(owner),
+        Some(primary)
+    );
+    assert!(kernel.close_handle(thread_alias)?);
+    assert!(kernel.close_handle(process_alias)?);
+    kernel.set_current_process_id(launch.process_id);
+    assert!(kernel.is_primary_thread_for_current_process(launch.thread_id));
+    assert!(!kernel.is_primary_thread_for_current_process(1));
+    Ok(())
+}
+
+#[test]
+fn task_ownership_primary_identity_rejects_exited_and_reused_tid() -> Result<()> {
+    let mut kernel = kernel()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let owner = launch.process_birth.unwrap();
+    let primary = launch.primary_thread_birth.unwrap();
+    kernel.take_pending_process_launches();
+    kernel.set_current_process_id(launch.process_id);
+    assert!(kernel.is_primary_thread_for_current_process(launch.thread_id));
+    assert!(kernel.mark_guest_thread_exited(launch.thread_handle, 0x31));
+    assert!(!kernel.is_primary_thread_for_current_process(launch.thread_id));
+    assert!(kernel.close_handle(launch.thread_handle)?);
+    assert!(!kernel.handles.contains_thread_birth(primary));
+
+    let replacement =
+        kernel
+            .handles
+            .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)?;
+    let replacement_birth = kernel
+        .handles
+        .thread_birth_key_for_handle(replacement)
+        .unwrap();
+    assert_ne!(replacement_birth, primary);
+    assert!(!kernel.is_primary_thread_for_current_process(launch.thread_id));
+    assert!(
+        !kernel
+            .handles
+            .bind_primary_thread_to_process(owner, replacement_birth)
+    );
+    assert_eq!(
+        kernel.handles.process_primary_thread_birth(owner),
+        Some(primary)
+    );
+    Ok(())
+}
+
+#[test]
+fn task_ownership_primary_identity_rejects_old_process_birth_after_pid_reuse() -> Result<()> {
+    let mut kernel = kernel()?;
+    let launch = kernel.queue_process_launch(None, None);
+    let old_owner = launch.process_birth.unwrap();
+    let old_primary = launch.primary_thread_birth.unwrap();
+    kernel.take_pending_process_launches();
+    assert!(kernel.try_mark_process_launch_exited_with_framebuffer(&launch, 0x32, None)?);
+    kernel.set_current_process_id(launch.process_id);
+    assert!(!kernel.is_primary_thread_for_current_process(launch.thread_id));
+    assert!(kernel.close_handle(launch.thread_handle)?);
+    assert!(kernel.close_handle(launch.process_handle)?);
+    assert!(!kernel.handles.contains_process_birth(old_owner));
+
+    let new_process_handle = kernel.handles.create_process(launch.process_id);
+    let new_owner = kernel
+        .handles
+        .process_birth_key_for_handle(new_process_handle)
+        .unwrap();
+    assert_ne!(new_owner, old_owner);
+    assert_eq!(kernel.handles.process_primary_thread_birth(new_owner), None);
+    assert_eq!(kernel.handles.process_primary_thread_birth(old_owner), None);
+    assert!(!kernel.is_primary_thread_for_current_process(launch.thread_id));
+
+    let new_thread_handle =
+        kernel
+            .handles
+            .try_create_thread_in_birth(new_owner, launch.thread_id, 0, 0, false)?;
+    let new_primary = kernel
+        .handles
+        .thread_birth_key_for_handle(new_thread_handle)
+        .unwrap();
+    assert_ne!(new_primary, old_primary);
+    assert!(
+        !kernel
+            .handles
+            .bind_primary_thread_to_process(old_owner, new_primary)
+    );
+    assert!(
+        !kernel
+            .handles
+            .bind_primary_thread_to_process(new_owner, old_primary)
+    );
+    assert!(
+        kernel
+            .handles
+            .bind_primary_thread_to_process(new_owner, new_primary)
+    );
+    assert!(kernel.is_primary_thread_for_current_process(launch.thread_id));
+    Ok(())
+}
+
+#[test]
+fn task_ownership_primary_identity_rollback_clears_unpublished_thread() -> Result<()> {
+    let mut handles = HandleTable::default();
+    let process_handle = handles.create_process(9);
+    let owner = handles
+        .process_birth_key_for_handle(process_handle)
+        .unwrap();
+    let thread_handle = handles.try_create_thread_in_birth(owner, 7, 0, 0, false)?;
+    let primary = handles.thread_birth_key_for_handle(thread_handle).unwrap();
+    assert!(handles.bind_primary_thread_to_process(owner, primary));
+    assert!(handles.discard_unpublished_thread(thread_handle, 7));
+    assert_eq!(handles.process_primary_thread_birth(owner), None);
+    assert!(!handles.contains_thread_birth(primary));
+
+    let replacement_handle = handles.try_create_thread_in_birth(owner, 7, 0, 0, false)?;
+    let replacement = handles
+        .thread_birth_key_for_handle(replacement_handle)
+        .unwrap();
+    assert_ne!(replacement, primary);
+    assert!(handles.bind_primary_thread_to_process(owner, replacement));
+    assert_eq!(
+        handles.process_primary_thread_birth(owner),
+        Some(replacement)
+    );
     Ok(())
 }
 

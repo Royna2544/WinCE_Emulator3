@@ -419,6 +419,9 @@ pub struct ProcessObject {
     /// TerminateProcess request, distinct from completed execution/signaling.
     termination_requested_exit_code: Option<u32>,
     pub debugger_thread_id: Option<u32>,
+    /// The exact first thread birth, retained independently of launch records
+    /// and public aliases until this canonical process birth is retired.
+    primary_thread_birth: Option<ThreadBirthKey>,
     incarnation: u64,
     execution_live: bool,
     aliases: BTreeSet<u32>,
@@ -1023,6 +1026,17 @@ impl HandleTable {
         {
             return false;
         }
+        let primary = ThreadBirthKey {
+            thread_id,
+            incarnation: record.incarnation,
+        };
+        if let Some(owner) = record.creation_owner
+            && let Some(process) = self.processes.get_mut(&owner.process_id)
+            && process.incarnation == owner.incarnation
+            && process.primary_thread_birth == Some(primary)
+        {
+            process.primary_thread_birth = None;
+        }
         self.objects.remove(&handle);
         self.threads.remove(&thread_id);
         true
@@ -1078,6 +1092,7 @@ impl HandleTable {
                 signaled: false,
                 termination_requested_exit_code: None,
                 debugger_thread_id: None,
+                primary_thread_birth: None,
                 incarnation,
                 execution_live: true,
                 aliases: BTreeSet::new(),
@@ -1165,6 +1180,43 @@ impl HandleTable {
         self.processes
             .get(&key.process_id)
             .is_some_and(|process| process.incarnation == key.incarnation && process.execution_live)
+    }
+
+    /// Bind the main thread only after its exact owner and thread births have
+    /// been committed. A later worker or reused TID cannot replace it.
+    pub fn bind_primary_thread_to_process(
+        &mut self,
+        owner: ProcessBirthKey,
+        primary: ThreadBirthKey,
+    ) -> bool {
+        if !self.process_birth_can_create_threads(owner) {
+            return false;
+        }
+        let Some(thread) = self.threads.get(&primary.thread_id) else {
+            return false;
+        };
+        if thread.incarnation != primary.incarnation
+            || !thread.execution_live
+            || thread.object.signaled
+            || thread.creation_owner != Some(owner)
+        {
+            return false;
+        }
+        let process = self.processes.get_mut(&owner.process_id).unwrap();
+        match process.primary_thread_birth {
+            Some(existing) => existing == primary,
+            None => {
+                process.primary_thread_birth = Some(primary);
+                true
+            }
+        }
+    }
+
+    pub fn process_primary_thread_birth(&self, owner: ProcessBirthKey) -> Option<ThreadBirthKey> {
+        self.processes
+            .get(&owner.process_id)
+            .filter(|process| process.incarnation == owner.incarnation)
+            .and_then(|process| process.primary_thread_birth)
     }
 
     fn process_for_alias(&self, alias: &ProcessHandleObject) -> Option<&ProcessObject> {
