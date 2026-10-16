@@ -1125,6 +1125,13 @@ impl HandleTable {
             .collect()
     }
 
+    /// Check the canonical records directly, not the public/debug snapshots:
+    /// an exited, aliasless thread can still retain an active Task frame.
+    /// Such a record cannot be cloned without whole-machine relineage.
+    pub fn has_canonical_task_records(&self) -> bool {
+        !self.processes.is_empty() || !self.threads.is_empty()
+    }
+
     pub fn process_birth_key(&self, process_id: u32) -> Option<ProcessBirthKey> {
         let process = self.processes.get(&process_id)?;
         Some(ProcessBirthKey {

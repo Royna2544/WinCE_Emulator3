@@ -3323,6 +3323,12 @@ impl CeKernel {
         std::mem::take(&mut self.pending_process_launches)
     }
 
+    /// A published child launch has an independent exact Task birth even
+    /// before a CPU exists. Cloning it requires whole-machine relineage.
+    pub fn has_pending_process_launches(&self) -> bool {
+        !self.pending_process_launches.is_empty()
+    }
+
     /// Return unprocessed, already-published launches to the front after a
     /// recoverable stopped-exit refusal. Their original birth witnesses stay
     /// intact and later launches retain their relative order.
