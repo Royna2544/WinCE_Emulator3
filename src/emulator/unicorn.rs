@@ -66,6 +66,14 @@ use unicorn_engine::RegisterMIPS;
 
 const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
+#[cfg(all(test, feature = "unicorn"))]
+thread_local! {
+    // Fixture-only observation of the first executed raw return-stub trap on
+    // this test thread. It cannot select a task or alter native scheduling.
+    static TEST_NATIVE_EXIT_STUB_WITNESS: std::cell::Cell<Option<(u32, u32, crate::ce::object::ThreadBirthKey)>>
+        = const { std::cell::Cell::new(None) };
+}
+
 #[cfg(feature = "unicorn")]
 #[derive(Clone, Copy, Default)]
 struct NativeStopEvidence {
@@ -6213,7 +6221,18 @@ impl UnicornMips {
             if Self::parked_process_handle_exit_code(&process, kernel).is_some() {
                 continue;
             }
-            if process.cpu.current_thread_id != process.cpu.initial_thread_id
+            let stopped_worker_birth = process.cpu.saved_worker_exit_birth.filter(|worker| {
+                process.cpu.saved_context_thread_birth == Some(*worker)
+                    && worker.thread_id() == process.cpu.current_thread_id
+                    && process
+                        .cpu
+                        .owned_process_launch
+                        .as_ref()
+                        .and_then(|launch| launch.process_birth)
+                        .and_then(|owner| kernel.handles.process_primary_thread_birth(owner))
+                        .is_some_and(|primary| primary != *worker)
+            });
+            if stopped_worker_birth.is_some()
                 && process.cpu.last_debug_snapshot().is_some_and(|snapshot| {
                     snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR
                 })
@@ -6230,6 +6249,8 @@ impl UnicornMips {
                     .and_then(|launch| launch.process_birth)
                     .is_some_and(|owner| {
                         kernel.handles.process_birth_key(owner.process_id()) == Some(owner)
+                            && kernel.handles.thread_birth_key_by_id(worker_id)
+                                == stopped_worker_birth
                             && kernel.handles.thread_creation_owner_by_id(worker_id) == Some(owner)
                     });
                 if checked_worker {
@@ -6497,6 +6518,38 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn stopped_primary_thread_birth(
+        &self,
+        kernel: &CeKernel,
+        owner: crate::ce::object::ProcessBirthKey,
+    ) -> Option<crate::ce::object::ThreadBirthKey> {
+        let primary = kernel.handles.process_primary_thread_birth(owner)?;
+        let cpu_owns_process = if let Some(launch) = self.owned_process_launch.as_ref() {
+            launch.process_birth == Some(owner)
+                && launch.primary_thread_birth == Some(primary)
+                && launch.process_id == owner.process_id()
+                && launch.thread_id == primary.thread_id()
+        } else {
+            self.initial_thread_id == MAIN_GUEST_THREAD_ID && owner.process_id() == 1
+        };
+        (cpu_owns_process
+            && self.initial_thread_id == primary.thread_id()
+            && self.current_thread_id == primary.thread_id()
+            && self.saved_context_thread_birth == Some(primary)
+            && kernel.handles.process_birth_key(owner.process_id()) == Some(owner)
+            && kernel.handles.process_execution_live_by_birth(owner)
+            && kernel.handles.thread_birth_key_by_id(primary.thread_id()) == Some(primary)
+            && kernel
+                .handles
+                .thread_execution_live_by_id(primary.thread_id())
+            && kernel
+                .handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                == Some(owner))
+        .then_some(primary)
+    }
+
+    #[cfg(feature = "unicorn")]
     fn parked_tree_would_discard_modal_for_birth(
         parked: &ParkedProcess,
         owner: crate::ce::object::ProcessBirthKey,
@@ -6750,7 +6803,7 @@ impl UnicornMips {
             let switched = self.try_switch_to_next_parked_process(kernel, false)?;
             return Ok(switched || self.completed_active_process_exit);
         }
-        let Some(exit_code) = self.active_process_thread_exit_code() else {
+        let Some(exit_code) = self.active_process_thread_exit_code(kernel) else {
             return Ok(false);
         };
         let Some(launch) = self
@@ -6885,16 +6938,23 @@ impl UnicornMips {
         }
 
         let thread_id = self.current_thread_id;
-        if thread_id == 0 || thread_id == self.initial_thread_id {
-            return false;
-        }
-        let live_birth = kernel.handles.thread_birth_key_by_id(thread_id);
         let expected_birth = self.saved_worker_exit_birth;
         let expected_owner = self
             .owned_process_launch
             .as_ref()
             .and_then(|launch| launch.process_birth)
             .or_else(|| kernel.current_process_birth_key());
+        let primary_birth =
+            expected_owner.and_then(|owner| kernel.handles.process_primary_thread_birth(owner));
+        if thread_id == 0
+            || expected_birth.is_none()
+            || primary_birth.is_none()
+            || expected_birth == primary_birth
+            || self.saved_context_thread_birth != expected_birth
+        {
+            return false;
+        }
+        let live_birth = kernel.handles.thread_birth_key_by_id(thread_id);
         if expected_birth.is_none()
             || live_birth.is_some_and(|birth| Some(birth) != expected_birth)
             || live_birth.is_some()
@@ -7008,8 +7068,19 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn active_process_thread_exit_code(&self) -> Option<u32> {
-        if self.current_thread_id != self.initial_thread_id {
+    fn active_process_thread_exit_code(&self, kernel: &CeKernel) -> Option<u32> {
+        let owner = self
+            .owned_process_launch
+            .as_ref()
+            .and_then(|launch| launch.process_birth)
+            .or_else(|| {
+                (self.initial_thread_id == MAIN_GUEST_THREAD_ID)
+                    .then(|| kernel.current_process_birth_key())
+                    .flatten()
+            })?;
+        if kernel.current_process_birth_key() != Some(owner)
+            || self.stopped_primary_thread_birth(kernel, owner).is_none()
+        {
             return None;
         }
         self.last_debug_snapshot().and_then(|snapshot| {
@@ -7136,7 +7207,8 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn active_terminal_child_process_return_code(&self, kernel: &CeKernel) -> Option<u32> {
         let snapshot = self.last_debug_snapshot()?;
-        if self.current_thread_id != self.initial_thread_id
+        let owner = self.owned_process_launch.as_ref()?.process_birth?;
+        if self.stopped_primary_thread_birth(kernel, owner).is_none()
             || snapshot.pc != GUEST_THREAD_RETURN_STUB_ADDR
             || self.active_process_has_resumable_context()
             || self.running_guest_thread.is_some()
@@ -7322,8 +7394,12 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     fn parked_process_thread_exit_code(process: &ParkedProcess, kernel: &CeKernel) -> Option<u32> {
+        let owner = process.cpu.owned_process_launch.as_ref()?.process_birth?;
         if process.cpu.blocked_modal_message_box.is_some()
-            || process.cpu.current_thread_id != process.cpu.initial_thread_id
+            || process
+                .cpu
+                .stopped_primary_thread_birth(kernel, owner)
+                .is_none()
             || !process
                 .cpu
                 .owned_process_launch
@@ -11394,7 +11470,8 @@ impl UnicornMips {
         let live_trampoline_state_import_hook = Rc::clone(&live_trampoline_state);
         let thread_exit_reached_import_hook = Rc::clone(&thread_exit_reached);
         let pc_stop_import_hook = Rc::clone(&pc_stop);
-        let process_primary_thread_id = self.initial_thread_id;
+        let process_primary_thread_birth =
+            native_owner_birth.and_then(|owner| kernel.handles.process_primary_thread_birth(owner));
         pre_entry_try!(uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
@@ -11442,33 +11519,49 @@ impl UnicornMips {
                 }
                 if address == THREAD_EXIT_STUB_ADDR {
                     let (active_thread_id, active_thread_birth) = current_thread_id_hook.get();
+                    #[cfg(test)]
+                    TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| {
+                        if witness.get().is_none() {
+                            witness.set(active_thread_birth.map(|birth| {
+                                (address, read_mips_reg(uc, RegisterMIPS::V0), birth)
+                            }));
+                        }
+                    });
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
-                    if no_running_thread && active_thread_id != process_primary_thread_id {
-                        let expected_birth = active_thread_birth;
-                        *worker_exit_birth_import_hook.borrow_mut() = expected_birth;
-                        let live_birth = unsafe { &*kernel_ptr }
-                            .handles
-                            .thread_birth_key_by_id(active_thread_id);
-                        if live_birth.is_some() && live_birth != expected_birth {
-                            tracing::warn!(
-                                target: "ce.scheduler",
-                                thread_id = active_thread_id,
-                                expected_birth = ?expected_birth,
-                                live_birth = ?live_birth,
-                                "raw worker exit refused a different thread birth"
+                    if no_running_thread {
+                        let Some(verified_birth) = verified_native_guest_thread_exit_birth(
+                            unsafe { &*kernel_ptr },
+                            &current_thread_id_hook,
+                            active_thread_id,
+                            None,
+                            None,
+                            native_owner_birth,
+                        ) else {
+                            current_thread_id_hook.fail_backend(
+                                active_thread_id,
+                                "raw thread exit has no exact live birth and process owner",
                             );
-                            *thread_exit_reached_import_hook.borrow_mut() = true;
+                            let _ = uc.emu_stop();
+                            return;
+                        };
+                        if Some(verified_birth) != active_thread_birth {
+                            current_thread_id_hook.fail_backend(
+                                active_thread_id,
+                                "raw thread exit changed its native register birth",
+                            );
                             let _ = uc.emu_stop();
                             return;
                         }
-                    }
-                    if no_running_thread
-                        && active_thread_id != process_primary_thread_id
-                        && unsafe { &*kernel_ptr }
-                            .handles
-                            .thread_birth_key_by_id(active_thread_id)
-                            .is_some()
-                    {
+                        let Some(primary_birth) = process_primary_thread_birth else {
+                            current_thread_id_hook.fail_backend(
+                                active_thread_id,
+                                "raw thread exit has no canonical process primary birth",
+                            );
+                            let _ = uc.emu_stop();
+                            return;
+                        };
+                        if verified_birth != primary_birth {
+                            *worker_exit_birth_import_hook.borrow_mut() = Some(verified_birth);
                         let thread_handle = unsafe { &*kernel_ptr }
                             .guest_thread_handle_by_id(active_thread_id)
                             .unwrap_or(0);
@@ -11494,8 +11587,16 @@ impl UnicornMips {
                             active_thread_id,
                             unsafe { &*kernel_ptr }.handles.thread_birth_key_by_id(active_thread_id),
                         );
-                        unsafe { &mut *kernel_ptr }
-                            .mark_guest_thread_exited_by_id(active_thread_id, exit_code);
+                        if !unsafe { &mut *kernel_ptr }
+                            .mark_guest_thread_exited_by_birth(verified_birth, exit_code)
+                        {
+                            current_thread_id_hook.fail_backend(
+                                active_thread_id,
+                                "raw worker exit rejected its exact thread birth",
+                            );
+                            let _ = uc.emu_stop();
+                            return;
+                        }
                         release_guest_thread_stack_slot(
                             &guest_thread_stack_slots_hook,
                             active_thread_id,
@@ -11538,38 +11639,7 @@ impl UnicornMips {
                         }
                         let _ = uc.emu_stop();
                         return;
-                    }
-                    if no_running_thread
-                        && active_thread_id != process_primary_thread_id
-                        && (try_wait_and_resume_blocked_wait(
-                            unsafe { &mut *kernel_ptr },
-                            uc,
-                            &sealed_host_write_guard_import,
-                            active_thread_id,
-                            &current_thread_id_hook,
-                            &blocked_wait_threads_hook,
-                            &suspended_guest_thread_hook,
-                            &running_guest_thread_hook,
-                            host_wall_clock_started,
-                            host_wall_clock_limit,
-                            live_pump,
-                        ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
-                            unsafe { &mut *kernel_ptr },
-                            uc,
-                            &sealed_host_write_guard_import,
-                            active_thread_id,
-                            &current_thread_id_hook,
-                            &blocked_guest_thread_hook,
-                            &displaced_blocked_get_messages_hook,
-                            &suspended_guest_thread_hook,
-                            &running_guest_thread_hook,
-                            &pending_wndproc_returns_hook,
-                            host_wall_clock_started,
-                            host_wall_clock_limit,
-                            live_pump,
-                        ))
-                    {
-                        return;
+                        }
                     }
                     *thread_exit_reached_import_hook.borrow_mut() = true;
                     let _ = uc.emu_stop();
@@ -20394,10 +20464,16 @@ fn complete_first_slice_child_exit(
     exit_code: u32,
     parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
 ) -> Result<bool> {
+    let Some(canonical_primary) = kernel.handles.process_primary_thread_birth(launch_birth) else {
+        return Err(Error::HostExitAuthorityRecoveryRequired {
+            reason: "first-slice exit has no canonical primary thread birth",
+        });
+    };
     if launch.process_birth != Some(launch_birth)
         || child.owned_process_launch.as_ref() != Some(launch)
         || child.initial_thread_id != launch.thread_id
-        || child.current_thread_id != child.initial_thread_id
+        || launch.primary_thread_birth != Some(canonical_primary)
+        || child.stopped_primary_thread_birth(kernel, launch_birth) != Some(canonical_primary)
     {
         return Err(Error::HostExitAuthorityRecoveryRequired {
             reason: "first-slice exit CPU does not own its exact child launch",
@@ -20461,10 +20537,15 @@ fn classify_uncompleted_deferred_child(
     child: &UnicornMips,
     kernel: &CeKernel,
 ) -> ChildProcessRunOutcome {
+    let stopped_primary = child
+        .owned_process_launch
+        .as_ref()
+        .and_then(|launch| launch.process_birth)
+        .is_some_and(|owner| child.stopped_primary_thread_birth(kernel, owner).is_some());
     child
         .last_debug_snapshot()
         .and_then(|snapshot| {
-            (child.current_thread_id == child.initial_thread_id
+            (stopped_primary
                 && (snapshot.thread_exit_reached || snapshot.pc == THREAD_EXIT_STUB_ADDR))
                 .then_some(ChildProcessRunOutcome::Exited(snapshot.v0))
                 .or_else(|| {
@@ -85447,6 +85528,208 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn real_mips_primary_return_completes_exact_child_process() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("primary-return.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_image = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_image, 0x200, 0x2402_0063); // addiu v0,zero,0x63
+        write_vec_u32(&mut child_image, 0x204, 0x03e0_0008); // jr ra
+        write_vec_u32(&mut child_image, 0x208, 0); // delay slot
+        std::fs::write(&child_path, child_image).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("primary-return.exe".to_owned()), None);
+        let owner = launch.process_birth.expect("queued child birth");
+        let primary = launch
+            .primary_thread_birth
+            .expect("canonical primary birth");
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
+        let result = super::run_pending_process_launches(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        );
+        let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
+        assert_eq!(executed, Some((THREAD_EXIT_STUB_ADDR, 0x63, primary)));
+        result?;
+        assert!(!kernel.handles.process_execution_live_by_birth(owner));
+        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(0x63));
+        assert_eq!(
+            kernel.guest_thread_exit_code(launch.thread_handle),
+            Some(0x63)
+        );
+        assert!(
+            parked.borrow().is_empty(),
+            "completed child has no CPU to park"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn real_mips_reused_primary_tid_worker_return_keeps_child_cpu_and_process() -> crate::Result<()>
+    {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("reused-primary-tid.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_image = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_image, 0x200, 0x2402_0063); // addiu v0,zero,0x63
+        write_vec_u32(&mut child_image, 0x204, 0x03e0_0008); // jr ra
+        write_vec_u32(&mut child_image, 0x208, 0); // delay slot
+        std::fs::write(&child_path, child_image).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("reused-primary-tid.exe".to_owned()), None);
+        let owner = launch.process_birth.expect("queued child birth");
+        let primary = launch
+            .primary_thread_birth
+            .expect("canonical primary birth");
+        assert!(kernel.mark_guest_thread_exited(launch.thread_handle, 0x31));
+        assert_eq!(
+            kernel.guest_thread_exit_code(launch.thread_handle),
+            Some(0x31)
+        );
+        assert!(kernel.close_handle(launch.thread_handle)?);
+        assert!(!kernel.handles.contains_thread_birth(primary));
+
+        // This is an intentionally synthetic stale/reuse safety state, not a
+        // normal CE main-thread lifetime: a separate live worker makes a
+        // whole-process exit visibly wrong, but this fixture does not give
+        // that worker an independently runnable CPU context.
+        let survivor_tid = launch.thread_id.checked_add(1).expect("fixture worker TID");
+        let survivor_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, survivor_tid, 0, 0, false)?;
+        let survivor = kernel
+            .handles
+            .thread_birth_key_for_handle(survivor_handle)
+            .expect("independent live worker birth");
+        // The allocator normally advances; inject numeric reuse through the
+        // canonical birth API so the native child executes as a different Task.
+        let worker_handle =
+            kernel
+                .handles
+                .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)?;
+        let worker = kernel
+            .handles
+            .thread_birth_key_for_handle(worker_handle)
+            .expect("replacement worker birth");
+        assert_ne!(worker, primary);
+        assert_eq!(
+            kernel.handles.process_primary_thread_birth(owner),
+            Some(primary)
+        );
+        assert_eq!(
+            kernel.guest_thread_exit_code(survivor_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
+        let result = super::run_pending_process_launches(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        );
+        let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
+        assert_eq!(
+            executed,
+            Some((THREAD_EXIT_STUB_ADDR, 0x63, worker)),
+            "the replacement worker must execute the patched MIPS return stub in this attempt"
+        );
+        if let Err(error) = result {
+            assert!(
+                error.is_host_exit_recovery_required(),
+                "unexpected child stop instead of checked recovery: {error}"
+            );
+        }
+
+        assert!(
+            kernel.handles.process_execution_live_by_birth(owner),
+            "the replacement worker's real MIPS return must not complete its process"
+        );
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.guest_thread_exit_code(worker_handle), Some(0x63));
+        assert_eq!(
+            kernel.handles.thread_birth_key_for_handle(survivor_handle),
+            Some(survivor)
+        );
+        assert!(kernel.handles.thread_execution_live_by_id(survivor_tid));
+        assert_eq!(
+            kernel.handles.thread_creation_owner_by_id(survivor_tid),
+            Some(owner)
+        );
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            matches!(
+                record.op,
+                "CreateProcessExited" | "CreateProcessChildReturned"
+            ) && record.process_id == Some(launch.process_id)
+        }));
+        let parked = parked.borrow();
+        assert_eq!(parked.len(), 1, "the stopped child CPU must remain owned");
+        let retained = parked.front().expect("parked child CPU");
+        assert_eq!(retained.cpu.owned_process_launch.as_ref(), Some(&launch));
+        assert!(!retained.cpu.completed_active_process_exit);
+        assert_eq!(retained.cpu.current_thread_id, launch.thread_id);
+        assert!(
+            retained.cpu.run_slice_generation > 0,
+            "the retained CPU must have executed a real MIPS slice"
+        );
+        assert_eq!(
+            kernel.handles.process_primary_thread_birth(owner),
+            Some(primary)
+        );
+        assert_eq!(
+            kernel.handles.thread_birth_key_for_handle(worker_handle),
+            Some(worker)
+        );
+        Ok(())
+    }
+
+    #[test]
     #[ignore = "expected red: ordinary first-slice native error drops an admitted child CPU"]
     fn ordinary_first_slice_native_fault_retains_admitted_child_cpu() -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();
@@ -97269,6 +97552,150 @@ mod unicorn_tests {
         assert_eq!(u32::from_le_bytes(bytes), VALUE);
         assert!(cpu.mapped_blobs.is_empty());
         Ok(())
+    }
+
+    fn run_live_pump_fixed_stack_first_touch(stop_at_marker: bool) -> crate::Result<()> {
+        const VALUE: u32 = 0x7e31_a5c2;
+        let stack_top = super::IMPORT_TRAP_BASE - 0x10000;
+        let stack_page = stack_top - 0x3000;
+        let mut bytes = tiny_mips_spinner_pe();
+        for (index, instruction) in [
+            0x3c08_0000 | (stack_page >> 16),    // lui t0, stack page high
+            0x3508_0000 | (stack_page & 0xffff), // ori t0, t0, stack page low
+            0x3c09_0000 | (VALUE >> 16),         // lui t1, value high
+            0x3529_0000 | (VALUE & 0xffff),      // ori t1, t1, value low
+            0xad09_0000,                         // sw t1, 0(t0): native first touch
+            0x8d0a_0000,                         // lw t2, 0(t0): guest readback
+            0x2550_0001,                         // addiu s0, t2, 1: progress marker
+            0x1000_ffff,                         // spin only beyond explicit stop
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            write_vec_u32(&mut bytes, 0x200 + index * 4, instruction);
+        }
+        let image = crate::pe::PeImage::parse_bytes("live-pump-stack-fault.exe", &bytes)?;
+        let entry = image.entry_point_va();
+        let stop_pc = entry + 7 * 4;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        assert_eq!(cpu.stack_top, Some(stack_top));
+        if !stop_at_marker {
+            assert!(cpu.trampoline_origins_all_direct());
+            for diagnostic in [
+                "WINCE_EMU_GLOBAL_CODE_HOOK",
+                "WINCE_EMU_CRASH_CODE_TRACE",
+                "WINCE_EMU_FULL_TRACE",
+                "WINCE_EMU_RESOURCE_TRACE",
+                "WINCE_EMU_SLOT_TRACE",
+                "WINCE_EMU_PROGRESS_FILE",
+                "WINCE_EMU_SCOPED_HOOKS",
+                "WINCE_EMU_FAST_START",
+            ] {
+                assert!(
+                    std::env::var_os(diagnostic).is_none(),
+                    "{diagnostic} would change the default code-hook mode"
+                );
+            }
+        }
+        let mut kernel = phase1_kernel("live-pump-stack-fault.exe")?;
+        let owner = kernel.current_process_birth_key().expect("boot birth");
+        assert!(kernel.memory.private_page_pin(owner, stack_page).is_none());
+        assert!(kernel.memory.private_page_pins_for(owner).is_empty());
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
+        let execution = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: stop_at_marker.then_some(stop_pc),
+                live_pump: true,
+            },
+        );
+        execution.result?;
+        let report = execution.report;
+        assert!(
+            report.attempt_id().is_some(),
+            "guest must enter a native attempt"
+        );
+        assert_eq!(report.start_process_birth(), Some(owner));
+        assert_eq!(report.end_process_birth(), Some(owner));
+        assert_eq!(
+            report.native_result(),
+            &super::AttemptObservation::Value(())
+        );
+        assert_eq!(
+            report.final_outcome(),
+            if stop_at_marker {
+                super::NativeSliceOutcome::RequestedPcStop
+            } else {
+                super::NativeSliceOutcome::CountLimit
+            }
+        );
+        if !stop_at_marker {
+            assert_eq!(
+                report.count_stop_query(),
+                &super::AttemptObservation::Value(true)
+            );
+        }
+        let saved_pc = cpu.saved_context_pc().expect("guest continuation PC");
+        assert_ne!(saved_pc, 0, "PC zero is never a successful guest stop");
+        if stop_at_marker {
+            assert_eq!(saved_pc, stop_pc);
+        }
+        let saved = cpu.saved_context.as_ref().expect("guest continuation");
+        assert_eq!(
+            saved.regs.regs[10], VALUE,
+            "guest load followed the faulting store"
+        );
+        assert_eq!(
+            saved.regs.regs[16],
+            VALUE + 1,
+            "guest executed past that load"
+        );
+        assert_eq!(cpu.last_debug_snapshot().expect("native stop").pc, saved_pc);
+
+        let pin = kernel
+            .memory
+            .private_page_pin(owner, stack_page)
+            .expect("production hook committed the first-touch stack page");
+        assert_eq!(pin.identity().owner(), owner);
+        assert_eq!(pin.identity().page_base(), stack_page);
+        assert!(pin.is_host_block_backed());
+        assert!(kernel.memory.contains_private_page_pin(&pin));
+        let mut stored = [0; 4];
+        pin.read_bytes(0, &mut stored)
+            .expect("canonical stack bytes");
+        assert_eq!(u32::from_le_bytes(stored), VALUE);
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, stack_page - 0x1000)
+                .is_none()
+        );
+        assert!(
+            kernel
+                .memory
+                .private_page_pin(owner, stack_page + 0x1000)
+                .is_none()
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn live_pump_fixed_stack_first_touch_uses_production_fault_hook() -> crate::Result<()> {
+        run_live_pump_fixed_stack_first_touch(true)
+    }
+
+    #[test]
+    fn hookless_live_pump_fixed_stack_first_touch_uses_production_fault_hook() -> crate::Result<()>
+    {
+        run_live_pump_fixed_stack_first_touch(false)
     }
 
     #[test]
