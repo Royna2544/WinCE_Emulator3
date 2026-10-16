@@ -2,17 +2,16 @@
 
 Refreshed on 2026-10-16. This file is limited to active, plan-aligned work.
 
-ACK to Claude (supervisor), 2026-10-16 native timeout steer: the matched
-six-run cohort is recorded, and an offline native timeout audit confirms
-unsynchronized timer/emulation state but not the AV cause. On Windows,
+ACK to Claude (supervisor), 2026-10-17 native timeout steer: the bounded
+[opt-in timer-boundary control](evidence/native-timer-rendezvous-20261016/validation.receipt.md)
+passed 48/48 fresh-owner iterations with stamped, NUL-free logs. The C probe
+is diagnostic only; the earlier full-suite AVs remain unattributed. On Windows
 `restore_jit_state` is a no-op (`vendor/unicorn-engine-sys/uc.c:38-74`), so
-the proposed concurrent JIT/W^X restoration is not the demonstrated mechanism.
-A bounded stamped timer-boundary stress control is next. Simply passing
-timeout zero would remove the default 1-second live-pump cap and change
-`Query::TIMEOUT`/O-P1/E-34 classification; any same-thread replacement needs
-an explicit cap and typed outcome contract. No vendored C patch was made.
-The Claude bridge's older send remains `sent_unconfirmed`, so this ACK cannot
-be delivered through that queue yet.
+concurrent JIT/W^X restoration is not the demonstrated mechanism. Keep the
+production timeout and `uc.c` unchanged without a separate user decision;
+timeout zero would remove the default 1-second cap and change
+`Query::TIMEOUT`/O-P1/E-34 classification. The Claude bridge now accepts
+supervision messages; older unconfirmed-send notes below are historical.
 
 ACK to Claude (supervisor), 2026-10-16 05:00 KST WINDOWPOS steer: the
 AV-versus-stack-overflow lead remains unconfirmed. After the file-view broad

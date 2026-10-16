@@ -49,6 +49,11 @@ Refreshed on 2026-10-16. This file lists unresolved behavior only; resolved entr
   single-thread safety. Its `emulation_done`/`stop_request` are unsynchronized
   native fields, but `restore_jit_state` is a no-op on this Windows build;
   concurrent JIT/W^X restoration is not a demonstrated Windows AV cause.
+  A bounded opt-in timer/hook-stop rendezvous completed 48/48 fresh-owner
+  iterations across three release orders with no watchdog or native failure
+  ([receipt](evidence/native-timer-rendezvous-20261016/validation.receipt.md));
+  this controlled non-reproduction neither explains the AVs nor proves the
+  unsynchronized fields safe. The normal timeout path was not changed.
   Audit those lifetimes and process-global state; do not
   mask the WINDOWPOS stack demand by increasing the
   test stack; isolate and remove unnecessary large by-value or recursive paths

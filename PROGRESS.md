@@ -1,8 +1,22 @@
 # Progress
 
-Refreshed on 2026-10-16 (client KST date). This file records confirmed facts only.
+Refreshed on 2026-10-17 (client KST date). This file records confirmed facts only.
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
+
+## 2026-10-17 opt-in native timer boundary control
+
+The [bounded timer rendezvous diagnostic](evidence/native-timer-rendezvous-20261016/validation.receipt.md)
+passed 48/48 fresh-owner iterations (16 timer-first, 16 hook-first, 16
+simultaneous release) under an external 60-second process-tree watchdog. Every
+iteration returned from both native boundaries, reported `TIMEOUT=1`,
+`COUNT_STOP=0`, PC `0x1000`, and closed its owner. The accepted build/test logs
+are stamped, NUL-free and hash-sealed. One corrupt generated Unicorn rlib was
+removed after exact-path/hash verification and rebuilt in the same `target/`;
+the two older NUL-corrupt logs and a failed linker attempt remain untouched.
+This does not explain either earlier full-suite AV or prove native race freedom.
+The C probe is opt-in only; production timeout and `uc.c` behavior did not
+change. No app or writable-mount run occurred.
 
 ## 2026-10-16 bounded Stage 2 writable-image source gates
 
@@ -139,6 +153,11 @@ kernel-call wrappers. Local CE6 source confirms `CreateProcess` waits for
 loader completion, process waits use a pinned event, and requested
 termination precedes accepted execution exit. This reinforces independent
 child CPU custody; the dumped kernel process-exit body remains unidentified.
+The separate [dumped-COREDLL REA thread-exit follow-up](evidence/ce6-rea-exit-20261016/findings.md)
+located `ExitThread`'s KData-derived branch, `PrepareThreadExit` call and
+kernel method `0xFFFFBBCE`, distinct from `TerminateThread`'s resolved-handle
+method `0xFFFFB7DE`. It is static wrapper evidence, not a decoded ROM exit
+body or live child-lifetime proof.
 An offline [REA check of the shipped iNavi PE](evidence/ce6-rea-inavi-20261016/findings.md)
 located static `FindWindowW`-guarded `CreateProcessW` branches for
 `happyway_win.exe` and `iSearch.exe`, each retaining returned process/thread
