@@ -80473,6 +80473,14 @@ mod unicorn_tests {
             super::AttemptObservation::Error(message) if message.contains("RESOURCE")
         ));
         assert_eq!(
+            first.report.timeout_query(),
+            &super::AttemptObservation::Value(false)
+        );
+        assert_eq!(
+            first.report.context_capture(),
+            &super::AttemptObservation::Value(())
+        );
+        assert_eq!(
             first.report.raw_stop_pc(),
             &super::AttemptObservation::Value(entry + 18 * 4)
         );
@@ -80487,13 +80495,20 @@ mod unicorn_tests {
         assert!(cpu.private_slab_attempt_poisoned);
         assert!(cpu.saved_context.is_none());
 
-        let queued_pids: Vec<_> = kernel
+        let queued_ops: Vec<_> = kernel
             .recent_process_ops()
             .iter()
             .filter(|record| record.op == "CreateProcessWQueued")
-            .map(|record| record.process_id)
+            .map(|record| {
+                (
+                    record.process_handle,
+                    record.thread_handle,
+                    record.process_id,
+                    record.thread_id,
+                )
+            })
             .collect();
-        assert_eq!(queued_pids.len(), 1);
+        assert_eq!(queued_ops.len(), 1);
         let pending = kernel.take_pending_process_launches();
         assert_eq!(pending.len(), 1, "deferred guard did not take the child");
         let launch = &pending[0];
@@ -80513,8 +80528,26 @@ mod unicorn_tests {
                 .thread_birth_key_for_handle(launch.thread_handle)
                 .expect("thread handle birth")
         );
-        assert_eq!(queued_pids[0], Some(launch.process_id));
+        assert_eq!(
+            queued_ops[0],
+            (
+                Some(launch.process_handle),
+                Some(launch.thread_handle),
+                Some(launch.process_id),
+                Some(launch.thread_id)
+            )
+        );
+        assert_eq!(
+            kernel
+                .handles
+                .live_thread_creation_owner_by_id(launch.thread_id),
+            Some(child_birth)
+        );
         assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(cpu.parked_child_processes.is_empty());
         assert!(!kernel.recent_process_ops().iter().any(|record| {
@@ -80576,6 +80609,7 @@ mod unicorn_tests {
         );
         let error = execution.result.expect_err("bad child PE must fail");
         assert!(matches!(&error, Error::InvalidArgument(_)), "{error:#}");
+        assert!(format!("{error:#}").contains("PE parse error"));
         assert_eq!(execution.report.start_process_birth(), Some(parent_birth));
         assert_eq!(
             execution.report.final_outcome(),
@@ -80598,7 +80632,24 @@ mod unicorn_tests {
                 .process_birth_key_for_handle(launch.process_handle),
             Some(child_birth)
         );
+        let thread_birth = launch.primary_thread_birth.expect("queued thread birth");
+        assert_eq!(
+            kernel
+                .handles
+                .thread_birth_key_for_handle(launch.thread_handle),
+            Some(thread_birth)
+        );
+        assert_eq!(
+            kernel
+                .handles
+                .live_thread_creation_owner_by_id(launch.thread_id),
+            Some(child_birth)
+        );
         assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert!(kernel.recent_process_ops().iter().any(|record| {
             record.op == "CreateProcessResolved" && record.process_id == Some(launch.process_id)
@@ -80614,8 +80665,14 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "Stage 5 non-live scheduling: a spinning child can starve the parked creator"]
-    fn non_live_spin_child_retains_births_but_parent_can_starve() -> crate::Result<()> {
+    fn non_live_spin_child_keeps_exact_births_and_parent_resumes_within_bound() -> crate::Result<()>
+    {
+        // Temporary attempt-local diagnostic: remove after count/PC classification.
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter("ce.slice_profile=debug")
+            .without_time()
+            .finish();
+        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
         std::fs::create_dir_all(&test_root).unwrap();
@@ -80672,6 +80729,9 @@ mod unicorn_tests {
                 .collect();
             let parent_count = usize::from(selected == Some(parent_birth)) + parked_parent.len();
             assert_eq!(parent_count, 1, "one exact parent continuation");
+            if selected == Some(parent_birth) {
+                assert_eq!(cpu.saved_context_thread_birth, Some(parent_thread_birth));
+            }
             let parked_child_count = cpu
                 .parked_child_processes
                 .iter()
@@ -80689,18 +80749,37 @@ mod unicorn_tests {
                 1,
                 "one exact child CPU"
             );
-            if let Some(parent) = parked_parent.first() {
-                let saved = parent
+            if selected == Some(child_birth) {
+                assert_eq!(
+                    cpu.owned_process_launch
+                        .as_ref()
+                        .and_then(|launch| launch.process_birth),
+                    Some(child_birth)
+                );
+            }
+            let saved = if selected == Some(parent_birth) {
+                cpu.saved_context.as_ref().expect("selected parent context")
+            } else {
+                parked_parent[0]
                     .cpu
                     .saved_context
                     .as_ref()
-                    .expect("parked parent context");
-                assert_eq!(saved.pc, entry + 18 * 4);
-                assert_eq!(saved.regs.regs[2], 1);
-                assert_eq!(saved.regs.regs[17], 0);
+                    .expect("parked parent context")
+            };
+            assert_eq!(saved.regs.regs[2], 1);
+            match saved.regs.regs[17] {
+                0 => {
+                    assert_eq!(saved.pc, entry + 18 * 4, "parent still at import return");
+                    false
+                }
+                0x55aa => {
+                    assert_eq!(saved.pc, entry + 19 * 4, "parent post-return witness");
+                    true
+                }
+                other => panic!("unexpected parent s1 0x{other:08x}"),
             }
         };
-        assert_custody(&cpu, &kernel);
+        assert!(!assert_custody(&cpu, &kernel));
 
         let mut selected_births = vec![kernel.current_process_birth_key()];
         let mut parent_progressed = false;
@@ -80708,18 +80787,40 @@ mod unicorn_tests {
             let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
                 &mut kernel,
                 &mut framebuffer,
-                limits,
+                super::UnicornRunLimits {
+                    stop_pc: None,
+                    ..limits
+                },
+            );
+            let parent_state = if kernel.current_process_birth_key() == Some(parent_birth) {
+                cpu.saved_context
+                    .as_ref()
+                    .map(|saved| (saved.pc, saved.regs.regs[17]))
+            } else {
+                cpu.parked_child_processes
+                    .iter()
+                    .find(|process| process.process_state.process_id == parent_birth.process_id())
+                    .and_then(|process| process.cpu.saved_context.as_ref())
+                    .map(|saved| (saved.pc, saved.regs.regs[17]))
+            };
+            eprintln!(
+                "FOLLOWUP_SLICE start_birth={:?} start_pc={:?} raw_stop_pc={:?} count_stop={:?} timeout={:?} outcome={:?} selected={:?} parent_state={parent_state:?}",
+                attempt.report.start_process_birth(),
+                attempt.report.start_pc(),
+                attempt.report.raw_stop_pc(),
+                attempt.report.count_stop_query(),
+                attempt.report.timeout_query(),
+                attempt.report.final_outcome(),
+                kernel.current_process_birth_key(),
             );
             attempt.result?;
-            assert_custody(&cpu, &kernel);
             selected_births.push(kernel.current_process_birth_key());
-            if kernel.current_process_birth_key() == Some(parent_birth)
-                && cpu
-                    .saved_context
-                    .as_ref()
-                    .is_some_and(|saved| saved.regs.regs[17] == 0x55aa)
-            {
+            if assert_custody(&cpu, &kernel) {
                 parent_progressed = true;
+                assert_eq!(
+                    attempt.report.raw_stop_pc(),
+                    &super::AttemptObservation::Value(entry + 19 * 4)
+                );
                 break;
             }
         }
