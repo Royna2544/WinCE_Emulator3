@@ -1018,6 +1018,20 @@ pub struct PendingProcessLaunch {
     pub primary_thread_birth: Option<ThreadBirthKey>,
 }
 
+/// Proof returned only after the exact process birth's stopped exit has
+/// passed framebuffer preflight and canonical completion. A termination
+/// request or a reused numeric PID cannot mint this witness.
+#[derive(Debug)]
+pub struct AcceptedProcessExit {
+    birth: ProcessBirthKey,
+}
+
+impl AcceptedProcessExit {
+    pub fn birth(&self) -> ProcessBirthKey {
+        self.birth
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolhelpProcessSnapshot {
     pub process_id: u32,
@@ -3367,35 +3381,47 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> Result<bool> {
+        self.try_mark_process_launch_exited_with_witness(launch, exit_code, framebuffer)
+            .map(|accepted| accepted.is_some())
+    }
+
+    /// Return a one-use retirement witness only after this exact stopped
+    /// birth's exit effects and canonical completion have succeeded.
+    pub fn try_mark_process_launch_exited_with_witness(
+        &mut self,
+        launch: &PendingProcessLaunch,
+        exit_code: u32,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> Result<Option<AcceptedProcessExit>> {
         // An original launch retains its exact birth even after both public
         // aliases close. Reject a delayed completion after PID/TID reuse
         // before it can touch windows, VM, or another process's workers.
         // A reconstructed launch without this witness cannot authorize any
         // cleanup, even its old primary-only path: its PID may have been reused.
         let Some(launch_birth) = launch.process_birth else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(exiting_birth) = self.handles.process_birth_key(launch.process_id) else {
-            return Ok(false);
+            return Ok(None);
         };
         if launch_birth != exiting_birth
             || !self.handles.process_execution_live_by_birth(exiting_birth)
         {
-            return Ok(false);
+            return Ok(None);
         }
         // The process object retains its exact primary birth after that
         // thread retires. A live worker reusing its numeric TID cannot take
         // the process exit code, and a supplied birth is only a consistency
         // witness against this canonical owner.
         let Some(primary) = self.handles.process_primary_thread_birth(exiting_birth) else {
-            return Ok(false);
+            return Ok(None);
         };
         if launch.thread_id != primary.thread_id()
             || launch
                 .primary_thread_birth
                 .is_some_and(|supplied| supplied != primary)
         {
-            return Ok(false);
+            return Ok(None);
         }
         let exit_code = self
             .handles
@@ -3433,7 +3459,9 @@ impl CeKernel {
             error: None,
             detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
         });
-        Ok(completed)
+        Ok(completed.then_some(AcceptedProcessExit {
+            birth: exiting_birth,
+        }))
     }
 
     /// One stopped process owns this exact birth before host completion may
