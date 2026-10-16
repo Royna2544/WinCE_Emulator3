@@ -145,6 +145,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
+     The [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
+     is now covered by the [canonical-primary query gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).
+     Next use that canonical birth in exit reconstruction, without numeric-TID
+     fallback, and prove rollback publication state. This remains separate
+     from O-T7 admitted-CPU custody.
      The [bounded live-checkpoint guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
      refuses retained Task/launch and CPU custody on save and restore; it is
      a safety stop, not atomic relineage. Real monitor rewind is unavailable
@@ -164,15 +169,22 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      the historical logs remain. A new direct first-slice MIPS control
      reaches `Completed` with an empty descendant queue and a held parent
      borrow ([red attempt](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log));
-     the current source skips that unnecessary borrow. Complete its final
-     focused/broad seal, then separately test nonempty descendant publication,
-     later-slice A→B survival and live-pump reachability. Nonempty queue
+     the current source skips that unnecessary borrow. Its
+     [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+     seals focused **1/0**, 19-block release **2,162/0/11 ignored**, and
+     no-default **1,532/0/3 ignored**. Next separately test nonempty
+     descendant publication, later-slice A→B survival and live-pump
+     reachability. Nonempty queue
      borrow/reservation conflict currently reports terminal post-effect CPU
      ownership loss, not a recoverable hold.
      [Attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-     remains current expected-red: the admitted child's ordinary native fault
-     loses its sole CPU owner (exit 101). Keep that fixture ignored until
-     machine-owned custody repairs the path.
+     first showed the admitted child's ordinary native fault losing its sole
+     CPU owner. [Final-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+     still exits 101 at that assertion. Keep the fixture ignored until
+     machine-owned custody repairs the path. The
+     [latest current-source rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+     again failed at zero parked child CPU owners after the canonical-primary
+     query fix; it is not a mounted-app result.
      The current source stages a successful `CreateProcessW` parent return PC
      and defers the child launch until after native return in both modes,
      removing the former immediate in-hook child call. The bounded
@@ -182,6 +194,19 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      ignored** suites. The file-view control did not check guest-visible
      post-lease reads. This cut does not supply CPU slots, a callback-scoped
      machine-state port or Stage 5 fairness.
+     A [test-only live-pump fixed-stack witness](evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+     now passes real-MIPS first-touch `SW`/`LW` in explicit-PC/global-hook and
+     default hookless/count-limited modes (focused **2/0**, release
+     **2,164/0/11 ignored**, no-default **1,532/0/3 ignored**). It attributes
+     the page commit to the production memory-fault route by source
+     exclusivity, not an independent callback counter. Use that route to
+     stage reentry/loan contract controls for the connected machine-state port;
+     an isolated fault-hook `RefCell` wrapper cannot be sound while the native
+     call retains `&mut CeKernel` and the other raw hooks bypass it. The raw
+     pointer, reentry and CPU custody remain unchanged. The first accepted
+     port cut must span native setup, all hook families, post-native teardown
+     and deferred child handoff with no loan held across reentry; a one-hook
+     fault test alone is diagnostic, not O-T7 acceptance.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import
@@ -259,7 +284,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
   Keep the incomplete archive until the user decides on disposal. History:
   [a04 seal](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-source-seal.json),
   [offline gate](evidence/stage3-live-evidence-20261015/prelaunch-repair-a04-offline-gate.raw.txt)
-  and PROGRESS.md. A future run needs, in order:
+  and PROGRESS.md. The [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
+  is source-tested, but no fresh output-hash-stamped rebuild exists yet. A
+  future run needs, in order:
   - a fresh, distinct approval whose chat citation is checked;
   - a new SHA-verified adjacent backup triplet, with the writable folders
     quiescent and the inventory validated;

@@ -4,8 +4,27 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 direct Completed empty-descendant source cut (validation pending)
+## 2026-10-17 test-only live-pump fixed-stack fault-hook witness
 
+The [bounded receipt](evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
+seals test-only `unicorn.rs` SHA-256
+`ff0bce3c3976c5f71bbcddbb2e35d182dd7d221552223529ed49b9eac720abd0`.
+Two ordinary real-MIPS controls execute `SW`/`LW` on a previously uncommitted
+fixed-stack page in `live_pump:true`, then verify the exact process-birth page
+pin, stored bytes, progress registers and nonzero saved PC. One requests an
+explicit PC stop (global code-hook mode); the other uses `stop_pc:None` and
+the default hookless, count-limited mode. The production memory-fault repair
+route is identified by source exclusivity, not a callback counter. Focused
+release passed **2/0**, complete 19-block release **2,164/0/11 ignored** and
+no-default **1,532/0/3 ignored**. No production pointer/loan or CPU-custody
+change was made; callback reentry, child survival and live iNavi remain open.
+No app, mount or GPS run occurred.
+
+## 2026-10-17 direct Completed empty-descendant source gate
+
+The [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+seals HEAD `0fb3bc0eaabb64fc153c1b62248cb2f3d6189561` and `unicorn.rs`
+SHA-256 `0dcf5c5d04d0e632cbe405554bfc7029b7eea654070d4ca1fbdc3070ac136d06`.
 The [stamped direct-MIPS expected red](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
 reached first-slice `Completed` after restoring a child-owned window while a
 test framebuffer held a parent-queue read borrow. The old unconditional
@@ -15,9 +34,14 @@ exit, exit code `0x63`, a ready process wait, restored window state and no
 host panic. For nonempty descendants the source uses fallible borrow and
 capacity reservation, reporting typed terminal `Backend` on conflict after
 exit effects have committed. This does not preserve descendant CPU custody
-on that failure. Focused green and complete-suite validation are pending; no
-later-slice, nonempty-descendant or live-app result is claimed. The two old
-ignored A→B/held-borrow fixtures have been retired because they missed their
+on that failure. Sealed focused attempt 05 passed **1/0**; 19-block release
+attempt 04 passed **2,162/0/11 ignored** and no-default attempt 06 passed
+**1,532/0/3 ignored**. Source hash stayed unchanged throughout those
+attempts; HEAD changed during attempt 04 when the source was backed up.
+[Ignored current-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+still fails at child CPU custody (exit 101). No later-slice,
+nonempty-descendant or live-app result is claimed. The two old ignored
+A→B/held-borrow fixtures have been retired because they missed their
 post-deferral preconditions; their historical evidence remains retained.
 
 ## 2026-10-17 deferred CreateProcessW post-native source gate
@@ -251,6 +275,30 @@ does not establish branch execution, boot timing or UI progress.
   and no-default and normal-feature checks pass. This does not retain a CPU
   after DLL-load/native/publication failure; the post-admission reds above
   remain open. No app or mount run followed.
+- A [current-source, stamped primary-identity expected red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
+  explicitly reran the ignored `task_ownership_primary_identity_outlives_launch_queue_and_trace_ring`
+  control and failed at its intended assertion (exit 101) with unchanged
+  source. The post-native launcher drains Kernel's entire pending queue before
+  child execution; after 129 later launch records roll the 128-entry trace
+  ring, a still-live child's primary TID was no longer recognized. The
+  [bounded canonical-primary fix](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md)
+  retains its exact primary birth on the canonical process instead of those
+  ephemeral records. Five focused controls pass; stable broad release passed
+  **2,169/0/10 ignored** and no-default **1,537/0/2 ignored**, 19 blocks each.
+  The first broad release attempt was invalidated by mid-run validation-script
+  churn and was rerun. The [dumped COREDLL REA check](evidence/ce6-rea-primary-thread-20261017/findings.md)
+  supports durable identity but not complete exit semantics. Boot-main
+  enumeration, exit reconstruction and CPU custody remain open; no app ran.
+- A [current-source ignored native-fault rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+  remains expected red (exit 101): a real-MIPS child faults on its first
+  admitted native slice, remains Kernel-live and has zero parked CPU owners.
+  The fixture's temporary directory was removed. This is not a live-app run.
+- The [v2 offline preflight gate](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
+  passed **171/171** process-free source/build evidence controls and **83/83**
+  runner guards. It requires a current-seal HEAD, executed focused test,
+  clean/release log chain and wrapper-stamped hashes of the newly built
+  target EXE/PDB matching preserved bytes. Historical a04 binaries lack that
+  witness. No new rebuild, backups or mounted app run followed.
 - The [live CPU checkpoint red](evidence/stage3-live-checkpoint-lineage-20261016/validation.receipt.md)
   copied boot PID 1/TID 1 execution births on save and restore. The separate
   [pristine-CPU Kernel reds](evidence/stage3-kernel-checkpoint-lineage-20261016/validation.receipt.md)

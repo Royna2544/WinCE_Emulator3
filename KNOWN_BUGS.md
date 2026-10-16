@@ -152,8 +152,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   [E-42 receipt](evidence/immutable-image-pages-20261014/validation.receipt.md)).
 - Stage 3 task authority is not accepted. The passed bounded gates are listed
   in `PROGRESS.md` ("2026-10-15 Stage 3 source gates"). Still open:
-  - Boot-main enumeration and durable child-primary identity controls stay
-    ignored (ledger E-8, E-11, E-26).
+  - Boot-main Toolhelp enumeration remains ignored (ledger E-8, E-11, E-26).
+    The child-primary queue/trace-ring red is now green through the
+    [canonical-primary source gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md),
+    but exit reconstruction has not migrated to that canonical birth.
   - CE caller wait/timeout behavior is not implemented. An old-MIPS
     direct-kernel real-handle continuation fails closed, the root process has
     no owned child-launch handoff for real-handle requests, and the
@@ -210,7 +212,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       [direct-MIPS expected red](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
       reached first-slice `Completed` with an empty descendant queue and a held
       parent read borrow and reproduced the old panic. The current source
-      skips that unnecessary borrow. Nonempty descendants instead use
+      skips that unnecessary borrow; its
+      [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
+      records focused **1/0**, 19-block release **2,162/0/11 ignored**, and
+      no-default **1,532/0/3 ignored**. Nonempty descendants instead use
       fallible borrow/reservation: on conflict, the child exit effects are
       already committed and the typed terminal error can still lose descendant
       CPU custody. No current-route nonempty survivor or live-pump later-slice
@@ -223,13 +228,22 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       and unsignaled, but `run_pending_process_launches` dropped the local CPU
       (queue 0 versus one required owner). Stamped final-source ignored
       [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-      still exits 101 at the sole-CPU-owner assertion (at
+      exited 101 at the sole-CPU-owner assertion (at
       `unicorn.rs:85725` in that stamped source),
-      so this remains a current offline source failure, not a live iNavi or
-      live-pump result. This native-fault control remains ignored; the two stale
+      and [sealed-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
+      repeats the red (exit 101). The later
+      [current-source rerun](evidence/stage3-cpu-custody-current-red-20261017/validation.receipt.md)
+      still fails with zero parked CPU owners. This remains an offline source failure, not a
+      live iNavi or live-pump result. This native-fault control remains ignored;
+      the two stale
       route-specific controls were retired.
       The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
       must cover it alongside the tested borrow conflict.
+    - The historical [primary-identity red](evidence/stage3-primary-claim-red-20261017/validation.receipt.md)
+      is fixed for the bounded Kernel query path by the
+      [canonical birth gate](evidence/stage3-primary-canonical-green-20261017/validation.receipt.md).
+      Still open: exit reconstruction may lose its launch/handle witness,
+      and unpublished-thread rollback has no explicit publication-state bit.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
       cannot be made atomic by the later finalizer preflight.
