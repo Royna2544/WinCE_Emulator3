@@ -20188,26 +20188,28 @@ fn run_pending_process_launches<D>(
                 continue;
             }
         }
-        parked_child_processes
-            .borrow_mut()
-            .push_back(ParkedProcess {
-                application: launch.application.clone(),
-                process_handle: Some(launch.process_handle),
-                thread_handle: Some(launch.thread_handle),
-                process_state: crate::ce::kernel::CurrentProcessState {
-                    process_id: launch.process_id,
-                    exit_code: crate::ce::kernel::STILL_ACTIVE,
-                    signaled: false,
-                },
-                thread_id: launch.thread_id,
-                cpu: Box::new(child),
-                blocked_send_id: None,
-                module_base: image.image_base(),
-                module_path: child_module_path.clone(),
-                module_host_path: path.clone(),
-                command_line: launch.command_line.clone().unwrap_or_default(),
-                current_directory: child_current_directory.clone(),
-            });
+        let parked = ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child),
+            blocked_send_id: None,
+            module_base: image.image_base(),
+            module_path: child_module_path.clone(),
+            module_host_path: path.clone(),
+            command_line: launch.command_line.clone().unwrap_or_default(),
+            current_directory: child_current_directory.clone(),
+        };
+        if let Err(error) = try_publish_parked_child(parked_child_processes, parked) {
+            kernel.restore_pending_process_launches(launches.into());
+            return Err(error);
+        }
         if let Some(error) = completion_recovery_error {
             kernel.restore_pending_process_launches(launches.into());
             return Err(error);
@@ -20229,6 +20231,24 @@ fn run_pending_process_launches<D>(
             )),
         });
     }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn try_publish_parked_child(
+    parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    parked: ParkedProcess,
+) -> Result<()> {
+    // This is a terminal invariant failure, not an exit-recovery hold: the
+    // caller cannot retain this CPU tree if the queue is already borrowed.
+    parent_queue
+        .try_borrow_mut()
+        .map_err(|_| {
+            Error::Backend(
+                "child CPU queue borrow conflict; terminal CPU ownership loss".to_owned(),
+            )
+        })?
+        .push_back(parked);
     Ok(())
 }
 
@@ -53405,6 +53425,95 @@ mod guest_thread_stack_tests {
         assert_eq!(fixture.kernel.recent_process_ops(), trace_before.as_slice());
         assert_eq!(framebuffer.pixels(), pixels_before);
         assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn first_slice_exited_survivor_queue_conflict_is_typed_terminal() -> Result<()> {
+        let mut fixture = NaturalParkedExitSurvivorFixture::new(0x0050_6780, 0x7ff7_5000)?;
+        let exiting_birth = fixture.exiting.process_birth.expect("exiting birth");
+        let foreign_birth = fixture.foreign.process_birth.expect("foreign birth");
+        let mut child = fixture
+            .scheduler
+            .parked_child_processes
+            .pop_front()
+            .expect("first-slice child CPU")
+            .cpu;
+        let parent_queue = std::rc::Rc::new(std::cell::RefCell::new(VecDeque::new()));
+        let held_queue = parent_queue.borrow();
+        let wait_before = fixture
+            .kernel
+            .blocked_waiter(fixture.wait_id)
+            .expect("foreign wait before conflict")
+            .clone();
+        let trace_before = fixture.kernel.recent_process_ops().to_vec();
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        let error = complete_first_slice_child_exit(
+            &mut child,
+            &fixture.exiting,
+            exiting_birth,
+            &mut fixture.kernel,
+            &mut framebuffer,
+            0x63,
+            &parent_queue,
+        )
+        .expect_err("held parent queue must refuse before A exits");
+        assert!(matches!(
+            error,
+            Error::HostExitAuthorityRecoveryRequired {
+                reason: "first-slice exit has no exclusive parent CPU queue"
+            }
+        ));
+        assert_eq!(child.parked_child_processes.len(), 1);
+        assert_eq!(
+            child.parked_child_processes[0].cpu.as_ref() as *const UnicornMips,
+            fixture.foreign_cpu_before
+        );
+
+        // This exercises the production fallback publication. Its failure is
+        // terminal and loses the local CPU tree; it is not a recovery hold.
+        let mut parked = parked_process_for_cpu(fixture.exiting.thread_id, *child);
+        parked.process_handle = Some(fixture.exiting.process_handle);
+        parked.thread_handle = Some(fixture.exiting.thread_handle);
+        parked.process_state.process_id = fixture.exiting.process_id;
+        let error = try_publish_parked_child(&parent_queue, parked)
+            .expect_err("held parent queue must return a terminal error without panicking");
+        assert!(matches!(
+            &error,
+            Error::Backend(message)
+                if message == "child CPU queue borrow conflict; terminal CPU ownership loss"
+        ));
+        assert!(held_queue.is_empty());
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(exiting_birth)
+        );
+        assert!(
+            fixture
+                .kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .process_exit_code(fixture.exiting.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(
+            fixture
+                .kernel
+                .is_wait_ready(fixture.exiting.process_handle, 1),
+            Some(false)
+        );
+        assert_eq!(
+            fixture.kernel.blocked_waiter(fixture.wait_id),
+            Some(&wait_before)
+        );
+        assert_eq!(fixture.kernel.recent_process_ops(), trace_before.as_slice());
         Ok(())
     }
 
