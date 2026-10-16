@@ -20227,9 +20227,30 @@ fn run_pending_process_launches<D>(
                 // The child itself finished the request after its native
                 // lease closed. Preserve any descendant CPUs it had parked;
                 // the completed child's engine is already sealed.
-                parked_child_processes
-                    .borrow_mut()
-                    .append(&mut child.parked_child_processes);
+                if !child.parked_child_processes.is_empty() {
+                    // Exit and window restoration already committed inside the
+                    // child lease. A publication failure here is terminal for
+                    // its descendants, not a recoverable stopped-exit refusal.
+                    let mut parent_queue = match parked_child_processes.try_borrow_mut() {
+                        Ok(queue) => queue,
+                        Err(_) => {
+                            kernel.restore_pending_process_launches(launches.into());
+                            return Err(Error::Backend(
+                                "completed child descendant CPU queue borrow conflict after committed exit; terminal descendant CPU ownership loss".to_owned(),
+                            ));
+                        }
+                    };
+                    if parent_queue
+                        .try_reserve(child.parked_child_processes.len())
+                        .is_err()
+                    {
+                        kernel.restore_pending_process_launches(launches.into());
+                        return Err(Error::Backend(
+                            "completed child descendant CPU queue reservation failed after committed exit; terminal descendant CPU ownership loss".to_owned(),
+                        ));
+                    }
+                    parent_queue.append(&mut child.parked_child_processes);
+                }
                 continue;
             }
             ChildProcessRunOutcome::Exited(exit_code) => {
@@ -85355,7 +85376,6 @@ mod unicorn_tests {
     }
 
     #[test]
-    #[ignore = "expected red: first-slice Completed borrows an empty held parent queue"]
     fn real_mips_direct_completed_skips_empty_held_parent_queue() -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
