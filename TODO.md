@@ -135,8 +135,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
      proved a third route: after A's guest launch and exit, the
      already-exited-A skip dropped live B's CPU. Retain that receipt as
-     historical evidence; rebuild or retire its ignored fixture for the
-     post-native deferred route. The
+     historical evidence; its ignored fixture was retired after it missed
+     the post-native deferred route. A separate later-slice survivor control
+     still needs a reachable exact-owner fixture. The
      [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
      that proved an ordinary first-slice error left a still-live child
      without CPU custody remains an ignored diagnostic, with its current-source
@@ -159,13 +160,19 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      and [17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
      exited 101 at unmet fixture preconditions under post-native deferred
      launch, not at the old failure sites: they neither reproduce nor fix
-     those two failures. Next determine whether the `Completed` queue borrow
-     (`unicorn.rs:20226-20232`) is reachable in the current route, including a
-     live-pump later slice, then rebuild or retire those stale fixtures.
+     those two failures. Their ignored fixture implementations were retired;
+     the historical logs remain. A new direct first-slice MIPS control
+     reaches `Completed` with an empty descendant queue and a held parent
+     borrow ([red attempt](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log));
+     the current source skips that unnecessary borrow. Complete its final
+     focused/broad seal, then separately test nonempty descendant publication,
+     later-slice A→B survival and live-pump reachability. Nonempty queue
+     borrow/reservation conflict currently reports terminal post-effect CPU
+     ownership loss, not a recoverable hold.
      [Attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
      remains current expected-red: the admitted child's ordinary native fault
-     loses its sole CPU owner (`unicorn.rs:85725`, exit 101). Keep all three
-     ignored for this gate; repair custody before enabling them.
+     loses its sole CPU owner (exit 101). Keep that fixture ignored until
+     machine-owned custody repairs the path.
      The current source stages a successful `CreateProcessW` parent return PC
      and defers the child launch until after native return in both modes,
      removing the former immediate in-hook child call. The bounded

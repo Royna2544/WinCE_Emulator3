@@ -4,6 +4,22 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 direct Completed empty-descendant source cut (validation pending)
+
+The [stamped direct-MIPS expected red](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
+reached first-slice `Completed` after restoring a child-owned window while a
+test framebuffer held a parent-queue read borrow. The old unconditional
+`borrow_mut` panicked. The current source skips parent-queue publication when
+the completed child has no descendants; its ordinary test checks one exact
+exit, exit code `0x63`, a ready process wait, restored window state and no
+host panic. For nonempty descendants the source uses fallible borrow and
+capacity reservation, reporting typed terminal `Backend` on conflict after
+exit effects have committed. This does not preserve descendant CPU custody
+on that failure. Focused green and complete-suite validation are pending; no
+later-slice, nonempty-descendant or live-app result is claimed. The two old
+ignored A→B/held-borrow fixtures have been retired because they missed their
+post-deferral preconditions; their historical evidence remains retained.
+
 ## 2026-10-17 deferred CreateProcessW post-native source gate
 
 The [bounded source/test receipt](evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
@@ -24,7 +40,8 @@ exited 101 at unmet preconditions of the old `Completed`/A-exit fixtures;
 neither reproduces nor repairs those pre-deferral failures. Ignored
 [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
 still exits 101 when an admitted child's ordinary native fault loses its sole
-CPU owner. All three stay ignored. Machine-owned CPU custody, the
+CPU owner. The two stale fixtures were subsequently retired; the native-fault
+fixture remains ignored. Machine-owned CPU custody, the
 callback-scoped Task/Kernel/framebuffer port, live-pump later-slice survivor
 behavior and Stage 5 scheduling remain open. No live app or writable-mount
 run occurred.
@@ -212,8 +229,9 @@ does not establish branch execution, boot timing or UI progress.
   A exits once with `0x63`; B remains exact-birth Kernel-live and unsignaled,
   but `CreateProcessChildParkSkipped(already_exited)` drops the local CPU now
   switched to B, leaving the parent queue empty. Focused attempt 03 failed
-  on B CPU reachability; the final fixture is ignored for ordinary suites.
-  This is not the live-pump route or a live iNavi result.
+  on B CPU reachability; the fixture was ignored for ordinary suites at that
+  seal and was later retired after missing the post-deferral route. This is
+  not the live-pump route or a live iNavi result.
 - A [test-only first-slice native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
   now executes a synthetic child to `READ_UNMAPPED`. Its exact birth stays
   Kernel-live, `STILL_ACTIVE` and unsignaled, but the ordinary error drops

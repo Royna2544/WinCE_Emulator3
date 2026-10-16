@@ -184,29 +184,37 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       before A was pruned. `run_pending_process_launches` then tested A's exited
       handle, recorded `CreateProcessChildParkSkipped(already_exited)` and dropped
       that local B CPU; the parent queue had zero owners instead of one. The
-      test remains ignored expected-red. This was a reproduced source fixture
-      failure before the post-native launch cut, not an attributed live iNavi
+      historical expected-red was reproduced before the post-native launch
+      cut, not an attributed live iNavi
       or live-pump failure. The stamped current-source
       [attempt 17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
       exited 101 because A had not reached the fixture's exit-once
-      precondition (`unicorn.rs:85571`); it neither reproduces nor fixes the
-      earlier survivor-loss failure.
+      precondition (at `unicorn.rs:85571` in that stamped source); it neither
+      reproduces nor fixes the
+      earlier survivor-loss failure. That stale ignored fixture was retired;
+      later-slice survivor ownership on the current route remains unproved.
     - If the parent parked queue is already borrowed, first-slice `Exited`
       refuses before Kernel exit and the fallback returns terminal `Backend`
       without a host panic, but it drops the local A+B CPU owners. This is
       ownership loss on a borrow-invariant violation, not recoverable parking;
       Stage 4 needs a machine-owned child owner. The separate `Completed`
-      path still uses unconditional `borrow_mut` (`unicorn.rs:20226-20232`). The
+      path formerly used unconditional `borrow_mut`. The
       [pre-deferral offline control](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
       reproduced a `RefCell` panic and survivor-owner loss when a custom
       framebuffer reenters that borrowed queue; current framebuffer
       implementations have not been shown to do so. Stamped current-source
       [attempt 16](evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
       exited 101 before the restore/reentry precondition (`restore_dirty_calls`
-      0 rather than 1); it neither reproduces nor fixes that panic. Determine
-      whether this `Completed` borrow is reachable after the post-native cut,
-      including a live-pump later slice, then rebuild or retire the stale
-      attempt-16/17 fixtures. The first-slice
+      0 rather than 1); it neither reproduces nor fixes that panic. That stale
+      ignored fixture was retired. A newer
+      [direct-MIPS expected red](evidence/stage3-completed-borrow-20261017/attempt01-direct-completed-expected-red.raw.log)
+      reached first-slice `Completed` with an empty descendant queue and a held
+      parent read borrow and reproduced the old panic. The current source
+      skips that unnecessary borrow. Nonempty descendants instead use
+      fallible borrow/reservation: on conflict, the child exit effects are
+      already committed and the typed terminal error can still lose descendant
+      CPU custody. No current-route nonempty survivor or live-pump later-slice
+      control closes that gap. The first-slice
       candidate also lacks a separate exact live primary-thread-birth gate.
       A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
       at its earlier seal executed an admitted synthetic MIPS child through its
@@ -215,9 +223,11 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       and unsignaled, but `run_pending_process_launches` dropped the local CPU
       (queue 0 versus one required owner). Stamped final-source ignored
       [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
-      still exits 101 at the sole-CPU-owner assertion (`unicorn.rs:85725`),
+      still exits 101 at the sole-CPU-owner assertion (at
+      `unicorn.rs:85725` in that stamped source),
       so this remains a current offline source failure, not a live iNavi or
-      live-pump result. All three ignored controls remain ignored for this gate.
+      live-pump result. This native-fault control remains ignored; the two stale
+      route-specific controls were retired.
       The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
       must cover it alongside the tested borrow conflict.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
