@@ -55,6 +55,14 @@ fn build_with_cmake() {
 
     // Initialize configuration
     let mut config = cmake::Config::new(uc_dir);
+    config.define(
+        "UNICORN_NATIVE_TIMER_DIAGNOSTIC",
+        if env::var_os("CARGO_FEATURE_NATIVE_TIMER_DIAGNOSTIC").is_some() {
+            "ON"
+        } else {
+            "OFF"
+        },
+    );
 
     // Check for tools and set up configuration
     let has_ninja = if compiler.is_like_msvc() {

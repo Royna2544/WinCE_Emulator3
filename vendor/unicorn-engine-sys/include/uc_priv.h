@@ -383,6 +383,11 @@ struct uc_struct {
                          // uc_query(UC_QUERY_TIMEOUT)
     QemuThread timer;    // timer for emulation timeout
     uint64_t timeout;    // timeout for uc_emu_start()
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+    // Test-only, per-engine probe. No field or callback exists in normal builds.
+    void (*native_timer_diag_probe)(uint32_t event, void *user_data);
+    void *native_timer_diag_user_data;
+#endif
 
     uint64_t invalid_addr; // invalid address to be accessed
     int invalid_error;     // invalid memory code: 1 = READ, 2 = WRITE, 3 = CODE

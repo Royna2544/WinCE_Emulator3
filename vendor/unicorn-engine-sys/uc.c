@@ -13,6 +13,9 @@
 
 #include <time.h> // nanosleep
 #include <string.h>
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+#include <windows.h>
+#endif
 
 #include "uc_priv.h"
 
@@ -1010,6 +1013,31 @@ uc_err uc_mem_write(uc_engine *uc, uint64_t address, const void *_bytes,
 }
 
 #define TIMEOUT_STEP 2 // microseconds
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+// Diagnostic ABI for a separately feature-built, ignored Windows test only:
+// 1 = timer passed its expiry decision, 2 = hook stop about to write,
+// 3 = timer stop returned, 4 = hook stop returned. The callback must not
+// touch this engine and must return within a bounded interval.
+UNICORN_EXPORT uc_err uc_native_timer_diag_set_probe(
+    uc_engine *uc, void (*probe)(uint32_t event, void *user_data),
+    void *user_data)
+{
+    if (!uc || !probe || uc->nested_level != 0) {
+        return UC_ERR_ARG;
+    }
+    uc->native_timer_diag_probe = probe;
+    uc->native_timer_diag_user_data = user_data;
+    return UC_ERR_OK;
+}
+
+static inline void native_timer_diag_event(uc_engine *uc, uint32_t event)
+{
+    if (uc->native_timer_diag_probe) {
+        uc->native_timer_diag_probe(event, uc->native_timer_diag_user_data);
+    }
+}
+#endif
+
 static void *_timeout_fn(void *arg)
 {
     struct uc_struct *uc = arg;
@@ -1025,9 +1053,15 @@ static void *_timeout_fn(void *arg)
 
     // timeout before emulation is done?
     if (!uc->emulation_done) {
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+        native_timer_diag_event(uc, 1);
+#endif
         uc->timed_out = true;
         // force emulation to stop
         uc_emu_stop(uc);
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+        native_timer_diag_event(uc, 3);
+#endif
     }
 
     return NULL;
@@ -1263,9 +1297,21 @@ UNICORN_EXPORT
 uc_err uc_emu_stop(uc_engine *uc)
 {
     UC_INIT(uc);
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+    bool native_diag_hook_stop = uc->native_timer_diag_probe && uc->timeout &&
+                                 GetCurrentThreadId() != uc->timer.tid;
+    if (native_diag_hook_stop) {
+        native_timer_diag_event(uc, 2);
+    }
+#endif
     uc->stop_request = true;
     uc_err err = break_translation_loop(uc);
     restore_jit_state(uc);
+#ifdef UC_NATIVE_TIMER_DIAGNOSTIC
+    if (native_diag_hook_stop) {
+        native_timer_diag_event(uc, 4);
+    }
+#endif
     return err;
 }
 

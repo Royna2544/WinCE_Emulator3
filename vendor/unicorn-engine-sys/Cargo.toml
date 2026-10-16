@@ -84,6 +84,7 @@ arch_tricore = []
 arch_x86 = []
 default = ["arch_all"]
 dynamic_linkage = []
+native_timer_diagnostic = []
 
 [lib]
 name = "unicorn_engine_sys"
