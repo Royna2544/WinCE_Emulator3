@@ -54932,6 +54932,103 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn stopped_boot_exit_missing_primary_birth_requires_recovery_but_non_exit_does_not()
+    -> Result<()> {
+        let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
+        let boot_birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let primary = kernel
+            .handles
+            .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
+            .expect("boot primary thread birth");
+        let mut cpu = UnicornMips::new()?;
+        cpu.set_initial_thread_id(MAIN_GUEST_THREAD_ID);
+        cpu.current_thread_id = MAIN_GUEST_THREAD_ID;
+        let mut regs = MipsGuestContext::zero();
+        regs.regs[2] = 0x53;
+        cpu.saved_context = Some(SavedCpuContext {
+            pc: THREAD_EXIT_STUB_ADDR,
+            regs,
+        });
+        // The CPU stopped at the raw exit stub, but its saved primary-birth
+        // witness was lost before the host could complete process exit.
+        cpu.saved_context_thread_birth = None;
+        cpu.last_debug = Some(UnicornDebugSnapshot {
+            pc: THREAD_EXIT_STUB_ADDR,
+            v0: 0x53,
+            thread_exit_reached: true,
+            ..Default::default()
+        });
+        let process_before = kernel.current_process_state();
+        let trace_before = kernel.recent_process_ops().len();
+        let saved_before = cpu.saved_context.clone();
+        let debug_before = cpu.last_debug.clone();
+        let native_before = cpu.native_engine_identity_for_test();
+
+        let error = cpu
+            .try_complete_active_process_thread_exit(&mut kernel, None)
+            .expect_err("missing stopped boot primary birth must require recovery");
+        assert!(
+            matches!(&error, Error::HostExitAuthorityRecoveryRequired { .. }),
+            "{error:?}"
+        );
+        assert_eq!(kernel.current_process_state(), process_before);
+        assert!(kernel.handles.process_execution_live_by_birth(boot_birth));
+        assert_eq!(
+            kernel
+                .handles
+                .process_signaled_by_id(boot_birth.process_id()),
+            Some(false)
+        );
+        assert_eq!(
+            kernel.handles.thread_birth_key_by_id(MAIN_GUEST_THREAD_ID),
+            Some(primary)
+        );
+        assert!(
+            kernel
+                .handles
+                .thread_execution_live_by_id(MAIN_GUEST_THREAD_ID)
+        );
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        assert_eq!(cpu.saved_context, saved_before);
+        assert_eq!(cpu.saved_context_thread_birth, None);
+        assert_eq!(cpu.last_debug, debug_before);
+        assert_eq!(cpu.native_engine_identity_for_test(), native_before);
+        assert!(!cpu.active_process_execution_completed());
+
+        // A normal stopped slice with the same absent saved birth is not a
+        // process-exit candidate and must remain a non-effectful no-op.
+        cpu.saved_context.as_mut().expect("saved CPU").pc = 0x0040_1000;
+        let snapshot = cpu.last_debug.as_mut().expect("debug snapshot");
+        snapshot.pc = 0x0040_1000;
+        snapshot.thread_exit_reached = false;
+        let saved_before = cpu.saved_context.clone();
+        let debug_before = cpu.last_debug.clone();
+        assert!(!cpu.try_complete_active_process_thread_exit(&mut kernel, None)?);
+        assert_eq!(kernel.current_process_state(), process_before);
+        assert!(kernel.handles.process_execution_live_by_birth(boot_birth));
+        assert_eq!(
+            kernel
+                .handles
+                .process_signaled_by_id(boot_birth.process_id()),
+            Some(false)
+        );
+        assert!(
+            kernel
+                .handles
+                .thread_execution_live_by_id(MAIN_GUEST_THREAD_ID)
+        );
+        assert_eq!(kernel.recent_process_ops().len(), trace_before);
+        assert_eq!(cpu.saved_context, saved_before);
+        assert_eq!(cpu.saved_context_thread_birth, None);
+        assert_eq!(cpu.last_debug, debug_before);
+        assert_eq!(cpu.native_engine_identity_for_test(), native_before);
+        assert!(!cpu.active_process_execution_completed());
+        Ok(())
+    }
+
+    #[test]
     fn active_terminal_child_exit_hands_back_to_parked_parent() -> Result<()> {
         let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
