@@ -131,8 +131,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      First complete the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
      and [O-T7](docs/DECISIONS.md) consumer inventory: both held-queue
      publication and an ordinary post-admission first-slice error can drop
-     the only live child CPU owner. The [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
-     now proves a third route: after A's guest launch and exit, the
+     the only live child CPU owner. At its earlier source seal, the
+     [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+     proved a third route: after A's guest launch and exit, the
      already-exited-A skip drops live B's CPU. Keep it and the
      [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
      that proves an ordinary first-slice error leaves a still-live child
@@ -148,10 +149,23 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Its seven formerly ignored controls are now ordinary counted tests in
      [both full suites](evidence/stage3-checkpoint-unignored-20261017/validation.receipt.md);
      keep the strict fence while CPU custody is the priority. The
-     [three current-source reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-     reproduce `Completed` callback borrow/panic, already-exited-A survivor
-     loss, and admitted-child native-fault loss offline. Do not unignore them
+     [three pre-deferral source reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+     reproduced `Completed` callback borrow/panic, already-exited-A survivor
+     loss, and admitted-child native-fault loss offline. Their current-source
+     status needs a new gate; do not unignore them
      until machine-owned custody can retain each original CPU.
+     The current source stages a successful `CreateProcessW` parent return PC
+     and defers the child launch until after native return in both modes,
+     removing the former immediate in-hook child call. Focused and broad
+     validation of this cut remains provisional; it does not supply CPU slots,
+     a callback-scoped machine-state port or Stage 5 fairness.
+     Audit the five remaining unchecked native `V0` return writes in the
+     runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
+     `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import
+     return-write guard, separate its error slot/report operation from the
+     generic `immediate_process_sync_error` and `synchronize native process
+     mapping` label (`unicorn.rs:15092`); an import-register failure must not
+     be reported as a mapping-sync failure.
      Repair post-admission custody before unignoring those diagnostics, and
      stage further expected reds
      before replacing parked Box ownership with checked locators; do not add

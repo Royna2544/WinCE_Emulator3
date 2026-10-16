@@ -79,11 +79,14 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   arena, E-12 map/unmap churn, in-hook register helpers that zero failed reads
   and drop write errors, and unaudited o32 float-return restores (ledger E-2
   to E-6, E-12, E-32, E-33).
-- VM coherence still unproved: guest `CreateProcessW`/scheduler handoff (the
-  fixtures select the child manually), distinct public mappings at one VA, and
-  full machine clone relineage. A same-PID DIB view without VA metadata can
-  Flush but not Unmap. The immediate CreateProcess view-sync failure path has
-  no fault injection. `VirtualAllocEx`/`VirtualQueryEx` name exports are
+- VM coherence still unproved across the general guest `CreateProcessW`/
+  scheduler handoff, distinct public mappings at one VA, and full machine
+  clone relineage. Earlier fixtures selected the child manually; the current
+  source has an automatic post-native path in both modes, pending a final
+  source/test gate. A same-PID DIB view without VA metadata can Flush but not
+  Unmap. The former immediate CreateProcess view-sync failure path is
+  historical; new post-native query/invalid-PE controls do not establish
+  general failure recovery. `VirtualAllocEx`/`VirtualQueryEx` name exports are
   absent. History: ledger E-14 to E-41.
 - Monitor checkpoint/rewind is deliberately unavailable while a CPU has
   execution custody or a pending launch or canonical Kernel Task record is
@@ -174,23 +177,24 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       covers only tested natural-parked and requested-active stopped exits;
       [first-slice receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md).
       This source-audited risk is not an attributed live-app failure.
-    - A [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
-      executes A's actual `CreateProcessW` IAT call to launch B, then returns
+    - At its earlier source seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+      executed A's actual `CreateProcessW` IAT call to launch B, then returned
       A through its saved startup RA. A exits `0x63`; B remains exact-birth
       Kernel-live and unsignaled, but slice-end rotation makes B the local CPU
       before A is pruned. `run_pending_process_launches` then tests A's exited
       handle, records `CreateProcessChildParkSkipped(already_exited)` and drops
       that local B CPU; the parent queue has zero owners instead of one. The
-      final source test is ignored expected-red. This is a reproduced source
-      fixture failure, not an attributed live iNavi or live-pump failure.
+      test remains ignored expected-red. This was a reproduced source fixture
+      failure before the post-native launch cut, not an attributed live iNavi
+      or live-pump failure; the changed source requires its own rerun.
     - If the parent parked queue is already borrowed, first-slice `Exited`
       refuses before Kernel exit and the fallback returns terminal `Backend`
       without a host panic, but it drops the local A+B CPU owners. This is
       ownership loss on a borrow-invariant violation, not recoverable parking;
       Stage 4 needs a machine-owned child owner. The separate `Completed`
       path still uses unconditional `borrow_mut`. The
-      [current-source offline control](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-      reproduces a `RefCell` panic and survivor-owner loss when a custom
+      [pre-deferral offline control](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+      reproduced a `RefCell` panic and survivor-owner loss when a custom
       framebuffer reenters that borrowed queue; current framebuffer
       implementations have not been shown to do so. The first-slice
       candidate also lacks a separate exact live primary-thread-birth gate.
