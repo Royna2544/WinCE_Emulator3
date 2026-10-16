@@ -254,8 +254,9 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       nonempty descendant publication conflict above, other parked/active
       owner-loss paths, or the public run wrapper's custody bypass. A
       stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
-      error crossing the producer's `child_admitted` flag before poisoning,
-      moving an unpoisoned CPU into quarantine and failing the exit consumer's
+      error crossing the producer's `child_admitted` flag before poisoning and
+      moving an unpoisoned CPU into quarantine. The test stopped at that
+      assertion; by source inspection, the exit consumer would refuse its
       poison-bit preflight. A producer-side seal made a08 debug pre-entry
       and a09 debug real-MIPS fault controls green on superseded source
       SHA-256 `1AAE8A66…33090`; intermediate producer-only a10 focused

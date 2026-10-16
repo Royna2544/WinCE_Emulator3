@@ -18,7 +18,9 @@ owner is closed and its unsafe saved continuation is cleared. A
 `TerminateProcess` request alone retains the slot; same-Kernel checked
 accepted exit retires it and the fixed-stack pin in this focused fault shape.
 Stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
-error quarantining an unpoisoned CPU that the exit consumer refused to retire.
+error quarantining an unpoisoned CPU. It stopped at the poison-bit assertion;
+the exit consumer would refuse that bit by source inspection, not an executed
+consumer control.
 A producer-side seal made the a08 synthetic pre-entry control green; a09's
 real-MIPS fault control was also green in debug on the same `unicorn.rs`
 SHA-256 `1AAE8A66ACFFFE3D8FE9CED10687C98A28879BF9267A1736D7B4689F21A33090`.
