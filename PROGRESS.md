@@ -4,6 +4,31 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 deferred CreateProcessW post-native source gate
+
+The [bounded source/test receipt](evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+seals `src/emulator/unicorn.rs` SHA-256
+`4be7f3f25e4a51ad762d40b8064b2048c4593243dd991a6a5010444ef5eab69d`.
+Successful guest `CreateProcessW` now stages the parent's nonzero return PC
+and defers child launch until after the native attempt in both non-live and
+live-pump modes; non-live rotation can choose the child before the parent
+resumes. Final-source focused controls passed **5/0**, and the two-mode
+file-view reseed control passed **1/0**. Complete 19-block suites passed
+release-feature **2,161/0/13 ignored** and no-default **1,532/0/3 ignored**.
+The file-view control checks canonical host mapping bytes after reseed, not a
+guest-visible post-lease read.
+
+Final-source ignored reruns [16](evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
+and [17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
+exited 101 at unmet preconditions of the old `Completed`/A-exit fixtures;
+neither reproduces nor repairs those pre-deferral failures. Ignored
+[attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
+still exits 101 when an admitted child's ordinary native fault loses its sole
+CPU owner. All three stay ignored. Machine-owned CPU custody, the
+callback-scoped Task/Kernel/framebuffer port, live-pump later-slice survivor
+behavior and Stage 5 scheduling remain open. No live app or writable-mount
+run occurred.
+
 ## 2026-10-17 counted checkpoint guard and CPU-custody controls
 
 The seven formerly ignored `src/main.rs` checkpoint-lineage controls are now
@@ -14,12 +39,13 @@ both logs. Initial native-build debug-info and sandbox loopback failures were
 separately recorded and resolved for these attempts. This verifies the strict
 save/restore refusal, not live machine relineage or in-session rewind.
 
-Three [current-source ignored expected-red controls](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
-still fail, each with a stamped, NUL-free focused log: a `Completed` child
-with a held parent queue panics on `RefCell::borrow_mut` and strands its
-survivor, an already-exited A skip drops guest-created B's CPU, and an
-ordinary native fault drops an admitted child's CPU while its Kernel birth
-stays live. These are offline CPU-custody failures, not a live-pump or iNavi
+At that earlier pre-deferral seal, three
+[ignored expected-red controls](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
+failed, each with a stamped, NUL-free focused log: a `Completed` child
+with a held parent queue panicked on `RefCell::borrow_mut` and stranded its
+survivor, an already-exited A skip dropped guest-created B's CPU, and an
+ordinary native fault dropped an admitted child's CPU while its Kernel birth
+stayed live. These were offline CPU-custody failures, not a live-pump or iNavi
 result. No app or writable-mount run occurred.
 
 ## 2026-10-17 opt-in native timer boundary control
@@ -181,8 +207,8 @@ located static `FindWindowW`-guarded `CreateProcessW` branches for
 `happyway_win.exe` and `iSearch.exe`, each retaining returned process/thread
 information. This corroborates child ownership as a real app dependency but
 does not establish branch execution, boot timing or UI progress.
-- A [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
-  now executes an actual ordinal-493 `CreateProcessW` import in guest A.
+- At its earlier seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
+  executed an actual ordinal-493 `CreateProcessW` import in guest A.
   A exits once with `0x63`; B remains exact-birth Kernel-live and unsignaled,
   but `CreateProcessChildParkSkipped(already_exited)` drops the local CPU now
   switched to B, leaving the parent queue empty. Focused attempt 03 failed
@@ -195,7 +221,8 @@ does not establish branch execution, boot timing or UI progress.
   ignored fixture is source-sealed at `unicorn.rs` SHA-256
   `508101e2942f997472de99c1765905756104e06caf6313ac96717292e3250c79`;
   focused red exit 101 and normal selection one ignored/zero failed. No
-  production custody repair, broad suite or mounted app run followed.
+  production custody repair, broad suite or mounted app run followed at that
+  earlier seal; the later deferred-source gate is reported above.
 - The [pre-CPU pending-launch red](evidence/stage3-pre-cpu-launch-retention-20261016/validation.receipt.md)
   showed ambiguous lazy file-view setup draining an already-published exact
   child launch while its Kernel birth stayed live. The bounded

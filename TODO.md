@@ -168,9 +168,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      ignored for this gate; repair custody before enabling them.
      The current source stages a successful `CreateProcessW` parent return PC
      and defers the child launch until after native return in both modes,
-     removing the former immediate in-hook child call. Focused and broad
-     validation of this cut remains provisional; it does not supply CPU slots,
-     a callback-scoped machine-state port or Stage 5 fairness.
+     removing the former immediate in-hook child call. The bounded
+     [source/test gate](evidence/stage3-createprocess-deferred-20261017/validation.receipt.md)
+     passed focused **5/0**, two-mode file-view reseed **1/0**, and 19-block
+     release-feature **2,161/0/13 ignored** and no-default **1,532/0/3
+     ignored** suites. The file-view control did not check guest-visible
+     post-lease reads. This cut does not supply CPU slots, a callback-scoped
+     machine-state port or Stage 5 fairness.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import
