@@ -13724,9 +13724,22 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
-                if let Some(v1) = import_return.v1 {
-                    let _ = memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1));
+                let write_return = (|| -> Result<()> {
+                    memory
+                        .uc
+                        .reg_write(RegisterMIPS::V0, u64::from(result))
+                        .map_err(|err| Error::Backend(format!("write import return V0: {err:?}")))?;
+                    if let Some(v1) = import_return.v1 {
+                        memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1)).map_err(
+                            |err| Error::Backend(format!("write import return V1: {err:?}")),
+                        )?;
+                    }
+                    Ok(())
+                })();
+                if let Err(error) = write_return {
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(error);
+                    let _ = memory.uc.emu_stop();
+                    return;
                 }
                 // CreateProcess has published the child's handle and output
                 // words, but the parent must not execute its next guest
