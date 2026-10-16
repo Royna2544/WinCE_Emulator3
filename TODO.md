@@ -210,7 +210,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      pointer, reentry and CPU custody remain unchanged. The first accepted
      port cut must span native setup, all hook families, post-native teardown
      and deferred child handoff with no loan held across reentry; a one-hook
-     fault test alone is diagnostic, not O-T7 acceptance.
+     fault test alone is diagnostic, not O-T7 acceptance. The
+     [current-source pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
+     enumerates the remaining raw-loan sites and the native-fault CPU-drop
+     path; it is source inventory, not a port implementation.
      Audit the five remaining unchecked native `V0` return writes in the
      runtime loader, MessageBox and popup-menu paths (`unicorn.rs:13324`,
      `:23483`, `:23494`, `:23744`, `:23754`). After the new checked import
