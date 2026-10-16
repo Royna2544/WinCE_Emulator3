@@ -2053,6 +2053,35 @@ identified, and no emulator source gate or live-app run follows from this
 static check. All three temporary NTFS analysis copies were removed after
 their evidence bundles were exported.
 
+## Bounded parked-CPU survivor and saved-CPU-owner source gate (2026-10-16, executed offline)
+
+The [preserved natural-parked/active duplicate expected reds](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
+showed independently live foreign B CPU trees being lost when the exiting A
+tree was removed. The [combined sealed receipt](../../evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+records the exact source and numbered attempts. At HEAD `6aeeb21c`,
+`unicorn.rs` SHA-256 was
+`D172BF79A5A5990B707BC980C22ACC1C63C74B49475BCE15BF1C88DEE15D751B`.
+In the tested natural-parked and requested-active stopped-exit paths, exact
+birth and live Kernel ownership are preflighted before effects; after
+accepted process retirement, original nonmodal foreign CPU boxes, saved
+contexts, waits and descendants are moved into the survivor queue rather
+than discarded or cloned. A foreign saved-context CPU must have a nonzero
+current TID matching its saved exact thread birth, and that birth must remain
+execution-live. Three negative ownership controls refuse exit before effects;
+a live representative-worker control confirms that the parked record's
+numeric representative TID is not CPU authority. Focused release passed
+**4/0**. Complete 19-block suites passed release **2,144/0/10 ignored** and
+no-default **1,524/0/3 ignored**. Earlier passing a09 on source `286A3FDF…`
+and the a06 alias-close regression are intermediate/superseded, not credited
+to this seal.
+
+First-slice child `Exited`, other active exits, requested parked siblings,
+already-exited cleanup, generic duplicate pruning, foreign CPU nodes without
+saved context and PC resumability remain separate gates. The static
+[CE6/REA check](../../evidence/ce6-rea-exit-20261016/findings.md) did not
+locate the dumped kernel exit body. No iNavi app, writable mount, LAN,
+footprint, responsiveness or full Stage 3 result follows.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

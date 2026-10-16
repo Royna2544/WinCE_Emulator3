@@ -222,8 +222,15 @@ The bounded [D-011 modal-presence refusal gate](evidence/stage3-modal-exit-failc
 now preserves modal-bearing parked CPU subtrees and fails closed before
 Kernel effects for three red-to-green stopped-exit shapes. Its sealed source
 passed 19-block release-feature **2,137/0/10 ignored** and no-default
-**1,524/0/3 ignored**; checked modal-pixel restoration, nonmodal descendant
-CPU ownership and live-app proof remain open. No mount run was made.
+**1,524/0/3 ignored**; checked modal-pixel restoration and live-app proof
+remain open. The later bounded
+[parked-survivor/saved-CPU-owner gate](evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+preserves tested nonmodal foreign CPU trees on natural-parked and
+requested-active stopped exits and refuses stale saved CPU thread ownership
+before effects. Its combined sealed source passed release **2,144/0/10
+ignored** and no-default **1,524/0/3 ignored**, each over 19 blocks. Other
+exit paths, foreign CPUs without saved context, PC resumability, full Stage 3
+and live-app behavior remain open. No app or mount run was made.
 Opt-in synthetic writable-main-image VM/pin and mutable-code source gates now
 pass [bounded suites](evidence/stage2-mutable-code-fallback-20261016/broad-validation.receipt.md),
 but normal SD-app loading remains copy-backed. D-012 keeps production EXE/DLL

@@ -371,23 +371,25 @@ order and exact birth. Publication after successful Kernel retirement must be
 infallible, or the whole exit needs a separately proven rollback boundary;
 the present D-011 preflight does not establish post-preflight atomicity.
 
-The first bounded source gate starts with the [preserved expected-red natural
-parked and active same-birth-duplicate A→B controls](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md).
-Give B a distinct PC/SP, exact birth and a legitimate blocked wait so it
-cannot silently vanish or spuriously execute. Stale/unknown witness refusal
-has a no-exit-effects control. Release-feature library and broad source gates
-passed after excluding the parked record's numeric representative thread from
-CPU authority; their exact receipts are separate from live-app proof.
-
-The next preflight gate must establish that a proposed survivor can actually
-resume: with a saved context, its current TID must be nonzero and match the
-saved `ThreadBirthKey`, and that exact thread must still be execution-live.
-A retained handle or same-process ownership of two different live TIDs is not
-enough. First preserve expected-red current-zero, current/saved mismatch and
-exited-but-retained worker controls, plus a live representative-worker positive.
-Each refusal must leave the parent exit, original CPU boxes, contexts and waits
-untouched. The parked record's representative TID is a scheduler hint, not a
-captured CPU birth; other numeric consumers need separate review.
+The [preserved expected-red natural parked and active same-birth-duplicate
+A→B controls](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
+gave B a distinct PC/SP, exact birth and legitimate blocked wait. The bounded
+[combined source gate](../../evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+now hoists those tested nonmodal foreign CPU trees after exact-birth exit and
+refuses stale/unknown ownership before effects. Its saved-context follow-up
+requires the foreign CPU's current TID to be nonzero, match the saved
+`ThreadBirthKey`, and still be execution-live. A retained handle or two
+different live same-process TIDs do not suffice. Current-zero,
+current/saved mismatch and exited-but-retained worker negatives, plus a live
+representative-worker positive, passed **4/0** focused release controls.
+Refusals retain the parent exit and original CPU boxes, contexts and waits.
+The parked record's representative TID is a scheduler hint, not a captured
+CPU birth; other numeric consumers need separate review. Sealed complete
+suites passed release **2,144/0/10 ignored** and no-default **1,524/0/3
+ignored** across 19 blocks each. The earlier passing a09 source and its a06
+regression are superseded, not credited to this seal. Foreign CPUs without
+saved context and PC resumability remain unproved; none of these source
+tests establishes live-app behavior.
 
 The inline first-slice `Exited` A→B path needs
 a separate test seam or real-MIPS fixture before changing that path; retain

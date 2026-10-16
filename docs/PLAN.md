@@ -121,17 +121,21 @@ pseudo compatibility remains separate. The bounded
 [modal-presence refusal gate](../evidence/stage3-modal-exit-failclosed-20261016/validation.receipt.md)
 now fails closed before effects in its tested exact-birth stopped-exit shapes;
 checked modal backing restoration remains separate.
-The next nonmodal parked-CPU survivor gate is specified in the
-[Task/scheduler design](subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts).
-It requires exact-birth disposal/survivor preflight before exit effects and
-infallible movement of original survivor CPUs after accepted completion.
-Expected-red natural parked and active duplicate-tree controls are
-[preserved](../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
-before their bounded source cut. First-slice `Exited` needs a separate test seam
-or real-MIPS fixture before its own source change; already-exited skips,
-requested parked siblings and generic duplicate pruning remain separately
-inventoried. The [CE6/REA evidence](../evidence/ce6-rea-exit-20261016/findings.md)
-supports per-process ownership without locating the dumped kernel exit body.
+The bounded [parked-survivor/saved-CPU-owner source gate](../evidence/stage3-survivor-resume-green-20261016/validation.receipt.md)
+applies the [Task/scheduler design](subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
+to tested natural-parked and requested-active stopped exits: exact-birth
+preflight precedes effects, and original nonmodal foreign CPUs are moved
+after accepted completion. A foreign saved-context CPU lacking a matching
+execution-live current thread birth refuses exit before effects. The
+[natural-parked/active duplicate expected reds](../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md)
+and earlier passing a09 source are historical; the combined sealed source
+passed release 2,144/0/10 ignored and no-default 1,524/0/3 ignored across
+19 blocks each. First-slice `Exited` needs a separate test seam or real-MIPS
+fixture before its own source change; other active exits, requested parked
+siblings, already-exited skips, generic duplicate pruning, foreign CPU nodes
+without saved context and PC resumability remain unproved. The
+[CE6/REA evidence](../evidence/ce6-rea-exit-20261016/findings.md) supports
+per-process ownership without locating the dumped kernel exit body.
 
 Direct WndProc dispatch, receiver-side cross-process result writes,
 conditional system-origin device broadcasts, post-preflight whole-exit
