@@ -134,10 +134,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      the only live child CPU owner. At its earlier source seal, the
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
      proved a third route: after A's guest launch and exit, the
-     already-exited-A skip drops live B's CPU. Keep it and the
+     already-exited-A skip dropped live B's CPU. Retain that receipt as
+     historical evidence; rebuild or retire its ignored fixture for the
+     post-native deferred route. The
      [native-fault expected-red](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-     that proves an ordinary first-slice error leaves a still-live child
-     without CPU custody runnable as ignored diagnostics. The
+     that proved an ordinary first-slice error left a still-live child
+     without CPU custody remains an ignored diagnostic, with its current-source
+     red noted below. The
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
@@ -151,9 +154,18 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      keep the strict fence while CPU custody is the priority. The
      [three pre-deferral source reds](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
      reproduced `Completed` callback borrow/panic, already-exited-A survivor
-     loss, and admitted-child native-fault loss offline. Their current-source
-     status needs a new gate; do not unignore them
-     until machine-owned custody can retain each original CPU.
+     loss, and admitted-child native-fault loss offline. Stamped final-source
+     ignored reruns [16](evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
+     and [17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
+     exited 101 at unmet fixture preconditions under post-native deferred
+     launch, not at the old failure sites: they neither reproduce nor fix
+     those two failures. Next determine whether the `Completed` queue borrow
+     (`unicorn.rs:20226-20232`) is reachable in the current route, including a
+     live-pump later slice, then rebuild or retire those stale fixtures.
+     [Attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
+     remains current expected-red: the admitted child's ordinary native fault
+     loses its sole CPU owner (`unicorn.rs:85725`, exit 101). Keep all three
+     ignored for this gate; repair custody before enabling them.
      The current source stages a successful `CreateProcessW` parent return PC
      and defers the child launch until after native return in both modes,
      removing the former immediate in-hook child call. Focused and broad

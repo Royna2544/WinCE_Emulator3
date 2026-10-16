@@ -81,7 +81,7 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   to E-6, E-12, E-32, E-33).
 - VM coherence still unproved across the general guest `CreateProcessW`/
   scheduler handoff, distinct public mappings at one VA, and full machine
-  clone relineage. Earlier fixtures selected the child manually; the current
+  clone relineage. Earlier VM fixtures selected the child manually; the current
   source has an automatic post-native path in both modes, pending a final
   source/test gate. A same-PID DIB view without VA metadata can Flush but not
   Unmap. The former immediate CreateProcess view-sync failure path is
@@ -179,32 +179,46 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       This source-audited risk is not an attributed live-app failure.
     - At its earlier source seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
       executed A's actual `CreateProcessW` IAT call to launch B, then returned
-      A through its saved startup RA. A exits `0x63`; B remains exact-birth
-      Kernel-live and unsignaled, but slice-end rotation makes B the local CPU
-      before A is pruned. `run_pending_process_launches` then tests A's exited
-      handle, records `CreateProcessChildParkSkipped(already_exited)` and drops
-      that local B CPU; the parent queue has zero owners instead of one. The
+      A through its saved startup RA. A exited `0x63`; B remained exact-birth
+      Kernel-live and unsignaled, but slice-end rotation made B the local CPU
+      before A was pruned. `run_pending_process_launches` then tested A's exited
+      handle, recorded `CreateProcessChildParkSkipped(already_exited)` and dropped
+      that local B CPU; the parent queue had zero owners instead of one. The
       test remains ignored expected-red. This was a reproduced source fixture
       failure before the post-native launch cut, not an attributed live iNavi
-      or live-pump failure; the changed source requires its own rerun.
+      or live-pump failure. The stamped current-source
+      [attempt 17](evidence/stage3-createprocess-deferred-20261017/attempt17-current-first-slice-red.raw.log)
+      exited 101 because A had not reached the fixture's exit-once
+      precondition (`unicorn.rs:85571`); it neither reproduces nor fixes the
+      earlier survivor-loss failure.
     - If the parent parked queue is already borrowed, first-slice `Exited`
       refuses before Kernel exit and the fallback returns terminal `Backend`
       without a host panic, but it drops the local A+B CPU owners. This is
       ownership loss on a borrow-invariant violation, not recoverable parking;
       Stage 4 needs a machine-owned child owner. The separate `Completed`
-      path still uses unconditional `borrow_mut`. The
+      path still uses unconditional `borrow_mut` (`unicorn.rs:20226-20232`). The
       [pre-deferral offline control](evidence/stage3-completed-reentry-red-20261017/validation.receipt.md)
       reproduced a `RefCell` panic and survivor-owner loss when a custom
       framebuffer reenters that borrowed queue; current framebuffer
-      implementations have not been shown to do so. The first-slice
+      implementations have not been shown to do so. Stamped current-source
+      [attempt 16](evidence/stage3-createprocess-deferred-20261017/attempt16-current-completed-red.raw.log)
+      exited 101 before the restore/reentry precondition (`restore_dirty_calls`
+      0 rather than 1); it neither reproduces nor fixes that panic. Determine
+      whether this `Completed` borrow is reachable after the post-native cut,
+      including a live-pump later slice, then rebuild or retire the stale
+      attempt-16/17 fixtures. The first-slice
       candidate also lacks a separate exact live primary-thread-birth gate.
       A separate [ignored expected-red native-fault fixture](evidence/stage3-post-admission-native-fault-20261016/validation.receipt.md)
-      executes an admitted synthetic MIPS child through its first native
-      slice. Its injected `READ_UNMAPPED` returns an ordinary `Backend` error;
-      the exact child birth stays Kernel-live, `STILL_ACTIVE` and unsignaled,
-      but `run_pending_process_launches` drops the local CPU (queue 0 versus
-      one required owner). This is a reproduced offline source failure, not
-      a live iNavi or live-pump result. The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
+      at its earlier seal executed an admitted synthetic MIPS child through its
+      first native slice. Its injected `READ_UNMAPPED` returned an ordinary
+      `Backend` error; the exact child birth stayed Kernel-live, `STILL_ACTIVE`
+      and unsignaled, but `run_pending_process_launches` dropped the local CPU
+      (queue 0 versus one required owner). Stamped final-source ignored
+      [attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
+      still exits 101 at the sole-CPU-owner assertion (`unicorn.rs:85725`),
+      so this remains a current offline source failure, not a live iNavi or
+      live-pump result. All three ignored controls remain ignored for this gate.
+      The [O-T7 custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
       must cover it alongside the tested borrow conflict.
     - `parked_process_handle_exit_code` drops an already-exited parked CPU
       without inspecting its modal state, and an earlier external Kernel exit
