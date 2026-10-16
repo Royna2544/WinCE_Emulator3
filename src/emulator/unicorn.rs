@@ -5910,7 +5910,22 @@ impl UnicornMips {
                     .ok_or(Error::HostExitAuthorityRecoveryRequired {
                         reason: "requested parked child lost its exact process birth",
                     })
-                    .and_then(|owner| process.cpu.preflight_stopped_modal_display_for_birth(owner))
+                    // Requested completion hoists descendants, but another
+                    // CPU of this same birth becomes an exited owner and can
+                    // be pruned immediately afterward. Foreign-birth roots
+                    // remain hoisted unless nested under a matching root.
+                    .and_then(|owner| {
+                        process
+                            .cpu
+                            .preflight_stopped_modal_display_for_birth(owner, kernel)?;
+                        Self::preflight_parked_modal_siblings_for_birth(
+                            self,
+                            &kept,
+                            &self.parked_child_processes,
+                            owner,
+                            kernel,
+                        )
+                    })
                     .and_then(|_| {
                         if let Some(framebuffer) = framebuffer.as_mut() {
                             kernel.try_mark_process_launch_exited_with_framebuffer(
@@ -6004,8 +6019,16 @@ impl UnicornMips {
                         .ok_or(Error::HostExitAuthorityRecoveryRequired {
                             reason: "stopped parked child lost its exact process birth",
                         })
+                        // Natural completion drops the whole parked CPU tree.
                         .and_then(|owner| {
-                            process.cpu.preflight_stopped_modal_display_for_birth(owner)
+                            process.cpu.preflight_stopped_modal_display_tree(owner)?;
+                            Self::preflight_parked_modal_siblings_for_birth(
+                                self,
+                                &kept,
+                                &self.parked_child_processes,
+                                owner,
+                                kernel,
+                            )
                         })
                         .and_then(|_| {
                             if let Some(framebuffer) = framebuffer.as_mut() {
@@ -6155,19 +6178,123 @@ impl UnicornMips {
 
     /// A stopped CPU may still own modal display state outside Kernel's
     /// frozen-birth GWE backing list. Until those modal images have a checked
-    /// restore plan, refuse the whole exit before its first Kernel effect.
+    /// restore plan, refuse an exit that would discard them before its first
+    /// Kernel effect. The scans below match two disposal shapes: its whole
+    /// parked tree, or local state plus exact-birth parked roots.
+    #[cfg(feature = "unicorn")]
+    fn modal_display_recovery_error(owner: crate::ce::object::ProcessBirthKey) -> Error {
+        Error::HostExitRecoveryRequired {
+            process_id: owner.process_id(),
+            incarnation: owner.incarnation(),
+            hwnd: None,
+            reason: "stopped process has unpreflighted modal display state",
+        }
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn has_local_unpreflighted_modal_display(&self) -> bool {
+        self.blocked_modal_message_box.is_some() || self.blocked_popup_menu_modal.is_some()
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn has_unpreflighted_modal_display_in_tree(&self) -> bool {
+        self.has_local_unpreflighted_modal_display()
+            || self
+                .parked_child_processes
+                .iter()
+                .any(|parked| parked.cpu.has_unpreflighted_modal_display_in_tree())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn preflight_stopped_modal_display_tree(
+        &self,
+        owner: crate::ce::object::ProcessBirthKey,
+    ) -> Result<()> {
+        if self.has_unpreflighted_modal_display_in_tree() {
+            return Err(Self::modal_display_recovery_error(owner));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn has_process_birth_witness(
+        &self,
+        owner: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+    ) -> bool {
+        if self
+            .owned_process_launch
+            .as_ref()
+            .is_some_and(|launch| launch.process_birth == Some(owner))
+        {
+            return true;
+        }
+        // The boot CPU has no launch. Its saved primary-thread birth, rather
+        // than the mutable selected PID/TID, is its parked ownership witness.
+        self.initial_thread_id == MAIN_GUEST_THREAD_ID
+            && self.saved_context_thread_birth.is_some_and(|primary| {
+                primary.thread_id() == MAIN_GUEST_THREAD_ID
+                    && kernel.handles.thread_birth_key_by_id(primary.thread_id()) == Some(primary)
+                    && kernel
+                        .handles
+                        .thread_creation_owner_by_id(primary.thread_id())
+                        == Some(owner)
+            })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_tree_would_discard_modal_for_birth(
+        parked: &ParkedProcess,
+        owner: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+    ) -> bool {
+        if parked.cpu.has_process_birth_witness(owner, kernel) {
+            // Removing this exact-birth root disposes even foreign-birth
+            // descendants nested beneath it.
+            return parked.cpu.has_unpreflighted_modal_display_in_tree();
+        }
+        parked
+            .cpu
+            .parked_child_processes
+            .iter()
+            .any(|child| Self::parked_tree_would_discard_modal_for_birth(child, owner, kernel))
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn preflight_parked_modal_siblings_for_birth(
+        active: &Self,
+        kept: &VecDeque<ParkedProcess>,
+        remaining: &VecDeque<ParkedProcess>,
+        owner: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+    ) -> Result<()> {
+        // Completing one parked CPU retires the whole process birth. A later
+        // same-birth sibling can then be removed as already exited without
+        // another checked finalizer, so include both sides of this prune
+        // cursor before the first Kernel effect.
+        if (active.has_process_birth_witness(owner, kernel)
+            && active.has_local_unpreflighted_modal_display())
+            || kept.iter().chain(remaining.iter()).any(|parked| {
+                Self::parked_tree_would_discard_modal_for_birth(parked, owner, kernel)
+            })
+        {
+            return Err(Self::modal_display_recovery_error(owner));
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "unicorn")]
     fn preflight_stopped_modal_display_for_birth(
         &self,
         owner: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
     ) -> Result<()> {
-        if self.blocked_modal_message_box.is_some() || self.blocked_popup_menu_modal.is_some() {
-            return Err(Error::HostExitRecoveryRequired {
-                process_id: owner.process_id(),
-                incarnation: owner.incarnation(),
-                hwnd: None,
-                reason: "stopped process has unpreflighted modal display state",
-            });
+        if self.has_local_unpreflighted_modal_display()
+            || self.parked_child_processes.iter().any(|parked| {
+                Self::parked_tree_would_discard_modal_for_birth(parked, owner, kernel)
+            })
+        {
+            return Err(Self::modal_display_recovery_error(owner));
         }
         Ok(())
     }
@@ -6205,7 +6332,7 @@ impl UnicornMips {
             .ok_or(Error::HostExitAuthorityRecoveryRequired {
                 reason: "requested active child lost its exact process birth",
             })?;
-        self.preflight_stopped_modal_display_for_birth(owner)?;
+        self.preflight_stopped_modal_display_for_birth(owner, kernel)?;
         let completed = if let Some(framebuffer) = framebuffer.as_mut() {
             kernel.try_mark_process_launch_exited_with_framebuffer(
                 &launch,
@@ -6275,16 +6402,9 @@ impl UnicornMips {
                 reason: "stopped pseudo-exit caller no longer owns the selected process",
             });
         }
-        // Modal backings have a separate best-effort restore path. Until they
-        // have the same checked preflight, do not retire their owner here.
-        if self.blocked_modal_message_box.is_some() || self.blocked_popup_menu_modal.is_some() {
-            return Err(Error::HostExitRecoveryRequired {
-                process_id: intent.owner.process_id(),
-                incarnation: intent.owner.incarnation(),
-                hwnd: None,
-                reason: "stopped pseudo exit has an unpreflighted modal backing",
-            });
-        }
+        // The same exact-birth CPU-tree disposal rule applies to a stopped
+        // pseudo self-exit, before either child or boot Kernel finalization.
+        self.preflight_stopped_modal_display_for_birth(intent.owner, kernel)?;
         let completed = if let Some(launch) = self.owned_process_launch.as_ref() {
             if launch.process_birth != Some(intent.owner)
                 || launch.process_id != kernel.current_process_id()
@@ -6415,7 +6535,7 @@ impl UnicornMips {
                     reason: "stopped boot CPU lacks a verified process owner",
                 });
             };
-            self.preflight_stopped_modal_display_for_birth(expected_birth)?;
+            self.preflight_stopped_modal_display_for_birth(expected_birth, kernel)?;
             if !kernel.try_terminate_stopped_current_process_for_birth_with_framebuffer(
                 expected_birth,
                 exit_code,
@@ -6442,6 +6562,7 @@ impl UnicornMips {
             launch
                 .process_birth
                 .expect("checked active child process birth"),
+            kernel,
         )?;
         if !kernel.try_mark_process_launch_exited_with_framebuffer(
             &launch,
@@ -6671,6 +6792,7 @@ impl UnicornMips {
             launch
                 .process_birth
                 .expect("checked terminal child process birth"),
+            kernel,
         )?;
         let terminal_detail = self
             .last_debug_snapshot()
@@ -7030,9 +7152,45 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         requeue_current: bool,
     ) -> Result<bool> {
+        #[cfg(feature = "unicorn")]
+        let mut terminal_modal_state = None;
+        #[cfg(feature = "unicorn")]
+        let mut did_precomplete = false;
+        #[cfg(feature = "unicorn")]
+        if !requeue_current
+            && !self.completed_active_process_exit
+            && self
+                .active_terminal_child_process_return_code(kernel)
+                .is_some()
+        {
+            // The old pop rotates/skips entries before the fallible Kernel
+            // completion. On a D-011 refusal, even pushing the selected CPU
+            // back to the front cannot reconstruct the original queue. Keep
+            // the entire queue untouched until all exit preflight succeeds.
+            if !self.has_runnable_parked_process(kernel) {
+                return Ok(false);
+            }
+            terminal_modal_state =
+                self.complete_active_terminal_child_process_return(kernel, None)?;
+            if !self.completed_active_process_exit {
+                return Ok(false);
+            }
+            did_precomplete = true;
+        }
         let Some(parked) = self.pop_next_runnable_parked_process(kernel) else {
             return Ok(false);
         };
+        #[cfg(feature = "unicorn")]
+        if did_precomplete {
+            self.activate_parked_process(
+                kernel,
+                parked,
+                requeue_current,
+                None,
+                terminal_modal_state,
+            );
+            return Ok(true);
+        }
         self.try_switch_to_parked_process(kernel, parked, requeue_current, None)?;
         Ok(true)
     }
@@ -7114,7 +7272,7 @@ impl UnicornMips {
         #[cfg(feature = "unicorn")]
         {
             parked.cpu.blocked_guest_thread.is_some()
-                || parked.cpu.blocked_modal_message_box.is_some()
+                || parked.cpu.has_unpreflighted_modal_display_in_tree()
                 || !parked.cpu.blocked_wait_threads.is_empty()
                 || parked.cpu.blocked_send_message_timeout.is_some()
         }
@@ -7379,6 +7537,23 @@ impl UnicornMips {
     ) -> Result<()> {
         #[cfg(feature = "unicorn")]
         let terminal_modal_state = if !requeue_current {
+            // A direct handoff caller may already have removed the incoming
+            // CPU from the queue. It still belongs to the prospective exact-
+            // birth discard set, even if its mutable process-state PID is
+            // wrong, so examine it before the active finalizer can run.
+            if self
+                .active_terminal_child_process_return_code(kernel)
+                .is_some()
+                && let Some(owner) = self
+                    .owned_process_launch
+                    .as_ref()
+                    .filter(|launch| launch.process_id == kernel.current_process_id())
+                    .and_then(|launch| launch.process_birth)
+                && Self::parked_tree_would_discard_modal_for_birth(&parked, owner, kernel)
+            {
+                self.parked_child_processes.push_front(parked);
+                return Err(Self::modal_display_recovery_error(owner));
+            }
             let completion = if let Some(framebuffer) = framebuffer.as_mut() {
                 self.complete_active_terminal_child_process_return(kernel, Some(&mut **framebuffer))
             } else {
@@ -7514,7 +7689,7 @@ impl UnicornMips {
                 process,
                 incoming_process_id,
                 &incoming_active_thread_ids,
-            )
+            ) || Self::active_matching_parked_process_should_remain(process)
         });
         #[cfg(feature = "unicorn")]
         if let Some(send_id) = blocked_send_id {
@@ -7549,7 +7724,7 @@ impl UnicornMips {
                 process,
                 incoming_process_id,
                 &incoming_active_thread_ids,
-            )
+            ) || Self::active_matching_parked_process_should_remain(process)
         });
         *self = next_cpu;
         self.prune_active_process_from_parked_readonly_with_thread_duplicates(kernel, false);
@@ -19692,7 +19867,7 @@ fn run_pending_process_launches<D>(
             }
             ChildProcessRunOutcome::Exited(exit_code) => {
                 let completed = match child
-                    .preflight_stopped_modal_display_for_birth(launch_birth)
+                    .preflight_stopped_modal_display_tree(launch_birth)
                     .and_then(|_| {
                         kernel.try_mark_process_launch_exited_with_framebuffer(
                             &launch,
@@ -52160,7 +52335,8 @@ mod guest_thread_stack_tests {
         use crate::ce::scheduler::SchedulerBlockedWaitKind;
 
         let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
-        let launch = kernel.queue_process_launch(Some("\\Test\\same-birth-popup.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\same-birth-popup.exe".to_owned()), None);
         let owner = launch.process_birth.expect("child process birth");
         let thread_birth = launch.primary_thread_birth.expect("child primary birth");
         let _ = kernel.take_pending_process_launches();
@@ -52248,10 +52424,21 @@ mod guest_thread_stack_tests {
                 if process_id == owner.process_id() && incarnation == owner.incarnation()
         ));
         assert!(kernel.handles.process_execution_live_by_birth(owner));
-        assert_eq!(kernel.process_exit_code(launch.process_handle), Some(crate::ce::kernel::STILL_ACTIVE));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
         assert_eq!(active.parked_child_processes.len(), 1);
-        assert_eq!(active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips, parked_cpu_before);
-        assert!(active.parked_child_processes[0].cpu.blocked_popup_menu_modal.is_some());
+        assert_eq!(
+            active.parked_child_processes[0].cpu.as_ref() as *const UnicornMips,
+            parked_cpu_before
+        );
+        assert!(
+            active.parked_child_processes[0]
+                .cpu
+                .blocked_popup_menu_modal
+                .is_some()
+        );
         assert!(kernel.blocked_waiter(wait_id).is_some());
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(destination.pixels(), pixels_before);
@@ -52266,7 +52453,8 @@ mod guest_thread_stack_tests {
 
         let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
         let parent = kernel.queue_process_launch(Some("\\Test\\modal-parent.exe".to_owned()), None);
-        let foreign = kernel.queue_process_launch(Some("\\Test\\modal-foreign.exe".to_owned()), None);
+        let foreign =
+            kernel.queue_process_launch(Some("\\Test\\modal-foreign.exe".to_owned()), None);
         let parent_birth = parent.process_birth.expect("parent process birth");
         let foreign_birth = foreign.process_birth.expect("foreign process birth");
         let foreign_thread_birth = foreign.primary_thread_birth.expect("foreign thread birth");
@@ -52291,7 +52479,9 @@ mod guest_thread_stack_tests {
                 foreign_thread_birth,
                 foreign.thread_handle,
                 Vec::new(),
-                SchedulerBlockedWaitKind::ModalMessageBox { dialog_hwnd: dialog },
+                SchedulerBlockedWaitKind::ModalMessageBox {
+                    dialog_hwnd: dialog,
+                },
                 kernel.timers.tick_count(),
                 crate::ce::timer::INFINITE,
             )
@@ -52317,7 +52507,9 @@ mod guest_thread_stack_tests {
         duplicate_cpu.owned_process_launch = Some(parent.clone());
         duplicate_cpu.set_initial_thread_id(parent.thread_id);
         duplicate_cpu.current_thread_id = parent.thread_id;
-        duplicate_cpu.parked_child_processes.push_back(foreign_parked);
+        duplicate_cpu
+            .parked_child_processes
+            .push_back(foreign_parked);
         let mut duplicate_parked = parked_process_for_cpu(parent.thread_id, duplicate_cpu);
         duplicate_parked.process_state.process_id = parent.process_id;
         duplicate_parked.process_handle = Some(parent.process_handle);
@@ -52348,7 +52540,11 @@ mod guest_thread_stack_tests {
                     && incarnation == parent_birth.incarnation()
         ));
         assert!(kernel.handles.process_execution_live_by_birth(parent_birth));
-        assert!(kernel.handles.process_execution_live_by_birth(foreign_birth));
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(foreign_birth)
+        );
         assert_eq!(active.parked_child_processes.len(), 1);
         let foreign_retained = &active.parked_child_processes[0].cpu.parked_child_processes[0];
         assert!(foreign_retained.cpu.blocked_modal_message_box.is_some());
@@ -52365,7 +52561,9 @@ mod guest_thread_stack_tests {
         use crate::ce::scheduler::SchedulerBlockedWaitKind;
 
         let mut kernel = CeKernel::boot(crate::config::RuntimeConfig::load_default()?);
-        let boot_birth = kernel.current_process_birth_key().expect("boot process birth");
+        let boot_birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
         let primary = kernel
             .handles
             .thread_birth_key_by_id(MAIN_GUEST_THREAD_ID)
@@ -52460,8 +52658,16 @@ mod guest_thread_stack_tests {
         assert_eq!(kernel.current_process_state(), process_before);
         assert!(kernel.handles.process_execution_live_by_birth(boot_birth));
         assert_eq!(active.parked_child_processes.len(), 1);
-        assert!(active.parked_child_processes[0].cpu.blocked_popup_menu_modal.is_some());
-        assert_eq!(active.saved_context.as_ref().map(|saved| saved.pc), Some(THREAD_EXIT_STUB_ADDR));
+        assert!(
+            active.parked_child_processes[0]
+                .cpu
+                .blocked_popup_menu_modal
+                .is_some()
+        );
+        assert_eq!(
+            active.saved_context.as_ref().map(|saved| saved.pc),
+            Some(THREAD_EXIT_STUB_ADDR)
+        );
         assert!(kernel.blocked_waiter(wait_id).is_some());
         assert!(kernel.gwe.is_window(hwnd));
         assert_eq!(destination.pixels(), pixels_before);
