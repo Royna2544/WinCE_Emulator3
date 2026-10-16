@@ -4,7 +4,7 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 Cut 3a non-runnable child CPU quarantine (focused; broad pending)
+## 2026-10-17 bounded Cut 3a non-runnable child CPU quarantine
 
 An ordinary real-MIPS focused control passed under debug and release before
 the pre-entry follow-up, then passed again in a09 debug on the superseded
@@ -27,7 +27,12 @@ SHA-256 `1AAE8A66ACFFFE3D8FE9CED10687C98A28879BF9267A1736D7B4689F21A33090`.
 A10 focused release passed on an intermediate producer-only source, now
 superseded. Current source makes `CpuCustody::quarantine_reserved` enforce the
 terminal seal on `Reserved`→`Quarantined` under Unicorn; the exit consumer keeps
-its poison-bit backstop. No final-source focused or broad result is claimed.
+its poison-bit backstop. The [owner-sealed receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+records a11 focused release **1/0**, a12 release **2,184/0/9 ignored** and
+a13 no-default **1,543/0/2 ignored** across 19 blocks each, plus a14–a16
+three feature checks exiting 0. All six source hashes matched the owner seal
+before and after every counted attempt. The final-source real-MIPS control is
+included in a12, not a separate final-source focused attempt.
 The a07/a08 precondition is synthetic, not proof of natural reachability or
 general error-path closure. The production run loop
 owns custody, monitor save/restore refuse while it exists, and status/debug
@@ -38,9 +43,8 @@ Kernel instance. General private VM and mapped-file-view exit cleanup,
 runnable/parked custody, public-run bypass removal, a callback-scoped
 Kernel/framebuffer port and live-app behavior remain open.
 
-The pre-seal a03 broad release result (**2,183/0/9 ignored**) is development
-evidence only. Final source-sealed broad release/no-default counts and
-receipt: **pending**. No app or writable-mount run was made.
+The pre-seal a03 broad release result (**2,183/0/9 ignored**) remains
+development evidence only. No app or writable-mount run was made.
 
 ## 2026-10-17 bounded native-entry precondition
 

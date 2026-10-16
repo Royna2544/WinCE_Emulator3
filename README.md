@@ -132,10 +132,12 @@ remote-control HTTP/WebSocket surface.
   producer-only a10 focused release also passed. Current source enforces the
   terminal seal in `CpuCustody::quarantine_reserved` under Unicorn when the
   slot becomes quarantined, while the exit consumer keeps its poison check.
-  Natural reachability and general closure remain unproved. Final-source
-  focused and
-  sealed broad/no-default counts and receipt
-  are pending; pre-seal a03 **2,183/0/9 ignored** is development evidence.
+  Natural reachability and general closure remain unproved. The
+  [owner-sealed Cut 3a receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+  passes a11 focused release **1/0**, 19-block a12 release
+  **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
+  feature checks; all six source hashes matched. Pre-seal a03
+  **2,183/0/9 ignored** remains development evidence.
   Status/debug report retained mapped-blob bytes, not measured RSS. The
   callback-scoped machine-state port, runnable/parked custody, public-run
   bypass removal and general private VM/file-view exit cleanup remain open.

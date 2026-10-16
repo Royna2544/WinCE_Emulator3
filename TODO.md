@@ -143,8 +143,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      that proved an ordinary first-slice error left a still-live child
      without CPU custody is historical. An ordinary real-MIPS Cut 3a
      replacement passed focused debug/release controls at an earlier seal; its
-     superseded producer-side a09 debug rerun passed, with final broad validation
-     pending. The
+     superseded producer-side a09 debug rerun passed; its final owner-sealed
+     broad gate is recorded below. The
      [bounded pre-CPU pending-launch retention gate](evidence/stage3-pre-cpu-launch-retention-green-20261016/validation.receipt.md)
      preserves published launches only until CPU construction; it does not
      own an admitted child through DLL load, native execution or error.
@@ -235,8 +235,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
      A-to-B handoff and full CPU-custody gates; do not count either
      guard as the connected port.
-     Finish [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-focused-source-cut-final-broad-pending)
-     validation/receipt on one source seal. Its earlier focused real-MIPS debug/release
+     The bounded [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-bounded-source-test-gate)
+     [receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+     seals one source: a11 focused release **1/0**, 19-block a12 release
+     **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
+     feature checks exit 0. All six source hashes match. Its real-MIPS
      control now executes A's `CreateProcessW` and B's fixed-stack first touch
      plus native fault; the original B CPU stays in a non-runnable exact-birth
      slot instead of being dropped or parked in the legacy tree. A's staged
@@ -251,10 +254,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      intermediate producer-only a10 focused release passed but is superseded.
      Current source makes `CpuCustody::quarantine_reserved` seal the CPU under
      Unicorn on `Reserved`→`Quarantined`; the exit consumer keeps its poison
-     backstop. Rerun focused and counted broad suites on that source. Natural
-     reachability and general error-path closure remain unproved.
-     The pre-seal a03 broad **2,183/0/9 ignored** is development-only; final
-     sealed broad/no-default counts and receipt remain pending. No general
+     backstop. Natural reachability and general error-path closure remain
+     unproved. The pre-seal a03 broad **2,183/0/9 ignored** remains
+     development-only. Next migrate runnable/parked CPU families without
+     bypassing the directory. No general
      private VM/file-view exit cleanup or runnable leaf permit follows.
      Separately, test and repair the
      [process-exit VM/view leak](KNOWN_BUGS.md#open-issues) with exact-birth

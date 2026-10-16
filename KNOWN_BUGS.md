@@ -249,8 +249,12 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       since been replaced by an ordinary real-MIPS Cut 3a control, earlier
       focused debug/release green and superseded producer-side a09 debug green: it retains
       the original faulted B CPU in a
-      non-runnable machine slot, not the legacy parked tree. Final sealed broad
-      receipt/counts are pending. This bounded result does not repair the
+      non-runnable machine slot, not the legacy parked tree. The
+      [owner-sealed Cut 3a receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
+      passes a11 focused release **1/0**, 19-block a12 release
+      **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and a14–a16
+      feature checks; all six source hashes matched. This bounded result does
+      not repair the
       nonempty descendant publication conflict above, other parked/active
       owner-loss paths, or the public run wrapper's custody bypass. A
       stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
@@ -263,8 +267,7 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       release passed but is superseded. Current source makes the custody
       directory itself seal an admitted CPU on `Reserved`→`Quarantined` under
       Unicorn; the consumer poison check remains a backstop. This does not
-      prove natural pre-entry reachability, general error-path closure or
-      final broad validation. The two
+      prove natural pre-entry reachability or general error-path closure. The two
       stale route-specific controls were retired; none is a live iNavi result.
     - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
       refuses a preseeded busy block service but does not exclude raw
