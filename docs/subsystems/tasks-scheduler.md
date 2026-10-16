@@ -723,8 +723,10 @@ acceptance:
    fault control: typed stop, nonzero guest PC, no canonical page publication
    or pin, no host panic, and no replay as an ordinary unmapped guest error.
 2. Exercise loan conflicts and exact-authority mismatch in code/block,
-   import/HLE and framebuffer paths, including a nested host callback. Each
-   must stop through the same terminal attempt record without consuming a
+   import/HLE and framebuffer paths at reachable callback boundaries. A
+   nested host callback needs an actual source path; do not manufacture an
+   import/block overlap with a nested `uc_emu_start`. Each real conflict must
+   stop through the same terminal attempt record without consuming a
    different birth's wait or returning a fabricated API value. Check native
    hook finish/abort teardown before the outer mutable references are reused.
 3. Execute a post-native real-MIPS A-to-B launch with no open parent Kernel or
@@ -797,9 +799,19 @@ raw aliases, the outer mutable references span `emu_start`, and post-native
 A-to-B child execution still lacks the checked shared leaf. Source order
 permits a modal restore to publish pixels after consuming a wait before a
 hypothetical nested fault is observed; this gate did not execute that case.
-This is not a sound machine-state loan or Step 2 acceptance; share the busy
-flag with the next hook family and stage an actual cross-family witness before
-claiming broader exclusion.
+This is not a sound machine-state loan or Step 2 acceptance. A later
+[source call-chain finding](../../evidence/stage3-machine-port-inventory-20261017/findings.md#current-importscheduler-call-chain-finding)
+found no natural import↔scheduler-block callback overlap in the current
+attempt: the block hook and import hook run sequentially under the sole
+production native `emu_start` at `unicorn.rs:14750`, neither hook starts a
+nested guest run, and successful `CreateProcessW` defers its child until the
+parent native run returns. The vendored Unicorn
+[`uc_emu_start` implementation](../../vendor/unicorn-engine-sys/uc.c#L1117)
+marks nested count/stop state ambiguous and warns about incorrect JIT state
+at `uc.c:1117–1139`. Do not add a synthetic shared import/block gate as a
+surrogate for natural overlap. The outer long-lived mutable Kernel and
+framebuffer references, other raw hook aliases and post-native child loan
+remain open; sequential hooks alone do not prove a sound whole-attempt port.
 
 At that historical source seal, non-live-pump `CreateProcessW` ran the child
 immediately from the import hook at `:13569–13579`; its HLE dispatch loan had

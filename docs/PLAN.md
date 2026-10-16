@@ -228,7 +228,7 @@ not an implemented owner. Stage its connected source cut in this order:
 2. Settle the callback-scoped machine-state port before claiming a sound
    lease. Successful `CreateProcessW` now stops A's native attempt at its
    staged return PC and runs B post-native, rather than through A's raw hook
-   pointers. Other hook reentry remains, and the post-native helper still
+   pointers. Other raw hook aliases remain with unproved reentry safety, and the post-native helper still
    holds a mutable Kernel reference across B's run. Neither a directory nor
    a mutable Kernel/framebuffer loan may span B's run. Replace or narrowly
    audit the remaining raw `kernel_ptr`/framebuffer reentry with
@@ -246,9 +246,11 @@ not an implemented owner. Stage its connected source cut in this order:
    adapter. Its real-MIPS **preseeded** busy control stops with a typed error;
    full release/no-default suites pass on the sealed source. Production's
    flag only excludes scheduler-block self-reentry, not another hook family,
-   and no natural nested call was exercised. This does not promote Step 2;
-   next share the flag with an import/block cross-family witness, then finish
-   the connected whole-attempt port and modal partial-effects gates.
+   and no natural nested call was exercised. The current single native entry
+   runs the import and block hooks sequentially, so do not manufacture a
+   shared-flag import/block gate. This does not promote Step 2; audit reachable
+   raw-alias and host-callback loans, then finish the connected whole-attempt
+   port and modal partial-effects gates.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the entire native
    attempt, fallible short loans tied to exact attempt/leaf authority, and a
@@ -258,9 +260,10 @@ not an implemented owner. Stage its connected source cut in this order:
    callback teardown must end before the outer mutable references are reused.
    No Kernel/framebuffer guard may span `emu_start` or B's nested run. A
    memory-fault-only wrapper leaves the other raw hook aliases and is not an
-   accepted production port. Before this cut, stage the busy-port fault,
-   import/block and framebuffer reentry negatives, exact selected-birth/PID
-   reuse, exit-event fence and hook finish/abort lifetime controls. Any
+   accepted production port. In the corresponding connected cuts, prove busy
+   port refusal on reachable hook paths, framebuffer callback conflicts where
+   reachable, exact selected-birth/PID reuse, exit-event fencing and hook
+   finish/abort lifetime. Any
    callback conflict must produce a typed stopped attempt, never guest API
    success, an ordinary guest unmapped fault or a scheduling yield. Independent
    review and executed feature-appropriate suites gate the port; even a green
