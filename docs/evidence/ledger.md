@@ -2042,6 +2042,17 @@ fences, machine checkpoint relineage, DLL migration and production activation
 remain separate gates. No app, mount, LAN, RSS, throughput, map-readiness or
 full Stage 2 result follows.
 
+## CE6 process-exit offline REA/source check (2026-10-16, observed)
+
+Exact-hash device `nk.exe`, `kernel.dll` and `coredll.dll` were inspected
+without running them; REA records and source hashes are retained in the
+[finding](../../evidence/ce6-rea-exit-20261016/findings.md). The bounded
+exported-COREDLL wrapper observations and local CE6 process/thread source
+support per-process exit ownership. The dumped kernel's exit body was not
+identified, and no emulator source gate or live-app run follows from this
+static check. All three temporary NTFS analysis copies were removed after
+their evidence bundles were exported.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

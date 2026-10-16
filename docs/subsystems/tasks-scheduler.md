@@ -345,6 +345,42 @@ In Hookless/Sparse, new same-slice callsites without an installed exact hook
 fail closed. Live modal restoration, raw direct COREDLL pseudo compatibility, whole-exit
 atomicity and live iNavi remain separate gates.
 
+### Exact-birth parked-CPU survivors on process exit (design; not implemented)
+
+The parked CPU tree is a scheduler container, not a CE process-lifetime tree.
+Removing an exiting process must not dispose an independently live foreign
+process nested below it. The current source can lose such CPUs on natural
+parked completion, first-slice child `Exited`, active exact-birth tree removal,
+already-exited skips and duplicate pruning. The requested `Completed` hoists
+are controls, not proof that every exit path preserves descendants.
+
+Before any Kernel, GWE, framebuffer, Task or VM exit effect, one read-only
+preflight must partition the stopped CPU tree by exact process birth. Resolve
+the exiting birth from its frozen launch witness or boot saved-primary-thread
+witness, and verify each live CPU against its Kernel owner. An exiting node is
+disposable; a foreign live node is a survivor with its original CPU context,
+wait and nested children. Numeric PID, a mutable selected process, a closed
+handle or nesting alone cannot authorize disposal. Unknown/stale ownership or
+modal backing without a checked restoration path requires typed recovery
+before effects. No CPU may be resumed to fabricate this proof.
+
+On accepted completion, move (do not clone) surviving CPU nodes into the
+nearest surviving queue at the removed node's position, preserving relative
+order and exact birth. Publication after successful Kernel retirement must be
+infallible, or the whole exit needs a separately proven rollback boundary;
+the present D-011 preflight does not establish post-preflight atomicity.
+
+The connected source gate needs expected-red natural parked and first-slice
+`Exited` A→B shapes, plus active A→same-birth parked duplicate→foreign B.
+Give B a distinct PC/SP, exact birth and a legitimate blocked wait so it
+cannot silently vanish or spuriously execute. Test stale/unknown witness
+refusal with no exit effects, and keep requested/`Completed` hoist controls.
+After this bounded gate, test already-exited skips and duplicate pruning
+separately, then a real-MIPS CreateProcess→parent-exit fixture. These are
+source tests, not iNavi acceptance. The [CE6 source and REA finding](../../evidence/ce6-rea-exit-20261016/findings.md)
+supports per-process exit ownership; the dumped ROM kernel's exit body is
+still unidentified.
+
 Post-wake `MsgWaitForMultipleObjectsEx(QS_SENDMESSAGE)` is a separate fixture:
 prove the sent edge wakes the exact T birth, then that real Get/Peek retrieval
 enters WNDPROC and returns the one blocked sender's result. A wake bit alone
