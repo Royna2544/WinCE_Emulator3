@@ -122,7 +122,7 @@ pseudo compatibility remains separate. The bounded
 now fails closed before effects in its tested exact-birth stopped-exit shapes;
 checked modal backing restoration remains separate.
 The next nonmodal parked-CPU survivor gate is specified in the
-[Task/scheduler design](subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-not-implemented).
+[Task/scheduler design](subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts).
 It requires exact-birth disposal/survivor preflight before exit effects and
 infallible movement of original survivor CPUs after accepted completion.
 Expected-red natural parked and active duplicate-tree controls are

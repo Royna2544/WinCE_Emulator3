@@ -345,14 +345,15 @@ In Hookless/Sparse, new same-slice callsites without an installed exact hook
 fail closed. Live modal restoration, raw direct COREDLL pseudo compatibility, whole-exit
 atomicity and live iNavi remain separate gates.
 
-### Exact-birth parked-CPU survivors on process exit (design; not implemented)
+### Exact-birth parked-CPU survivors on process exit (design and bounded cuts)
 
 The parked CPU tree is a scheduler container, not a CE process-lifetime tree.
 Removing an exiting process must not dispose an independently live foreign
-process nested below it. The current source can lose such CPUs on natural
-parked completion, first-slice child `Exited`, active exact-birth tree removal,
-already-exited skips and duplicate pruning. The requested `Completed` hoists
-are controls, not proof that every exit path preserves descendants.
+process nested below it. The bounded natural-parked and requested-active
+source cuts now hoist their tested nonmodal foreign CPUs; first-slice child
+`Exited`, other active exits, requested parked siblings, already-exited skips
+and generic duplicate pruning remain open. The requested `Completed` hoist is
+a control, not proof that every exit path preserves descendants.
 
 Before any Kernel, GWE, framebuffer, Task or VM exit effect, one read-only
 preflight must partition the stopped CPU tree by exact process birth. Resolve
@@ -374,7 +375,21 @@ The first bounded source gate starts with the [preserved expected-red natural
 parked and active same-birth-duplicate A→B controls](../../evidence/stage3-parked-survivor-red-20261016/validation.receipt.md).
 Give B a distinct PC/SP, exact birth and a legitimate blocked wait so it
 cannot silently vanish or spuriously execute. Stale/unknown witness refusal
-needs a no-exit-effects control. The inline first-slice `Exited` A→B path needs
+has a no-exit-effects control. Release-feature library and broad source gates
+passed after excluding the parked record's numeric representative thread from
+CPU authority; their exact receipts are separate from live-app proof.
+
+The next preflight gate must establish that a proposed survivor can actually
+resume: with a saved context, its current TID must be nonzero and match the
+saved `ThreadBirthKey`, and that exact thread must still be execution-live.
+A retained handle or same-process ownership of two different live TIDs is not
+enough. First preserve expected-red current-zero, current/saved mismatch and
+exited-but-retained worker controls, plus a live representative-worker positive.
+Each refusal must leave the parent exit, original CPU boxes, contexts and waits
+untouched. The parked record's representative TID is a scheduler hint, not a
+captured CPU birth; other numeric consumers need separate review.
+
+The inline first-slice `Exited` A→B path needs
 a separate test seam or real-MIPS fixture before changing that path; retain
 the existing `Completed` hoist as its control. Already-exited skips, requested
 parked siblings and generic duplicate pruning need separately bounded gates,
