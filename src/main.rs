@@ -4718,7 +4718,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: live checkpoint save duplicates the original execution birth"]
     fn monitor_checkpoint_save_live_birth_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer) = live_boot_checkpoint_fixture();
         let original_process = kernel
@@ -4787,7 +4786,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: restoring a live checkpoint duplicates its execution birth"]
     fn monitor_checkpoint_restore_live_birth_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer) = live_boot_checkpoint_fixture();
         let source_process = kernel
@@ -4849,7 +4847,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: pristine CPU checkpoint duplicates the live boot Kernel birth"]
     fn monitor_checkpoint_save_pristine_cpu_boot_birth_requires_relineage_or_refusal() {
         let kernel =
             CeKernel::boot(RuntimeConfig::load_default().expect("checkpoint config loads"));
@@ -5018,7 +5015,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: pristine CPU save duplicates a pending live child Kernel birth"]
     fn monitor_checkpoint_save_pristine_cpu_pending_child_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer, launch) =
             pristine_cpu_with_queued_child_checkpoint_fixture();
@@ -5039,7 +5035,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: pristine CPU restore duplicates a pending live child Kernel birth"]
     fn monitor_checkpoint_restore_pristine_cpu_pending_child_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer, launch) =
             pristine_cpu_with_queued_child_checkpoint_fixture();
@@ -5119,7 +5114,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: checkpoint save clones an orphaned active finite-Sleep frame hidden from task snapshots"]
     fn monitor_checkpoint_save_orphaned_finite_sleep_frame_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer, thread, frame) =
             orphaned_finite_sleep_frame_checkpoint_fixture();
@@ -5152,7 +5146,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "expected red: checkpoint restore clones an orphaned active finite-Sleep frame hidden from task snapshots"]
     fn monitor_checkpoint_restore_orphaned_finite_sleep_frame_requires_relineage_or_refusal() {
         let (cpu, kernel, framebuffer, thread, frame) =
             orphaned_finite_sleep_frame_checkpoint_fixture();
