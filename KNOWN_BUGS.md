@@ -21,7 +21,8 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   public backing objects. The later bounded
   [P0 queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
   adds in-place exact-birth claims. The bounded P1 gate adds a neutral Event
-  offer but no Shell trigger or checked parent restoration; raw
+  offer with a selected-context check, but no Shell trigger or general
+  lineage-checked restoration for the deferred `CreateProcessW` handoff; raw
   `CreateProcessW` queues B before the post-native caller-birth check. In the
   tested canonical/private A path,
   refusal poisons its saved
