@@ -893,6 +893,56 @@ accepted exit is unproved. `TRUE` still precedes loader/CPU admission, and the
 deferred aggregate drain still has no creator attribution or independent
 event/Shell trigger. This does not establish Step 2, O-T7 or live acceptance.
 
+##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
+
+The owning state stays in `CeKernel`'s existing pending-launch queue: each
+original entry retains its exact process/primary-thread births and a checked,
+in-place claim phase/token. For this single-child `CreateProcessW`/direct-Shell
+cut, the producer must pass an attempt-local exact publication witness through
+dispatch to the post-native consumer;
+`TRUE`, an ordinal, a mutable selected PID or the last queue entry cannot
+identify B after nested publication. Do not add a second pending-owner vector.
+Claim/release/consume only the witnessed entry, after the selected-context
+preflight; a stale or duplicate claim refuses without touching siblings.
+For the witnessed path, the consumer claims B in place and must not call
+`take_pending_process_launches`; no unattempted entry leaves Kernel's queue.
+
+Write these controls test-first within the same sealed source cut; none lands
+as an ignored red:
+
+1. For an original non-shortcut direct `.exe` `ShellExecuteEx` branch, the
+   resolver must preserve that route distinction (it currently merges a
+   `.lnk` target with direct `.exe`). Service only its exact B after the native
+   attempt closes. The [dumped-COREDLL branch and local CE6 source](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+   establish one reachable Shell-to-`CreateProcessW` branch and support a
+   loader-completion boundary, not exhaustive route coverage. Require the
+   emulator's B loader/admission to resolve before A's next guest instruction;
+   do not require B to execute user code or exit first.
+2. With an older notification E queued before B, A's `CreateProcessW` or
+   eligible Shell handoff claims only B. E retains its exact birth and FIFO
+   position and stays visible to Kernel while B is claimed and running: an
+   exact-birth queue query still finds E, `has_pending_process_launches`
+   remains true, and a monitor checkpoint save refuses. A changed
+   parent-context stamp leaves both unclaimed and live.
+3. At the queue level, a claimed B1 must not hide a newly published B2 from
+   B2's own claim or consume an unrelated C; after both exact claims resolve,
+   remaining E/C keep their order. Do not treat this as executed nested
+   `emu_start` or a leaf-permit/reentry proof.
+4. A retryable pre-CPU path/PE/setup error releases B **in place**, keeping
+   its original position among E/C and any subsequently published tail, with
+   its original live, unsignaled birth. Once CPU-admitted, B is not replayed
+   as a pending launch; that error boundary remains a custody concern.
+
+Raw `CeEventHasOccurred` currently queues launches but has no independent
+service trigger. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing, not the
+notification driver's scheduling/return timing. A later fair
+eventual-service gate may claim those exact entries; it must not assert
+before- or after-IOCTL-return
+parity without handler/runtime evidence. This proposal does not implement
+O-T7, a connected callback-scoped Kernel/framebuffer port, checked post-B
+parent restoration, runnable/parked CPU custody, Stage 3/5 or live acceptance.
+
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
 acceptance:
 

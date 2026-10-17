@@ -228,6 +228,16 @@ not an implemented owner. Stage its connected source cut in this order:
    An exact-birth claim/return in Kernel's existing pending-launch queue may
    be implemented as a separate pre-CPU ownership cut. It does not confer a
    child run permit or make an admitted CPU safe on error.
+   Before that source cut, use the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
+   carry an attempt-local exact publication witness through the import
+   boundary; keep the claim in Kernel's original queue; and expected-red test
+   mixed older event E/new B isolation, nested sibling visibility, and
+   pre-CPU retry order. A first Shell trigger is limited to an original,
+   non-shortcut direct `.exe` branch. Its evidenced boundary is loader
+   completion/admission before the parent resumes, not a required first child
+   instruction. Notification service remains a separate fair-trigger gate
+   without an inferred `NFY0:` before/after-return timing. This bounded cut
+   does not settle O-T7, the callback-scoped port, or runnable CPU custody.
 2. Settle the callback-scoped machine-state port before claiming a sound
    lease. Successful `CreateProcessW` now stops A's native attempt at its
    staged return PC and runs B post-native, rather than through A's raw hook
