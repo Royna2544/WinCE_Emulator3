@@ -13,11 +13,13 @@ the creator's B and leave older notification E at its original Kernel queue
 birth. A raw Shell route test excludes `.lnk` and association resolution from
 that witness. Kernel B1/B2 claims preserve E/C order; a bad-PE pre-CPU refusal
 and repaired retry retain the original B birth. Monitor `continue` offers E at
-a closed-native boundary; `stop_pc` leaves it queued until an ordinary
-continue. A real-MIPS completed-root regression first reproduced a monitor
-attempt to re-enter a completed CPU, then passed after a bounded handoff/break
-before native entry. The defect belonged to the new monitor offer, not P2
-producer publication.
+a closed-native boundary; `stop_pc` leaves it queued until a later ordinary
+continue whose selected-CPU attempt clears the requested-PC-stop boundary.
+A real-MIPS development run observed a monitor attempt to re-enter a completed
+CPU, but source changed during that failing run, so it is not a stable-source
+red-to-green comparison. Stable final-source controls pass after a bounded
+handoff/break before native entry. The defect belonged to the new monitor
+offer, not P2 producer publication.
 
 The single [combined receipt](evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
 and [five-file SHA seal](evidence/stage3-launch-handoff-p2-combined-20261017/source-seal.md)
