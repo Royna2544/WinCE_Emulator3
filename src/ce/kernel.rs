@@ -59,6 +59,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write as _,
+    num::NonZeroU64,
     path::PathBuf,
 };
 
@@ -331,6 +332,7 @@ pub struct CeKernel {
     pub keybd: KeybdSystem,
     pub nled: NledSystem,
     pub remote_server: Option<RemoteServer>,
+    cpu_machine_lineage: CpuMachineLineageBinding,
     process_module_base: u32,
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
@@ -419,6 +421,53 @@ pub struct CeKernel {
     display_perf_unhandled: u32,
     window_backing_stores: BTreeMap<u32, FramebufferBackingStore>,
     api_sets: BTreeMap<u32, u32>,
+}
+
+/// Binding a live Kernel to the CPU directory is a one-time machine setup
+/// operation. A cloned Kernel cannot borrow that directory's authority merely
+/// because its copied process and thread birth numbers still match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuMachineLineageError {
+    ZeroLineage,
+    AlreadyBound { bound: u64 },
+    Unbound,
+    RequiresRelineage,
+    WrongMachine { bound: u64, requested: u64 },
+}
+
+impl std::fmt::Display for CpuMachineLineageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroLineage => f.write_str("CPU machine lineage must be nonzero"),
+            Self::AlreadyBound { bound } => {
+                write!(f, "Kernel is already bound to CPU machine lineage {bound}")
+            }
+            Self::Unbound => f.write_str("Kernel has no CPU machine lineage binding"),
+            Self::RequiresRelineage => {
+                f.write_str("cloned Kernel requires whole-machine relineage before CPU execution")
+            }
+            Self::WrongMachine { bound, requested } => write!(
+                f,
+                "Kernel CPU machine lineage {bound} differs from requested lineage {requested}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CpuMachineLineageError {}
+
+#[derive(Debug, Default)]
+enum CpuMachineLineageBinding {
+    #[default]
+    FreshUnbound,
+    Bound(NonZeroU64),
+    CloneRequiresRelineage,
+}
+
+impl Clone for CpuMachineLineageBinding {
+    fn clone(&self) -> Self {
+        Self::CloneRequiresRelineage
+    }
 }
 
 /// Failure to prepare an ordered object wait before it becomes visible to the
@@ -1476,6 +1525,65 @@ impl CeKernel {
     const MSGQUEUE_MAX_NODE_SIZE: u32 = 0x0010_0000;
     const MSGQUEUE_MAX_NUM_NODES: u32 = 0x0010_0000;
 
+    /// Bind the freshly booted Kernel to exactly one CPU directory. A cloned
+    /// Kernel needs a separate whole-machine relineage transaction first.
+    pub fn bind_cpu_machine_lineage(
+        &mut self,
+        machine_lineage: u64,
+    ) -> std::result::Result<(), CpuMachineLineageError> {
+        match &self.cpu_machine_lineage {
+            CpuMachineLineageBinding::Bound(bound) => {
+                return Err(CpuMachineLineageError::AlreadyBound { bound: bound.get() });
+            }
+            CpuMachineLineageBinding::CloneRequiresRelineage => {
+                return Err(CpuMachineLineageError::RequiresRelineage);
+            }
+            CpuMachineLineageBinding::FreshUnbound => {}
+        }
+        let lineage =
+            NonZeroU64::new(machine_lineage).ok_or(CpuMachineLineageError::ZeroLineage)?;
+        self.cpu_machine_lineage = CpuMachineLineageBinding::Bound(lineage);
+        Ok(())
+    }
+
+    pub fn cpu_machine_lineage(&self) -> Option<u64> {
+        match &self.cpu_machine_lineage {
+            CpuMachineLineageBinding::Bound(bound) => Some(bound.get()),
+            CpuMachineLineageBinding::FreshUnbound
+            | CpuMachineLineageBinding::CloneRequiresRelineage => None,
+        }
+    }
+
+    /// The legacy port may still accept a freshly booted, unbound Kernel;
+    /// this distinguishes that case from a clone that must not execute.
+    pub(crate) fn requires_cpu_machine_relineage(&self) -> bool {
+        matches!(
+            &self.cpu_machine_lineage,
+            CpuMachineLineageBinding::CloneRequiresRelineage
+        )
+    }
+
+    /// Read-only pre-effect check for directory/Kernel pairing. This does not
+    /// itself issue an executing-leaf permit or authenticate a Task/frame.
+    pub fn require_cpu_machine_lineage(
+        &self,
+        machine_lineage: u64,
+    ) -> std::result::Result<(), CpuMachineLineageError> {
+        match &self.cpu_machine_lineage {
+            CpuMachineLineageBinding::FreshUnbound => Err(CpuMachineLineageError::Unbound),
+            CpuMachineLineageBinding::CloneRequiresRelineage => {
+                Err(CpuMachineLineageError::RequiresRelineage)
+            }
+            CpuMachineLineageBinding::Bound(bound) if bound.get() != machine_lineage => {
+                Err(CpuMachineLineageError::WrongMachine {
+                    bound: bound.get(),
+                    requested: machine_lineage,
+                })
+            }
+            CpuMachineLineageBinding::Bound(_) => Ok(()),
+        }
+    }
+
     pub fn boot(config: RuntimeConfig) -> Self {
         let mut memory = MemorySystem::default();
         memory.configure_guest_physical_ram_bytes(config.guest_physical_ram_bytes);
@@ -1501,6 +1609,7 @@ impl CeKernel {
             keybd: KeybdSystem::default(),
             nled: NledSystem::default(),
             remote_server: None,
+            cpu_machine_lineage: CpuMachineLineageBinding::default(),
             process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
@@ -13348,6 +13457,7 @@ mod tests {
             registry::RegistryDump,
         },
         config::{ObjectStoreConfig, RootConfig, RuntimeConfig, StorageConfig},
+        emulator::cpu_custody::CpuCustody,
     };
     use std::path::PathBuf;
 
@@ -13383,6 +13493,80 @@ mod tests {
             },
             guest_physical_ram_bytes: crate::config::DEFAULT_GUEST_PHYSICAL_RAM_BYTES,
         }
+    }
+
+    #[test]
+    fn cpu_machine_lineage_binds_once_and_rejects_zero() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let directory = CpuCustody::new().expect("fresh CPU directory lineage");
+        let lineage = directory.machine_lineage();
+
+        assert_eq!(kernel.cpu_machine_lineage(), None);
+        assert!(!kernel.requires_cpu_machine_relineage());
+        assert_eq!(
+            kernel.require_cpu_machine_lineage(lineage),
+            Err(CpuMachineLineageError::Unbound)
+        );
+        assert_eq!(
+            kernel.bind_cpu_machine_lineage(0),
+            Err(CpuMachineLineageError::ZeroLineage)
+        );
+        assert_eq!(kernel.cpu_machine_lineage(), None);
+
+        assert_eq!(kernel.bind_cpu_machine_lineage(lineage), Ok(()));
+        assert_eq!(kernel.cpu_machine_lineage(), Some(lineage));
+        assert!(!kernel.requires_cpu_machine_relineage());
+        assert_eq!(kernel.require_cpu_machine_lineage(lineage), Ok(()));
+        assert_eq!(
+            kernel.bind_cpu_machine_lineage(lineage),
+            Err(CpuMachineLineageError::AlreadyBound { bound: lineage })
+        );
+        assert_eq!(
+            kernel.bind_cpu_machine_lineage(lineage + 1),
+            Err(CpuMachineLineageError::AlreadyBound { bound: lineage })
+        );
+        assert_eq!(kernel.cpu_machine_lineage(), Some(lineage));
+    }
+
+    #[test]
+    fn cpu_machine_lineage_clone_is_poisoned_until_whole_machine_relineage() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let directory = CpuCustody::new().expect("fresh CPU directory lineage");
+        let lineage = directory.machine_lineage();
+        kernel.bind_cpu_machine_lineage(lineage).unwrap();
+
+        let mut cloned = kernel.clone();
+        assert_eq!(cloned.cpu_machine_lineage(), None);
+        assert!(cloned.requires_cpu_machine_relineage());
+        assert_eq!(
+            cloned.require_cpu_machine_lineage(lineage),
+            Err(CpuMachineLineageError::RequiresRelineage)
+        );
+        assert_eq!(
+            cloned.bind_cpu_machine_lineage(lineage),
+            Err(CpuMachineLineageError::RequiresRelineage)
+        );
+        assert_eq!(kernel.require_cpu_machine_lineage(lineage), Ok(()));
+    }
+
+    #[test]
+    fn cpu_machine_lineage_refuses_a_fresh_directory_for_the_original_kernel() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let original = CpuCustody::new().expect("original CPU directory lineage");
+        let fresh = CpuCustody::new().expect("fresh CPU directory lineage");
+        let original_lineage = original.machine_lineage();
+        let fresh_lineage = fresh.machine_lineage();
+        assert_ne!(original_lineage, fresh_lineage);
+        kernel.bind_cpu_machine_lineage(original_lineage).unwrap();
+
+        assert_eq!(
+            kernel.require_cpu_machine_lineage(fresh_lineage),
+            Err(CpuMachineLineageError::WrongMachine {
+                bound: original_lineage,
+                requested: fresh_lineage,
+            })
+        );
+        assert_eq!(kernel.require_cpu_machine_lineage(original_lineage), Ok(()));
     }
 
     #[test]
