@@ -71265,6 +71265,138 @@ mod tests {
     use super::*;
     use crate::config::{MountConfig, RuntimeConfig};
 
+    #[test]
+    fn shell_execute_ex_direct_publication_excludes_shortcut_and_association() -> Result<()> {
+        struct FixtureRoot(std::path::PathBuf);
+
+        impl Drop for FixtureRoot {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(self.0.join("Windows").join("viewer.exe"));
+                let _ = std::fs::remove_file(self.0.join("Docs").join("viewer.lnk"));
+                let _ = std::fs::remove_file(self.0.join("Docs").join("route.nav"));
+                let _ = std::fs::remove_dir(self.0.join("Windows"));
+                let _ = std::fs::remove_dir(self.0.join("Docs"));
+                let _ = std::fs::remove_dir(&self.0);
+            }
+        }
+
+        let root = std::path::PathBuf::from("target")
+            .join("codex-test-tmp")
+            .join(format!(
+                "shell-direct-publication-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("system time before Unix epoch")
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(root.join("Windows")).expect("create Shell fixture root");
+        let _fixture = FixtureRoot(root.clone());
+        std::fs::create_dir(root.join("Docs")).expect("create Shell fixture Docs");
+        std::fs::write(
+            root.join("Windows").join("viewer.exe"),
+            b"test PE placeholder",
+        )
+        .expect("write direct-executable fixture");
+        std::fs::write(
+            root.join("Docs").join("viewer.lnk"),
+            br#"1#"\Windows\viewer.exe""#,
+        )
+        .expect("write shortcut fixture");
+        std::fs::write(root.join("Docs").join("route.nav"), b"route fixture")
+            .expect("write associated-document fixture");
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        kernel.set_file_root(&root);
+        kernel
+            .registry
+            .set_value(r"HKCR\.nav", "", RegistryValue::string("navfile"));
+        kernel.registry.set_value(
+            r"HKCR\navfile\Shell\Open\Command",
+            "",
+            RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+        );
+        let caller_birth = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("boot caller birth");
+        let caller_process_birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let context = CoredllRawContext {
+            thread_id: 1,
+            caller_birth: Some(caller_birth),
+            ..Default::default()
+        };
+        let table = CoredllExportTable::default();
+        let mut memory = UnitGuestMemory::default();
+        let info = 0x24_000;
+        let file_ptr = 0x24_100;
+        memory.map_bytes(info, 60);
+        memory.write_u32(info, 60)?;
+        memory.write_u32(info + 16, file_ptr)?;
+        memory.write_u32(info + 28, 1)?;
+
+        let execute = |kernel: &mut CeKernel, memory: &mut UnitGuestMemory, file: &str| {
+            memory.write_wide_z(file_ptr, file);
+            let (dispatch, publication) = table
+                .dispatch_raw_ordinal_with_framebuffer_args_and_context_with_publication(
+                    kernel,
+                    memory,
+                    None,
+                    context.clone(),
+                    ORD_SHELL_EXECUTE_EX,
+                    &[info],
+                );
+            assert!(matches!(
+                dispatch,
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(true),
+                    ..
+                }
+            ));
+            publication
+        };
+
+        // Both paths resolve to viewer.exe and publish a child, but neither
+        // has the original direct-executable route needed for this witness.
+        assert!(execute(&mut kernel, &mut memory, r"\Docs\route.nav").is_none());
+        assert!(execute(&mut kernel, &mut memory, r"\Docs\viewer.lnk").is_none());
+        let publication = execute(&mut kernel, &mut memory, r"\Windows\viewer.exe")
+            .expect("direct executable must publish one exact witness");
+        assert_eq!(publication.kind, PendingLaunchProducerKind::DirectShell);
+        assert_eq!(publication.caller_birth, Some(caller_birth));
+        assert_eq!(publication.caller_process_birth, Some(caller_process_birth));
+
+        let batch = kernel.reserve_pending_process_launch_witness(publication.locator)?;
+        assert_eq!(batch.locators(), &[publication.locator]);
+        let (claim, direct_child) =
+            kernel.claim_pending_process_launch(&batch, publication.locator)?;
+        assert_eq!(
+            direct_child.application.as_deref(),
+            Some(r"\Windows\viewer.exe")
+        );
+        assert!(kernel.has_pending_process_launches());
+        kernel.release_pending_process_launch_claim(claim)?;
+        kernel.release_pending_process_launch_batch(batch)?;
+
+        let queued = kernel.take_pending_process_launches();
+        assert_eq!(queued.len(), 3);
+        assert_eq!(
+            queued[0].application.as_deref(),
+            Some(r"\Windows\viewer.exe")
+        );
+        assert_eq!(
+            queued[1].application.as_deref(),
+            Some(r"\Windows\viewer.exe")
+        );
+        assert_eq!(queued[2].process_birth, direct_child.process_birth);
+        assert_eq!(
+            queued[2].primary_thread_birth,
+            direct_child.primary_thread_birth
+        );
+        Ok(())
+    }
+
     #[derive(Default)]
     struct UnitGuestMemory {
         bytes: BTreeMap<u32, u8>,

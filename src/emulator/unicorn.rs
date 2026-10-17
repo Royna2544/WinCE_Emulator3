@@ -73403,6 +73403,28 @@ mod unicorn_tests {
         bytes
     }
 
+    fn tiny_mips_direct_shell_execute_then_spin_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_create_process_then_spin_pe();
+        let shell_ordinal = crate::ce::coredll_ordinals::ORD_SHELL_EXECUTE_EX;
+        write_vec_u32(&mut bytes, 0x450, 0x8000_0000 | shell_ordinal);
+        write_vec_u32(&mut bytes, 0x470, 0x8000_0000 | shell_ordinal);
+        // The real IAT call receives a guest SHELLEXECUTEINFOW at RVA 0x20a0.
+        // Its original, non-shortcut file is a direct .exe; the other fields
+        // remain zero except nShow. The section is writable for hInstApp.
+        write_vec_u32(&mut bytes, 0x200 + 3 * 4, 0x3484_20a0); // ori a0,a0,info RVA
+        write_vec_u32(&mut bytes, 0x4a0, 60); // cbSize
+        write_vec_u32(&mut bytes, 0x4a0 + 16, 0x0040_2100); // lpFile
+        write_vec_u32(&mut bytes, 0x4a0 + 28, 1); // nShow
+        for (index, wide) in "survivor.exe"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .enumerate()
+        {
+            write_vec_u16(&mut bytes, 0x500 + index * 2, wide);
+        }
+        bytes
+    }
+
     fn tiny_mips_event_has_occurred_then_spin_pe() -> Vec<u8> {
         let mut bytes = tiny_mips_create_process_then_spin_pe();
         let event_ordinal = crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED;
@@ -82618,6 +82640,220 @@ mod unicorn_tests {
                     .any(|record| { record.op == op && record.process_id == Some(b.process_id) })
             );
         }
+        assert!(!custody.has_any_custody());
+        Ok(())
+    }
+
+    #[test]
+    fn witnessed_bad_pe_retry_preserves_event_child_sibling_order_and_birth() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        let child_path = test_root.join("bad-child.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&child_path, b"not a MIPS PE").unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let parent_thread = kernel
+            .live_thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("parent caller birth");
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let (child, locator) = kernel.queue_process_launch_with_options_and_witness(
+            Some("bad-child.exe".to_owned()),
+            None,
+            None,
+            None,
+        );
+        let sibling = kernel.queue_process_launch(Some("sibling.exe".to_owned()), None);
+        let child_birth = child.process_birth.expect("witnessed child birth");
+        let publication = crate::ce::coredll::PendingLaunchPublication {
+            kind: crate::ce::coredll::PendingLaunchProducerKind::CreateProcess,
+            locator,
+            caller_birth: Some(parent_thread),
+            caller_process_birth: Some(parent_birth),
+        };
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 64,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let mut quarantined_child_fault = false;
+
+        super::run_witnessed_pending_process_launch_with_custody(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            limits,
+            &[],
+            &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+            publication,
+        )
+        .expect_err("invalid B image must refuse before CPU admission");
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert!(parked.borrow().is_empty());
+        assert_eq!(custody.counts().reserved, 0);
+        assert!(!custody.has_any_custody());
+        assert!(!quarantined_child_fault);
+        for launch in [&event, &child, &sibling] {
+            let birth = launch.process_birth.expect("original queued birth");
+            assert_eq!(kernel.pending_process_launch_for_birth(birth), Some(launch));
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(
+                kernel.process_exit_code(launch.process_handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        }
+        // Inspect the original in-place order without extracting/re-publishing
+        // the queue: extraction would mint a new entry generation and make the
+        // attempt-local B witness stale before its retry.
+        let queued = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("E/B/C retain their original queue slots");
+        assert_eq!(queued.locators().len(), 3);
+        assert_eq!(queued.locators()[1], locator, "B keeps its original slot");
+        kernel.release_pending_process_launch_batch(queued)?;
+
+        std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
+        super::run_witnessed_pending_process_launch_with_custody(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            limits,
+            &[],
+            &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+            publication,
+        )?;
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(parked.borrow().len(), 1);
+        assert_eq!(
+            parked.borrow()[0]
+                .cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(child_birth),
+            "retry admits the original B birth, not a replacement"
+        );
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![event, sibling],
+            "E and C keep their original FIFO order after only B is consumed"
+        );
+        assert!(!custody.has_any_custody());
+        assert!(!quarantined_child_fault);
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_direct_shell_claims_only_its_child_and_leaves_older_event_queued()
+    -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_direct_shell_execute_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("event.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_file_root(&test_root);
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let event_birth = event.process_birth.expect("event birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        assert!(matches!(
+            image.imports[0].imports[0].import,
+            crate::pe::ImportBy::Ordinal(ordinal)
+                if u32::from(ordinal) == crate::ce::coredll_ordinals::ORD_SHELL_EXECUTE_EX
+        ));
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("parent entry");
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &mut custody,
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            first.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(entry + 18 * 4)
+        );
+        assert_eq!(first.report.end_process_birth(), Some(parent_birth));
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event),
+            "the direct Shell handoff must not claim the older notification"
+        );
+        assert!(kernel.has_pending_process_launches());
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(kernel.is_wait_ready(event.process_handle, 1), Some(false));
+
+        let owned: Vec<_> = cpu
+            .owned_process_launch
+            .iter()
+            .chain(
+                cpu.parked_child_processes
+                    .iter()
+                    .filter_map(|parked| parked.cpu.owned_process_launch.as_ref()),
+            )
+            .collect();
+        assert!(
+            owned
+                .iter()
+                .all(|launch| launch.process_birth != Some(event_birth)),
+            "E has not been admitted under the Shell caller"
+        );
+        let b_owned: Vec<_> = owned
+            .iter()
+            .copied()
+            .filter(|launch| launch.application.as_deref() == Some("survivor.exe"))
+            .collect();
+        assert_eq!(b_owned.len(), 1, "one original direct-Shell child CPU");
+        let b = b_owned[0];
+        let b_birth = b.process_birth.expect("exact direct-Shell birth");
+        assert_ne!(b_birth, event_birth);
+        assert!(kernel.handles.process_execution_live_by_birth(b_birth));
+        assert_eq!(kernel.is_wait_ready(b.process_handle, 1), Some(false));
+        let ops = kernel.recent_process_ops();
+        assert!(!ops.iter().any(|record| {
+            record.op == "CreateProcessResolved" && record.process_id == Some(event.process_id)
+        }));
+        assert!(ops.iter().any(|record| {
+            record.op == "CreateProcessResolved" && record.process_id == Some(b.process_id)
+        }));
         assert!(!custody.has_any_custody());
         Ok(())
     }

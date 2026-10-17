@@ -2832,6 +2832,16 @@ fn monitor_run_once(
         if wall_clock_limit_expired(limits.wall_clock_limit_ms, run_started.elapsed()) {
             break;
         }
+        // Event service can return to a selected parent whose CPU already
+        // completed. A parked child may now be runnable, but the completed
+        // native owner must never receive another slice. Use the same bounded
+        // handoff before attempting any CPU entry.
+        if cpu.active_process_execution_completed() {
+            if !monitor_continue_process_handoff(cpu, kernel, limits, &mut continued)? {
+                break;
+            }
+            continue;
+        }
         let current_limits = UnicornRunLimits {
             wall_clock_limit_ms: remaining_wall_clock_limit_ms(
                 limits.wall_clock_limit_ms,
@@ -6026,6 +6036,80 @@ mod tests {
                 .count(),
             1,
             "the monitor must service this exact Event once before CPU entry"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn monitor_completed_cpu_services_event_without_native_reentry() -> Result<()> {
+        struct ScratchFile(PathBuf);
+        impl Drop for ScratchFile {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+
+        let (mut cpu, mut kernel, mut desktop, mut custody, event) =
+            queued_missing_monitor_event_fixture()?;
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        let return_path = std::env::temp_dir().join(format!(
+            "wince-monitor-completed-root-{}-{unique}.exe",
+            std::process::id()
+        ));
+        let _cleanup = ScratchFile(return_path.clone());
+        let mut bytes = monitor_spinner_pe();
+        bytes[0x200..0x204].copy_from_slice(&0x03e0_0008_u32.to_le_bytes()); // jr ra
+        bytes[0x204..0x208].copy_from_slice(&0_u32.to_le_bytes()); // delay slot
+        fs::write(&return_path, bytes).map_err(|error| {
+            wince_emulation_v3::Error::Backend(format!("write monitor return fixture: {error}"))
+        })?;
+        let image = PeImage::inspect(&return_path)?;
+        cpu.load_pe_image(&image)?;
+        kernel.set_process_module_base(image.image_base());
+        kernel.set_process_module_path("\\Test\\monitor-return.exe".to_owned());
+        kernel.set_process_module_host_path(return_path);
+        desktop
+            .run_cpu_until_report(
+                &mut cpu,
+                &mut kernel,
+                UnicornRunLimits {
+                    instruction_limit: 64,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &mut custody,
+            )
+            .result?;
+        assert!(cpu.active_process_execution_completed());
+        assert!(kernel.has_unreserved_event_launch());
+        let event_birth = event.process_birth.expect("original event process birth");
+        let mut attempts = 0usize;
+        let mut observer = |_execution: &AttemptExecution| attempts += 1;
+        monitor_run_once(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &mut custody,
+            UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 250,
+                stop_pc: None,
+                live_pump: false,
+            },
+            None,
+            Some(&mut observer),
+        )?;
+        assert_eq!(attempts, 0, "completed selected CPU cannot run natively");
+        assert!(!kernel.has_pending_process_launches());
+        assert!(!kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event.process_handle),
+            Some(u32::MAX)
         );
         Ok(())
     }
