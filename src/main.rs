@@ -6314,6 +6314,124 @@ mod tests {
 
     #[cfg(feature = "unicorn")]
     #[test]
+    #[ignore = "O-T7a connected boot host selector has not admitted the boot CPU"]
+    fn boot_host_run_requires_directory_owned_cpu_permit_before_native_entry() -> Result<()> {
+        use wince_emulation_v3::emulator::cpu::AttemptObservation;
+
+        struct ScratchFile(PathBuf);
+        impl Drop for ScratchFile {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        let spinner_path = std::env::temp_dir().join(format!(
+            "wince-ot7a-boot-selector-{}-{unique}.exe",
+            std::process::id()
+        ));
+        let _cleanup = ScratchFile(spinner_path.clone());
+        let mut bytes = monitor_spinner_pe();
+        // Stop before the branch, after two ordinary guest instructions. A
+        // stop at the PE entry would not demonstrate guest progress.
+        bytes[0x200..0x204].copy_from_slice(&0x3408_0001_u32.to_le_bytes()); // ori t0,zero,1
+        bytes[0x204..0x208].copy_from_slice(&0x3508_0001_u32.to_le_bytes()); // ori t0,t0,1
+        bytes[0x208..0x20c].copy_from_slice(&0x1000_ffff_u32.to_le_bytes()); // beq zero,zero,-1
+        bytes[0x20c..0x210].copy_from_slice(&0_u32.to_le_bytes()); // delay slot
+        fs::write(&spinner_path, bytes).map_err(|error| {
+            wince_emulation_v3::Error::Backend(format!("write boot selector fixture: {error}"))
+        })?;
+        let image = PeImage::inspect(&spinner_path)?;
+        let stop_pc = image.entry_point_va() + 8;
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        let boot_birth = kernel
+            .current_process_birth_key()
+            .expect("canonical boot process birth");
+        let mut cpu = UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        kernel.set_process_module_base(image.image_base());
+        kernel.set_process_module_path("\\Test\\ot7a-boot-selector.exe".to_owned());
+        kernel.set_process_module_host_path(spinner_path);
+        let mut desktop = DesktopRuntime::Virtual(VirtualDesktop::default_primary()?);
+        let mut custody = CpuCustody::new().expect("boot custody directory initializes");
+        let args = Args {
+            registry: PathBuf::from(DEFAULT_REGISTRY_PATH),
+            devices: PathBuf::from(DEFAULT_DEVICES_PATH),
+            image: None,
+            companion_images: Vec::new(),
+            dll_search_dirs: Vec::new(),
+            mount_config: None,
+            framebuffer_dump: None,
+            tracefiles: Vec::new(),
+            desktop: DesktopMode::Virtual,
+            cpu_instruction_limit: 64,
+            cpu_wall_clock_limit_ms: 500,
+            cpu_stop_pc: Some(stop_pc),
+            startup_taps: Vec::new(),
+            remote_server: None,
+            run_cpu: true,
+            monitor: false,
+            verbose: false,
+        };
+        let mut attempts = Vec::new();
+        let mut observe = |execution: &AttemptExecution| {
+            attempts.push((execution.report.clone(), execution.result.is_ok()));
+        };
+        run_cpu_loop(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &args,
+            &mut custody,
+            Some(&mut observe),
+        )?;
+
+        assert_eq!(attempts.len(), 1, "one selected boot native attempt");
+        let (report, succeeded) = &attempts[0];
+        assert!(*succeeded, "native attempt must succeed before custody red");
+        assert!(report.attempt_id().is_some(), "boot A entered Unicorn");
+        assert_eq!(report.start_process_birth(), Some(boot_birth));
+        assert_eq!(report.start_pc(), Some(image.entry_point_va()));
+        assert_eq!(report.native_result(), &AttemptObservation::Value(()));
+        assert_eq!(report.raw_stop_pc(), &AttemptObservation::Value(stop_pc));
+        assert_eq!(report.final_outcome(), NativeSliceOutcome::RequestedPcStop);
+        assert!(
+            requested_pc_stop_reached(
+                Some(stop_pc),
+                cpu.last_debug_snapshot(),
+                cpu.saved_context_pc(),
+            ),
+            "two nonbranch guest instructions reached the diagnostic stop"
+        );
+
+        // A diagnostic attempt ID is not an execution permit. The first
+        // connected cut must own boot A in the directory before this attempt.
+        let boot_slot = custody
+            .admitted_key_for_birth(boot_birth)
+            .expect("boot A executed without a directory-owned CPU slot/permit");
+        assert_eq!(boot_slot.machine_lineage(), custody.machine_lineage());
+        assert_eq!(
+            kernel.cpu_machine_lineage(),
+            Some(custody.machine_lineage()),
+            "boot Kernel and executable CPU directory must share lineage"
+        );
+        let snapshot = custody
+            .snapshot_exact(boot_slot, boot_birth)
+            .expect("boot slot remains addressable after the stopped attempt");
+        assert_ne!(
+            snapshot.state,
+            wince_emulation_v3::emulator::cpu_custody::CpuCustodyState::Reserved,
+            "boot CPU may not remain a reservation after native entry"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
     fn monitor_continue_services_event_after_prior_requested_pc_stop() -> Result<()> {
         struct ScratchFile(PathBuf);
         impl Drop for ScratchFile {
