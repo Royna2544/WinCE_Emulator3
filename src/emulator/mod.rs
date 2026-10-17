@@ -8,8 +8,6 @@ pub mod cpu_custody;
 pub mod cpu_mips;
 pub mod dll_search;
 pub mod imports;
-// Preparatory, unconnected whole-attempt machine-state loan boundary.
-mod machine_kernel_port;
 pub mod memory;
 #[cfg(feature = "unicorn")]
 mod native_engine;
