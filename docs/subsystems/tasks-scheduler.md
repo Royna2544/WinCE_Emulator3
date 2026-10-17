@@ -854,7 +854,7 @@ selected-context stamp. If A stages deferred `CreateProcessW`, the post-native
 tail checks that stamp against the selected exact parent birth, verifies the
 stopped caller remains execution-live under that birth, and requires a
 nonzero staged return PC. A mismatch returns typed `Backend` before the
-existing aggregate pending-launch queue is drained or a child CPU is
+then-aggregate pending-launch queue was drained or a child CPU was
 constructed. In the tested canonical/private A path, the stopped refusal
 poisons its saved continuation and requires recovery rather than rollback or
 resume; aliasless synthetic nonprivate attempts do not establish that poison
@@ -862,8 +862,8 @@ or an exact `failure_operation` record. A test-only real-MIPS
 control makes A call `CreateProcessW` after a preexisting raw
 `CeEventHasOccurred` launch; it is red-to-green on a same-birth
 selected metadata rewrite: both original births remain queued in FIFO order,
-live and unresolved. An unchanged-context mixed control confirms the current
-aggregate drain still admits both in FIFO order; it does not attribute them
+live and unresolved. An unchanged-context mixed control confirms that both
+launches are admitted in FIFO order; it does not attribute them
 to the `CreateProcessW` caller. Existing non-live, both-mode and final
 parent-resume controls also pass. The final `unicorn.rs` SHA-256 is
 `ED2A2AB693735794DB86DCC97E672DCB16AB5071C13EA0010D0A877E8393E2B8`.
@@ -873,9 +873,10 @@ records a13 focused `deferred_` **17/0**, a14 no-default 19 blocks
 a16 parent-resume **1/0**, and a17–a19 feature checks exiting 0. Source
 hashes remained stable despite backup-only HEAD movement during a15. Raw
 `CreateProcessW` queues B before the post-native caller-birth verification;
-there is no independent event/shell trigger. An exact-birth pending claim and
-fair trigger must later change the mixed control deliberately. This cut does
-not supply that claim, a post-B restoration token, `ParentSuspension`, a
+there is no independent event/Shell trigger. The later P0 gate adds in-place
+claims but deliberately keeps both births eligible; a fair trigger and
+producer witness must later change the mixed control. This earlier cut did
+not supply a post-B restoration token, `ParentSuspension`, a
 connected port, Step 2/Stage 3 acceptance or live proof.
 
 The separate raw `CreateProcessW` output-Boolean cut treats
@@ -890,7 +891,7 @@ guest-byte rollback is promised. The shim's forced success-path `LastError=0`
 is a known CE6 mismatch, not a result of this gate. Null/unwritable output can leave
 process/thread aliases undisclosed to the guest, and their lifetime after
 accepted exit is unproved. `TRUE` still precedes loader/CPU admission, and the
-deferred aggregate drain still has no creator attribution or independent
+then-aggregate drain had no creator attribution or independent
 event/Shell trigger. This does not establish Step 2, O-T7 or live acceptance.
 
 The separate [bounded Shell output gate](../../evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
@@ -901,41 +902,47 @@ red **0/1**; final focused **2/0**, raw-kernel **137/0**, 19-block no-default
 feature checks passed with stable source hashes. Invalid-pointer CE parity,
 success-path `LastError=0`, undisclosed alias retirement, loader admission
 and a post-native Shell trigger remain open. It does not implement the
-proposed claim gate below or confer O-T7/live acceptance.
+later producer-witness gate below or confer O-T7/live acceptance.
 
-##### Preparatory P0 in-place pending-launch ownership cut (proposed, not implemented)
+##### Preparatory P0 in-place pending-launch ownership cut (bounded source-test gate)
 
-Before changing which producer triggers service, replace the production
-post-native aggregate `take_pending_process_launches`/local-`VecDeque` drain
-with checked exact-birth claims and returns **in the existing Kernel queue**.
-The current runner remains the caller: it records non-owning entry-time birth
-order, claims each original entry there, and leaves unattempted siblings
-queryable in Kernel while another child is claimed or running. It must not
-hold a queue borrow across the child run. A retryable pre-CPU failure releases
-the same birth at its original position among still-pending siblings, ahead of
-later publications; stale or duplicate claims refuse without consuming a
-sibling. A nested service batch may see new publications, but must not steal
-or reorder an outer batch's unattempted entries; each batch keeps its own
-entry-time admission order.
+The production post-native runner now reserves non-owning entry-time FIFO
+locators in `CeKernel` instead of using aggregate
+`take_pending_process_launches` and a local `VecDeque`. It claims each original
+entry by exact process and primary-thread births in Kernel's existing queue.
+Unattempted siblings remain queryable in their original slots during another
+child's preparation or native run; no queue borrow spans that run. A retryable
+pre-CPU failure releases the same birth in place, ahead of later publications.
+Stale or duplicate claims refuse without consuming a sibling; checked
+zero-slice completion or CPU admission consumes only the claimed entry.
+Nested batches see new publications but cannot take or reorder an outer
+batch's reserved siblings.
 
-P0 deliberately preserves today's admission set and order, including an older
-notification E and new B both admitted under A's post-native tail. It adds no
-creator attribution, attempt-local producer witness, new Shell/notification
-trigger, or producer wiring. That E-under-A attribution remains a documented
-compatibility limit, not CE timing evidence or a policy to extend. Test first:
-an unchanged-context mixed E+B control still admits both in order; while E
-is claimed/running, unattempted B remains exact-birth queryable and makes
-pending-launch and checkpoint guards refuse; a later C remains visible while
-B runs; nested B2 publication cannot hide or reorder outer-batch siblings;
-and a retryable pre-CPU failure restores its original relative position and
-live, unsignaled birth. No ignored red stands in for those controls. P0 alone
-does not establish Stage 3, O-T7, a callback-scoped port, runnable CPU custody
-or live-app acceptance. These are proposed controls, not executed evidence.
+The [bounded receipt](../../evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
+records Kernel retry/tail-order and stale-token controls, runner observers
+that see unattempted siblings after claim and post-admission immediately
+before native execution, a real-MIPS nested E→D before outer
+B/C order control, the unchanged-context mixed E+B control, 19-block
+no-default **1,555/0/2 ignored** and release-feature **2,202/0/9 ignored**
+suites, and three feature checks exiting 0 on stable source hashes. The
+observers do **not** independently inspect the queue during guest execution,
+and no active-claim checkpoint save was executed; the existing checkpoint
+refusal checks pending-launch and canonical Task presence. These are bounded
+source/test facts, not broader custody or runtime acceptance.
+
+P0 deliberately preserves the previous admission set and order: older event
+E and new B may both be admitted under A's post-native tail. It adds no creator
+attribution, attempt-local producer witness or independent Shell/notification
+trigger. E-under-A remains a documented compatibility limit, not CE timing
+evidence or a policy to extend. P0 does not establish Stage 3, O-T7, a
+callback-scoped port, runnable CPU custody or live-app acceptance. No app or
+writable mount was run.
 
 An independent fair event/notification trigger must follow P0 and precede the
 witnessed producer gate below. It must eventually service E by its own exact
 birth without requiring another process's child handoff, or narrowing that
-handoff to B would strand E. The local `NFY0:` evidence does not settle
+handoff to B would strand E. The [dumped `notify.dll`/hive binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+identifies a concrete `NFY0:` driver candidate but does not settle
 before/after-IOCTL-return timing.
 
 ##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
@@ -980,8 +987,9 @@ as an ignored red:
 
 Raw `CeEventHasOccurred` currently queues launches but has no independent
 service trigger. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
-shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing, not the
-notification driver's scheduling/return timing. The intervening fair
+shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing; the
+[dumped driver binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+identifies `notify.dll` but not its scheduling/return timing. The intervening fair
 eventual-service gate must claim those exact entries; it must not assert
 before- or after-IOCTL-return
 parity without handler/runtime evidence. This proposal does not implement

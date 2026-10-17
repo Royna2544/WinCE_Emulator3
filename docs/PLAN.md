@@ -228,13 +228,14 @@ not an implemented owner. Stage its connected source cut in this order:
    An exact-birth claim/return in Kernel's existing pending-launch queue may
    be implemented as a separate pre-CPU ownership cut. It does not confer a
    child run permit or make an admitted CPU safe on error.
-   Stage [P0 in-place queue ownership](subsystems/tasks-scheduler.md#preparatory-p0-in-place-pending-launch-ownership-cut-proposed-not-implemented)
-   first: replace the existing aggregate take/local-drain loop with exact-birth
-   claims in Kernel's original queue. Preserve its current entry-time admission
-   set and order, including older event E and new B under A's tail; this is an
-   ownership repair, not creator attribution or a new service trigger. Test
-   queued-sibling visibility, nested batch order and same-index pre-CPU retry
-   before changing that admission policy.
+   The bounded [P0 in-place queue ownership gate](subsystems/tasks-scheduler.md#preparatory-p0-in-place-pending-launch-ownership-cut-bounded-source-test-gate)
+   now replaces the aggregate take/local-drain loop with exact-birth claims in
+   Kernel's original queue. Its executed controls cover claim-time sibling
+   visibility, nested batch order, stale/duplicate claims and same-slot pre-CPU
+   retry. The current admission set and order remain, including older event E
+   and new B under A's tail; this is an ownership repair, not creator
+   attribution or a new service trigger. During-run queue visibility and an
+   active-claim checkpoint save were not independently executed in this cut.
    Stage P1 next: add an independent fair event/notification service trigger so
    E cannot be stranded waiting for another process's child handoff. Require
    eventual exact-birth service without inferring `NFY0:` before/after-return

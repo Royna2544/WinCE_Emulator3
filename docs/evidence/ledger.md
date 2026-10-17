@@ -2639,11 +2639,12 @@ all exited 0. All stamped source hashes matched before/after; a15 HEAD
 moved from `a8ec2928` to `5c405df6` through backup-only commits.
 
 Raw `CreateProcessW` queues B before the post-native caller-birth check.
-No independent event/shell launch trigger exists in this gate. It is not an
+No independent event/Shell launch trigger existed in this gate. It was not an
 exact-birth pending claim, a connected `MachineKernelPort` or post-B
 restoration token, Step 2/Stage 3 acceptance or live iNavi evidence. No app
-or writable mount was run. The next queue gate needs an exact-birth
-claim/return and a fair trigger, intentionally changing that mixed control.
+or writable mount was run. The later P0 cut adds in-place claims but
+intentionally preserves the mixed E+B admission; a fair trigger and
+producer-witnessed B isolation remain later gates.
 Separately, source review at that earlier seal found that the raw
 `CreateProcessW` shim queues before four fallible `PROCESS_INFORMATION`
 writes; a failed write can return `FALSE` with a queued live child. No
@@ -2668,10 +2669,12 @@ the bounded raw output-Boolean source/test gate, not full process semantics.
 The existing success-path `LastError=0` is a known CE6 mismatch and was not
 validated by the new controls. A null or unwritable output can leave allocated
 process/thread aliases undisclosed to the guest; their eventual retirement is
-unproved. Raw `TRUE` still precedes loader/CPU admission. The post-native
-aggregate queue drain still admits older event/Shell launches without creator
-attribution and has no independent trigger for them. This cut is not a
-callback-scoped port, exact-birth launch claim, live-app or writable-mount run.
+unproved. Raw `TRUE` still precedes loader/CPU admission. At this output-cut
+seal, the post-native aggregate queue drain admitted older event/Shell
+launches without creator attribution and had no independent trigger for them.
+The later P0 cut changes queue ownership, not the admission policy or trigger.
+This output cut is not a callback-scoped port, exact-birth launch claim,
+live-app or writable-mount run.
 
 The bounded [REA/Shell finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and a
@@ -2693,6 +2696,49 @@ reject `FALSE` paired with a live, unsignaled child rather than proving CE
 invalid-pointer behavior. Success-path `LastError=0`, undisclosed-alias
 retirement, loader admission and independent exact-birth Shell service remain
 open. No app, writable-mount backup or mount write occurred for this cut.
+
+## P0 in-place pending-launch queue ownership (2026-10-17, executed)
+
+The production post-native runner reserves non-owning entry-time FIFO
+locators in `CeKernel` instead of removing all launches to a local deque. Each
+entry is claimed by its original process/primary-thread births, remains in
+Kernel through pre-CPU preparation, and is consumed only after checked
+zero-slice exit or CPU admission. A retryable pre-CPU failure releases the
+same claim and batch at their original positions; an admitted child is not
+replayed. Nested service sees newly published entries without taking an outer
+batch's reserved siblings. The existing E+B under A admission order is
+deliberately unchanged.
+
+The [validation receipt](../../evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
+ties the executed Kernel stale/duplicate/PID-reuse and retry-order controls,
+runner claim-time and post-admission sibling visibility, a real-MIPS nested E→D before outer
+B/C order control, and the unchanged-context mixed E+B control to stable
+`kernel.rs` SHA-256 `FB390F8442F8C722F849FE245FA79CFD813FD04106FED01DA6E520F24A27F88A`
+and `unicorn.rs` SHA-256 `5580AFF2DB6372C23E13094E67D65B077E6EC57976EF2CE6D649AC5189C75005`.
+A09 no-default and a10 release-feature each passed 19 blocks,
+**1,555/0/2 ignored** and **2,202/0/9 ignored**, respectively; a11–a13
+feature checks exited 0. Each a09–a13 attempt reports unchanged source
+hashes. The observers inspect after claim and post-admission, immediately
+before the native slice, not during guest execution; no active-claim
+checkpoint save was executed. The
+existing checkpoint guard rejects pending launches and canonical Task records
+by source inspection, not a new P0 runtime witness.
+
+P0 supplies neither a fair event/Shell service trigger nor an attempt-local
+producer witness, so older E can remain pending without another handoff and
+E/B creator isolation is unproved. It is not a callback-scoped machine-state
+port, runnable CPU custody, Stage 3/O-T7, or live-app acceptance. No iNavi
+guest or writable mount was run for this gate.
+
+## NAND `NFY0:` driver binding (2026-10-17, read-only)
+
+The user-supplied NAND dump contains `notify.dll` with `NFY_*` exports and a
+`default.hv` raw-text association of `PrefixNFY`, `Index`, and
+`DllNOTIFY.Dll`. The [bounded finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+records exact file hashes and the REA admission limit: deeper binary analysis
+was refused by the backing volume, so IOCTL handling and notification launch
+timing remain unknown. This identifies a concrete driver candidate, not a P1
+timing rule or a runtime service witness.
 
 ## Chat-project validation notes (not in this repository)
 
