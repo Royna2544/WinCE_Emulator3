@@ -15155,6 +15155,8 @@ impl UnicornMips {
                         &parked_child_processes,
                         custody.as_deref_mut(),
                         &mut deferred_quarantined_child_fault,
+                        #[cfg(test)]
+                        None,
                     )
                 })
                 .err();
@@ -20560,20 +20562,6 @@ fn preflight_deferred_process_launch_context(
 }
 
 #[cfg(feature = "unicorn")]
-fn restore_pre_cpu_launch_error(
-    kernel: &mut CeKernel,
-    remaining: &mut VecDeque<crate::ce::kernel::PendingProcessLaunch>,
-    current: Option<crate::ce::kernel::PendingProcessLaunch>,
-    error: Error,
-) -> Error {
-    if let Some(current) = current {
-        remaining.push_front(current);
-    }
-    kernel.restore_pending_process_launches(std::mem::take(remaining).into());
-    error
-}
-
-#[cfg(feature = "unicorn")]
 #[cfg(all(test, feature = "unicorn"))]
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -20597,6 +20585,7 @@ fn run_pending_process_launches<D>(
         parked_child_processes,
         None,
         &mut quarantined_child_fault,
+        None,
     )
 }
 
@@ -20612,315 +20601,296 @@ fn run_pending_process_launches_with_custody<D>(
     parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
     mut custody: Option<&mut CpuCustody>,
     quarantined_child_fault: &mut bool,
+    #[cfg(test)] launch_observer: Option<
+        &dyn Fn(&CeKernel, &crate::ce::kernel::PendingProcessLaunch),
+    >,
 ) -> Result<()> {
-    let mut launches: VecDeque<_> = kernel.take_pending_process_launches().into();
-    if launches.is_empty() {
+    let Some(batch) = kernel.reserve_pending_process_launch_batch()? else {
         return Ok(());
-    }
-    if let Err(error) = sync_file_mapping_views_from_unicorn_guarded(
-        parent_uc,
-        kernel,
-        parent_owner_pid,
-        sealed_host_write_guard,
-    ) {
-        return Err(restore_pre_cpu_launch_error(
+    };
+    // Keep the entry-time batch in Kernel. A nested child handoff can reserve
+    // only launches published later, while untouched siblings remain visible
+    // and retain their original FIFO positions throughout the child run.
+    let mut active_claim = None;
+    let result = (|| -> Result<()> {
+        sync_file_mapping_views_from_unicorn_guarded(
+            parent_uc,
             kernel,
-            &mut launches,
-            None,
-            error,
-        ));
-    }
-    while let Some(launch) = launches.pop_front() {
-        let Some(launch_birth) = launch.process_birth else {
-            return Err(restore_pre_cpu_launch_error(
-                kernel,
-                &mut launches,
-                Some(launch),
-                Error::Backend("pending child launch has no original process birth".to_owned()),
-            ));
-        };
-        if kernel.handles.process_birth_key(launch.process_id) != Some(launch_birth) {
-            let error = Error::Backend(format!(
-                "pending child launch pid {} has a stale process birth",
-                launch.process_id
-            ));
-            return Err(restore_pre_cpu_launch_error(
-                kernel,
-                &mut launches,
-                Some(launch),
-                error,
-            ));
-        }
-        if let Some(requested_code) = kernel
-            .handles
-            .process_termination_requested_exit_code_by_birth(launch_birth)
-        {
-            // A request may arrive after CreateProcess published the launch
-            // but before the first child instruction. Do not resolve/load or
-            // reset its exit state: its original birth is sufficient for the
-            // checked zero-slice completion.
-            let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
-                &launch,
-                requested_code,
-                Some(&mut *framebuffer),
-            ) {
-                Ok(completed) => completed,
-                Err(error) => {
-                    launches.push_front(launch);
-                    kernel.restore_pending_process_launches(launches.into());
-                    return Err(error);
-                }
+            parent_owner_pid,
+            sealed_host_write_guard,
+        )?;
+        for locator in batch.locators().iter().copied() {
+            let (claim, launch) = kernel.claim_pending_process_launch(&batch, locator)?;
+            active_claim = Some(claim);
+            #[cfg(test)]
+            if let Some(observer) = launch_observer {
+                observer(kernel, &launch);
+            }
+            let Some(launch_birth) = launch.process_birth else {
+                return Err(Error::Backend(
+                    "pending child launch has no original process birth".to_owned(),
+                ));
             };
-            if !completed {
-                let error = Error::Backend(format!(
-                    "pending child launch pid {} rejected requested completion",
+            if kernel.handles.process_birth_key(launch.process_id) != Some(launch_birth) {
+                return Err(Error::Backend(format!(
+                    "pending child launch pid {} has a stale process birth",
                     launch.process_id
-                ));
-                launches.push_front(launch);
-                kernel.restore_pending_process_launches(launches.into());
-                return Err(error);
+                )));
             }
-            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                op: "CreateProcessTerminationCompleted",
-                application: launch.application.clone(),
-                command_line: launch.command_line.clone(),
-                path: None,
-                process_handle: Some(launch.process_handle),
-                thread_handle: Some(launch.thread_handle),
-                process_id: Some(launch.process_id),
-                thread_id: Some(launch.thread_id),
-                result: Some(requested_code),
-                error: None,
-                detail: Some("before_first_child_slice".to_owned()),
-            });
-            continue;
-        }
-        let resolved = match resolve_process_launch_path(kernel, &launch) {
-            Ok(resolved) => resolved,
-            Err(error) => {
-                return Err(restore_pre_cpu_launch_error(
-                    kernel,
-                    &mut launches,
-                    Some(launch),
-                    error,
-                ));
-            }
-        };
-        let Some(path) = resolved else {
-            let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
-                &launch,
-                u32::MAX,
-                Some(&mut *framebuffer),
-            ) {
-                Ok(completed) => completed,
-                Err(error) => {
-                    launches.push_front(launch);
-                    kernel.restore_pending_process_launches(launches.into());
-                    return Err(error);
-                }
-            };
-            if !completed {
-                let error = Error::Backend(format!(
-                    "pending child launch pid {} rejected path-resolution completion",
-                    launch.process_id
-                ));
-                launches.push_front(launch);
-                kernel.restore_pending_process_launches(launches.into());
-                return Err(error);
-            }
-            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                op: "CreateProcessResolveFailed",
-                application: launch.application.clone(),
-                command_line: launch.command_line.clone(),
-                path: None,
-                process_handle: Some(launch.process_handle),
-                thread_handle: Some(launch.thread_handle),
-                process_id: Some(launch.process_id),
-                thread_id: Some(launch.thread_id),
-                result: Some(0),
-                error: Some("path not found".to_owned()),
-                detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
-            });
-            continue;
-        };
-        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-            op: "CreateProcessResolved",
-            application: launch.application.clone(),
-            command_line: launch.command_line.clone(),
-            path: Some(path.display().to_string()),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_id: Some(launch.process_id),
-            thread_id: Some(launch.thread_id),
-            result: Some(1),
-            error: None,
-            detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
-        });
-        let image = match PeImage::inspect(&path) {
-            Ok(image) => image,
-            Err(error) => {
-                return Err(restore_pre_cpu_launch_error(
-                    kernel,
-                    &mut launches,
-                    Some(launch),
-                    error,
-                ));
-            }
-        };
-        // Hold a no-allocation terminal slot before the original child CPU
-        // exists. A loader/setup error cancels it and retries the launch;
-        // once the CPU is admitted, a native error cannot drop that owner.
-        let custody_key = if let Some(directory) = custody.as_deref_mut() {
-            match directory.reserve(launch_birth) {
-                Ok(key) => Some(key),
-                Err(error) => {
-                    return Err(restore_pre_cpu_launch_error(
-                        kernel,
-                        &mut launches,
-                        Some(launch),
-                        Error::Backend(format!("reserve child CPU custody: {error}")),
-                    ));
-                }
-            }
-        } else {
-            None
-        };
-        let mut child = match UnicornMips::new() {
-            Ok(child) => child,
-            Err(error) => {
-                if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                    directory
-                        .cancel_reservation(key, launch_birth)
-                        .map_err(|cancel| {
-                            Error::Backend(format!("cancel unbuilt child CPU custody: {cancel}"))
-                        })?;
-                }
-                return Err(restore_pre_cpu_launch_error(
-                    kernel,
-                    &mut launches,
-                    Some(launch),
-                    error,
-                ));
-            }
-        };
-        let saved_base = kernel.process_module_base();
-        let saved_path = kernel.process_module_path().to_owned();
-        let saved_host_path = kernel.process_module_host_path().cloned();
-        let saved_command_line = kernel.process_command_line().to_owned();
-        let saved_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
-        let saved_show_cmd = kernel.process_show_cmd();
-        let saved_process_state = kernel.current_process_state();
-
-        kernel.set_process_module_base(image.image_base());
-        let child_module_path = kernel
-            .host_path_to_guest_mount(&path)
-            .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
-        kernel.set_process_module_path(child_module_path.clone());
-        kernel.set_process_module_host_path(path.clone());
-        kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
-        kernel.set_process_current_directory(
-            launch
-                .current_directory
-                .clone()
-                .or(saved_current_directory.clone()),
-        );
-        kernel.set_process_show_cmd(launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL));
-        kernel.set_current_process_id(launch.process_id);
-        kernel.reset_current_process_exit_state();
-
-        let mut child_admitted = false;
-        let child_result = (|| -> Result<ChildProcessRunOutcome> {
-            child.owned_process_launch = Some(launch.clone());
-            child.set_dll_search_dirs(dll_search_dirs.to_vec());
-            child.set_initial_thread_id(launch.thread_id);
-            let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
-            child.load_pe_image_with_dlls(&image, &dll_images)?;
-            child_admitted = true;
-            let execution = if let Some(directory) = custody.as_deref_mut() {
-                child.run_until_import_trap_with_framebuffer_limits_report_with_custody(
-                    kernel,
-                    framebuffer,
-                    limits,
-                    directory,
-                )
-            } else {
-                child.run_until_import_trap_with_framebuffer_limits_report(
-                    kernel,
-                    framebuffer,
-                    limits,
-                )
-            };
-            if let Err(error) = execution.result {
-                if error.is_host_exit_recovery_required() {
-                    return Ok(ChildProcessRunOutcome::RecoveryRequired(error));
-                }
-                return Err(error);
-            }
-            let outcome = if child.completed_active_process_exit {
-                ChildProcessRunOutcome::Completed
-            } else {
-                classify_uncompleted_deferred_child(&child, kernel)
-            };
-            // Keep the CPU until the kernel accepts a checked completion. A
-            // rejected exit must remain owned even if the child stopped at an
-            // exit stub during this first slice.
-            Ok(outcome)
-        })();
-        let child_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
-
-        kernel.set_process_module_base(saved_base);
-        kernel.set_process_module_path(saved_path);
-        if let Some(saved_host_path) = saved_host_path {
-            kernel.set_process_module_host_path(saved_host_path);
-        }
-        kernel.set_process_command_line(saved_command_line);
-        kernel.set_process_current_directory(saved_current_directory);
-        kernel.set_process_show_cmd(saved_show_cmd);
-        kernel.set_current_process_state(saved_process_state);
-
-        let outcome = match child_result {
-            Ok(outcome) => {
-                if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                    directory
-                        .cancel_reservation(key, launch_birth)
-                        .map_err(|cancel| {
-                            Error::Backend(format!("cancel runnable child CPU custody: {cancel}"))
-                        })?;
-                }
-                outcome
-            }
-            Err(err) => {
-                if child_admitted {
-                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                        // This exact reservation was created above, and
-                        // recursive child launches use different births.
-                        // A failure is a broken internal invariant. Report
-                        // terminal ownership loss explicitly instead of
-                        // panicking or claiming a recoverable child stop.
-                        if let Err((failure, original_cpu)) =
-                            directory.quarantine_reserved(key, launch_birth, child)
-                        {
-                            drop(original_cpu);
-                            kernel.restore_pending_process_launches(launches.into());
-                            return Err(Error::Backend(format!(
-                                "reserved child CPU custody transfer refused: {failure}; terminal CPU ownership loss"
-                            )));
-                        }
-                        *quarantined_child_fault = true;
-                    }
-                } else if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                    if let Err(cancel) = directory.cancel_reservation(key, launch_birth) {
-                        return Err(restore_pre_cpu_launch_error(
-                            kernel,
-                            &mut launches,
-                            Some(launch),
-                            Error::Backend(format!(
-                                "cancel unadmitted child CPU custody reservation: {cancel}"
-                            )),
-                        ));
-                    }
+            if let Some(requested_code) = kernel
+                .handles
+                .process_termination_requested_exit_code_by_birth(launch_birth)
+            {
+                // A request may arrive after CreateProcess published the launch
+                // but before the first child instruction. Do not resolve/load or
+                // reset its exit state: its original birth is sufficient for the
+                // checked zero-slice completion.
+                let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
+                    &launch,
+                    requested_code,
+                    Some(&mut *framebuffer),
+                ) {
+                    Ok(completed) => completed,
+                    Err(error) => return Err(error),
+                };
+                if !completed {
+                    return Err(Error::Backend(format!(
+                        "pending child launch pid {} rejected requested completion",
+                        launch.process_id
+                    )));
                 }
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessTerminationCompleted",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: None,
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: Some(requested_code),
+                    error: None,
+                    detail: Some("before_first_child_slice".to_owned()),
+                });
+                let claim = active_claim.ok_or_else(|| {
+                    Error::Backend("requested child completion lost its pending claim".to_owned())
+                })?;
+                kernel.consume_pending_process_launch_claim(claim)?;
+                active_claim = None;
+                continue;
+            }
+            let resolved = match resolve_process_launch_path(kernel, &launch) {
+                Ok(resolved) => resolved,
+                Err(error) => return Err(error),
+            };
+            let Some(path) = resolved else {
+                let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
+                    &launch,
+                    u32::MAX,
+                    Some(&mut *framebuffer),
+                ) {
+                    Ok(completed) => completed,
+                    Err(error) => return Err(error),
+                };
+                if !completed {
+                    return Err(Error::Backend(format!(
+                        "pending child launch pid {} rejected path-resolution completion",
+                        launch.process_id
+                    )));
+                }
+                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessResolveFailed",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: None,
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: Some(0),
+                    error: Some("path not found".to_owned()),
+                    detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
+                });
+                let claim = active_claim.ok_or_else(|| {
+                    Error::Backend("path-failed child completion lost its pending claim".to_owned())
+                })?;
+                kernel.consume_pending_process_launch_claim(claim)?;
+                active_claim = None;
+                continue;
+            };
+            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                op: "CreateProcessResolved",
+                application: launch.application.clone(),
+                command_line: launch.command_line.clone(),
+                path: Some(path.display().to_string()),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_id: Some(launch.process_id),
+                thread_id: Some(launch.thread_id),
+                result: Some(1),
+                error: None,
+                detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
+            });
+            let image = match PeImage::inspect(&path) {
+                Ok(image) => image,
+                Err(error) => return Err(error),
+            };
+            // Hold a no-allocation terminal slot before the original child CPU
+            // exists. A loader/setup error cancels it and retries the launch;
+            // once the CPU is admitted, a native error cannot drop that owner.
+            let custody_key = if let Some(directory) = custody.as_deref_mut() {
+                match directory.reserve(launch_birth) {
+                    Ok(key) => Some(key),
+                    Err(error) => {
+                        return Err(Error::Backend(format!(
+                            "reserve child CPU custody: {error}"
+                        )));
+                    }
+                }
+            } else {
+                None
+            };
+            let mut child = match UnicornMips::new() {
+                Ok(child) => child,
+                Err(error) => {
+                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                        directory
+                            .cancel_reservation(key, launch_birth)
+                            .map_err(|cancel| {
+                                Error::Backend(format!(
+                                    "cancel unbuilt child CPU custody: {cancel}"
+                                ))
+                            })?;
+                    }
+                    return Err(error);
+                }
+            };
+            let saved_base = kernel.process_module_base();
+            let saved_path = kernel.process_module_path().to_owned();
+            let saved_host_path = kernel.process_module_host_path().cloned();
+            let saved_command_line = kernel.process_command_line().to_owned();
+            let saved_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
+            let saved_show_cmd = kernel.process_show_cmd();
+            let saved_process_state = kernel.current_process_state();
+
+            kernel.set_process_module_base(image.image_base());
+            let child_module_path = kernel
+                .host_path_to_guest_mount(&path)
+                .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
+            kernel.set_process_module_path(child_module_path.clone());
+            kernel.set_process_module_host_path(path.clone());
+            kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+            kernel.set_process_current_directory(
+                launch
+                    .current_directory
+                    .clone()
+                    .or(saved_current_directory.clone()),
+            );
+            kernel
+                .set_process_show_cmd(launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL));
+            kernel.set_current_process_id(launch.process_id);
+            kernel.reset_current_process_exit_state();
+
+            let mut child_admitted = false;
+            let child_result = (|| -> Result<ChildProcessRunOutcome> {
+                child.owned_process_launch = Some(launch.clone());
+                child.set_dll_search_dirs(dll_search_dirs.to_vec());
+                child.set_initial_thread_id(launch.thread_id);
+                let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
+                child.load_pe_image_with_dlls(&image, &dll_images)?;
+                // CPU admission ends the retryable pending-launch lifetime. The
+                // child now owns its exact launch descriptor; an execution error
+                // must quarantine that CPU, never publish this launch again.
+                let claim = active_claim.ok_or_else(|| {
+                    Error::Backend("child CPU admission lost its pending claim".to_owned())
+                })?;
+                kernel.consume_pending_process_launch_claim(claim)?;
+                active_claim = None;
+                child_admitted = true;
+                let execution = if let Some(directory) = custody.as_deref_mut() {
+                    child.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                        kernel,
+                        framebuffer,
+                        limits,
+                        directory,
+                    )
+                } else {
+                    child.run_until_import_trap_with_framebuffer_limits_report(
+                        kernel,
+                        framebuffer,
+                        limits,
+                    )
+                };
+                if let Err(error) = execution.result {
+                    if error.is_host_exit_recovery_required() {
+                        return Ok(ChildProcessRunOutcome::RecoveryRequired(error));
+                    }
+                    return Err(error);
+                }
+                let outcome = if child.completed_active_process_exit {
+                    ChildProcessRunOutcome::Completed
+                } else {
+                    classify_uncompleted_deferred_child(&child, kernel)
+                };
+                // Keep the CPU until the kernel accepts a checked completion. A
+                // rejected exit must remain owned even if the child stopped at an
+                // exit stub during this first slice.
+                Ok(outcome)
+            })();
+            let child_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
+
+            kernel.set_process_module_base(saved_base);
+            kernel.set_process_module_path(saved_path);
+            if let Some(saved_host_path) = saved_host_path {
+                kernel.set_process_module_host_path(saved_host_path);
+            }
+            kernel.set_process_command_line(saved_command_line);
+            kernel.set_process_current_directory(saved_current_directory);
+            kernel.set_process_show_cmd(saved_show_cmd);
+            kernel.set_current_process_state(saved_process_state);
+
+            let outcome = match child_result {
+                Ok(outcome) => {
+                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                        directory
+                            .cancel_reservation(key, launch_birth)
+                            .map_err(|cancel| {
+                                Error::Backend(format!(
+                                    "cancel runnable child CPU custody: {cancel}"
+                                ))
+                            })?;
+                    }
+                    outcome
+                }
+                Err(err) => {
+                    if child_admitted {
+                        if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key)
+                        {
+                            // This exact reservation was created above, and
+                            // recursive child launches use different births.
+                            // A failure is a broken internal invariant. Report
+                            // terminal ownership loss explicitly instead of
+                            // panicking or claiming a recoverable child stop.
+                            if let Err((failure, original_cpu)) =
+                                directory.quarantine_reserved(key, launch_birth, child)
+                            {
+                                drop(original_cpu);
+                                return Err(Error::Backend(format!(
+                                    "reserved child CPU custody transfer refused: {failure}; terminal CPU ownership loss"
+                                )));
+                            }
+                            *quarantined_child_fault = true;
+                        }
+                    } else if let (Some(directory), Some(key)) =
+                        (custody.as_deref_mut(), custody_key)
+                    {
+                        if let Err(cancel) = directory.cancel_reservation(key, launch_birth) {
+                            return Err(Error::Backend(format!(
+                                "cancel unadmitted child CPU custody reservation: {cancel}"
+                            )));
+                        }
+                    }
+                    kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildError",
                     application: launch.application.clone(),
                     command_line: launch.command_line.clone(),
@@ -20936,74 +20906,100 @@ fn run_pending_process_launches_with_custody<D>(
                         launch.show_cmd
                     )),
                 });
-                if !child_admitted {
-                    return Err(restore_pre_cpu_launch_error(
-                        kernel,
-                        &mut launches,
-                        Some(launch),
-                        err,
-                    ));
+                    if !child_admitted {
+                        return Err(err);
+                    }
+                    // The child has crossed its CPU admission boundary. Never
+                    // replay this CreateProcess launch; only unattempted tail
+                    // launches remain pending. The original CPU is quarantined
+                    // in production, while legacy direct fixtures have no
+                    // machine directory and retain their historical behavior.
+                    return Err(err);
                 }
-                // The child has crossed its CPU admission boundary. Never
-                // replay this CreateProcess launch; only unattempted tail
-                // launches remain pending. The original CPU is quarantined
-                // in production, while legacy direct fixtures have no
-                // machine directory and retain their historical behavior.
-                kernel.restore_pending_process_launches(launches.into());
-                return Err(err);
-            }
-        };
-        let mut completion_recovery_error = None;
-        let completion_rejected = match outcome {
-            ChildProcessRunOutcome::Completed => {
-                // The child itself finished the request after its native
-                // lease closed. Preserve any descendant CPUs it had parked;
-                // the completed child's engine is already sealed.
-                if !child.parked_child_processes.is_empty() {
-                    // Exit and window restoration already committed inside the
-                    // child lease. A publication failure here is terminal for
-                    // its descendants, not a recoverable stopped-exit refusal.
-                    let mut parent_queue = match parked_child_processes.try_borrow_mut() {
-                        Ok(queue) => queue,
-                        Err(_) => {
-                            kernel.restore_pending_process_launches(launches.into());
-                            return Err(Error::Backend(
+            };
+            let mut completion_recovery_error = None;
+            let completion_rejected = match outcome {
+                ChildProcessRunOutcome::Completed => {
+                    // The child itself finished the request after its native
+                    // lease closed. Preserve any descendant CPUs it had parked;
+                    // the completed child's engine is already sealed.
+                    if !child.parked_child_processes.is_empty() {
+                        // Exit and window restoration already committed inside the
+                        // child lease. A publication failure here is terminal for
+                        // its descendants, not a recoverable stopped-exit refusal.
+                        let mut parent_queue = match parked_child_processes.try_borrow_mut() {
+                            Ok(queue) => queue,
+                            Err(_) => {
+                                return Err(Error::Backend(
                                 "completed child descendant CPU queue borrow conflict after committed exit; terminal descendant CPU ownership loss".to_owned(),
                             ));
-                        }
-                    };
-                    if parent_queue
-                        .try_reserve(child.parked_child_processes.len())
-                        .is_err()
-                    {
-                        kernel.restore_pending_process_launches(launches.into());
-                        return Err(Error::Backend(
+                            }
+                        };
+                        if parent_queue
+                            .try_reserve(child.parked_child_processes.len())
+                            .is_err()
+                        {
+                            return Err(Error::Backend(
                             "completed child descendant CPU queue reservation failed after committed exit; terminal descendant CPU ownership loss".to_owned(),
                         ));
+                        }
+                        parent_queue.append(&mut child.parked_child_processes);
                     }
-                    parent_queue.append(&mut child.parked_child_processes);
+                    continue;
                 }
-                continue;
-            }
-            ChildProcessRunOutcome::Exited(exit_code) => {
-                let completed = match complete_first_slice_child_exit(
-                    &mut child,
-                    &launch,
-                    launch_birth,
-                    kernel,
-                    framebuffer,
-                    exit_code,
-                    parked_child_processes,
-                ) {
-                    Ok(completed) => completed,
-                    Err(error) => {
-                        completion_recovery_error = Some(error);
-                        false
+                ChildProcessRunOutcome::Exited(exit_code) => {
+                    let completed = match complete_first_slice_child_exit(
+                        &mut child,
+                        &launch,
+                        launch_birth,
+                        kernel,
+                        framebuffer,
+                        exit_code,
+                        parked_child_processes,
+                    ) {
+                        Ok(completed) => completed,
+                        Err(error) => {
+                            completion_recovery_error = Some(error);
+                            false
+                        }
+                    };
+                    if completed {
+                        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                            op: "CreateProcessChildReturned",
+                            application: launch.application.clone(),
+                            command_line: launch.command_line.clone(),
+                            path: Some(path.display().to_string()),
+                            process_handle: Some(launch.process_handle),
+                            thread_handle: Some(launch.thread_handle),
+                            process_id: Some(launch.process_id),
+                            thread_id: Some(launch.thread_id),
+                            result: Some(exit_code),
+                            error: None,
+                            detail: Some(format!(
+                                "initial_child_exit show_cmd={:?}",
+                                launch.show_cmd
+                            )),
+                        });
+                        continue;
                     }
-                };
-                if completed {
+                    tracing::warn!(
+                        target: "ce.scheduler",
+                        process_id = launch.process_id,
+                        thread_id = launch.thread_id,
+                        "initial child completion was rejected; parking its CPU"
+                    );
+                    true
+                }
+                ChildProcessRunOutcome::Parked => false,
+                ChildProcessRunOutcome::RecoveryRequired(error) => {
+                    completion_recovery_error = Some(error);
+                    true
+                }
+            };
+            if !completion_rejected {
+                if let Some(exit_code) = child_launch_handle_exit_code(kernel, &launch) {
                     kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                        op: "CreateProcessChildReturned",
+                        op: "CreateProcessChildParkSkipped",
                         application: launch.application.clone(),
                         command_line: launch.command_line.clone(),
                         path: Some(path.display().to_string()),
@@ -21013,72 +21009,39 @@ fn run_pending_process_launches_with_custody<D>(
                         thread_id: Some(launch.thread_id),
                         result: Some(exit_code),
                         error: None,
-                        detail: Some(format!("initial_child_exit show_cmd={:?}", launch.show_cmd)),
+                        detail: Some(format!(
+                            "already_exited show_cmd={:?} child_current_dir={:?}",
+                            launch.show_cmd, child_current_directory
+                        )),
                     });
                     continue;
                 }
-                tracing::warn!(
-                    target: "ce.scheduler",
-                    process_id = launch.process_id,
-                    thread_id = launch.thread_id,
-                    "initial child completion was rejected; parking its CPU"
-                );
-                true
             }
-            ChildProcessRunOutcome::Parked => false,
-            ChildProcessRunOutcome::RecoveryRequired(error) => {
-                completion_recovery_error = Some(error);
-                true
+            let parked = ParkedProcess {
+                application: launch.application.clone(),
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_state: crate::ce::kernel::CurrentProcessState {
+                    process_id: launch.process_id,
+                    exit_code: crate::ce::kernel::STILL_ACTIVE,
+                    signaled: false,
+                },
+                thread_id: launch.thread_id,
+                cpu: Box::new(child),
+                blocked_send_id: None,
+                module_base: image.image_base(),
+                module_path: child_module_path.clone(),
+                module_host_path: path.clone(),
+                command_line: launch.command_line.clone().unwrap_or_default(),
+                current_directory: child_current_directory.clone(),
+            };
+            if let Err(error) = try_publish_parked_child(parked_child_processes, parked) {
+                return Err(error);
             }
-        };
-        if !completion_rejected {
-            if let Some(exit_code) = child_launch_handle_exit_code(kernel, &launch) {
-                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                    op: "CreateProcessChildParkSkipped",
-                    application: launch.application.clone(),
-                    command_line: launch.command_line.clone(),
-                    path: Some(path.display().to_string()),
-                    process_handle: Some(launch.process_handle),
-                    thread_handle: Some(launch.thread_handle),
-                    process_id: Some(launch.process_id),
-                    thread_id: Some(launch.thread_id),
-                    result: Some(exit_code),
-                    error: None,
-                    detail: Some(format!(
-                        "already_exited show_cmd={:?} child_current_dir={:?}",
-                        launch.show_cmd, child_current_directory
-                    )),
-                });
-                continue;
+            if let Some(error) = completion_recovery_error {
+                return Err(error);
             }
-        }
-        let parked = ParkedProcess {
-            application: launch.application.clone(),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_state: crate::ce::kernel::CurrentProcessState {
-                process_id: launch.process_id,
-                exit_code: crate::ce::kernel::STILL_ACTIVE,
-                signaled: false,
-            },
-            thread_id: launch.thread_id,
-            cpu: Box::new(child),
-            blocked_send_id: None,
-            module_base: image.image_base(),
-            module_path: child_module_path.clone(),
-            module_host_path: path.clone(),
-            command_line: launch.command_line.clone().unwrap_or_default(),
-            current_directory: child_current_directory.clone(),
-        };
-        if let Err(error) = try_publish_parked_child(parked_child_processes, parked) {
-            kernel.restore_pending_process_launches(launches.into());
-            return Err(error);
-        }
-        if let Some(error) = completion_recovery_error {
-            kernel.restore_pending_process_launches(launches.into());
-            return Err(error);
-        }
-        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
             op: "CreateProcessChildParked",
             application: launch.application.clone(),
             command_line: launch.command_line.clone(),
@@ -21094,8 +21057,24 @@ fn run_pending_process_launches_with_custody<D>(
                 launch.show_cmd, child_current_directory
             )),
         });
+        }
+        Ok(())
+    })();
+    // No mutable queue borrow or owner vector spans the child run. Resolve
+    // every still-active pre-CPU claim and release the untouched batch even
+    // when an inner `?` exits through a custody-cancellation error.
+    let claim_release = if let Some(claim) = active_claim.take() {
+        kernel.release_pending_process_launch_claim(claim)
+    } else {
+        Ok(())
+    };
+    let batch_release = kernel.release_pending_process_launch_batch(batch);
+    match (claim_release, batch_release) {
+        (Ok(()), Ok(())) => result,
+        (claim, batch) => Err(Error::Backend(format!(
+            "pending launch claim/batch cleanup failed after {result:?}: claim={claim:?}; batch={batch:?}"
+        ))),
     }
-    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -78980,6 +78959,100 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn pending_launch_batch_keeps_unattempted_siblings_visible_at_claim() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        for name in ["event.exe", "child.exe", "later.exe"] {
+            std::fs::write(test_root.join(name), tiny_mips_spinner_pe()).unwrap();
+        }
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let event = kernel.queue_process_launch(Some("event.exe".to_owned()), None);
+        let child = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let later = kernel.queue_process_launch(Some("later.exe".to_owned()), None);
+        let event_birth = event.process_birth.expect("event birth");
+        let child_birth = child.process_birth.expect("child birth");
+        let later_birth = later.process_birth.expect("later birth");
+        let observed_event = std::cell::Cell::new(false);
+        let observed_child = std::cell::Cell::new(false);
+        let observer =
+            |kernel: &CeKernel, claimed: &crate::ce::kernel::PendingProcessLaunch| match claimed
+                .process_birth
+            {
+                Some(birth) if birth == event_birth => {
+                    observed_event.set(true);
+                    assert_eq!(
+                        kernel.pending_process_launch_for_birth(event_birth),
+                        Some(&event)
+                    );
+                    assert_eq!(
+                        kernel.pending_process_launch_for_birth(child_birth),
+                        Some(&child)
+                    );
+                    assert_eq!(
+                        kernel.pending_process_launch_for_birth(later_birth),
+                        Some(&later)
+                    );
+                    assert!(
+                        kernel.has_pending_process_launches(),
+                        "B and C must remain Kernel-visible while E is claimed"
+                    );
+                    assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+                    assert!(kernel.handles.process_execution_live_by_birth(later_birth));
+                }
+                Some(birth) if birth == child_birth => {
+                    observed_child.set(true);
+                    assert_eq!(
+                        kernel.pending_process_launch_for_birth(child_birth),
+                        Some(&child)
+                    );
+                    assert_eq!(
+                        kernel.pending_process_launch_for_birth(later_birth),
+                        Some(&later)
+                    );
+                    assert!(
+                        kernel.has_pending_process_launches(),
+                        "C must remain Kernel-visible while B is claimed"
+                    );
+                    assert!(kernel.handles.process_execution_live_by_birth(later_birth));
+                }
+                _ => {}
+            };
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut quarantined_child_fault = false;
+        super::run_pending_process_launches_with_custody(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+            None,
+            &mut quarantined_child_fault,
+            Some(&observer),
+        )?;
+        assert!(observed_event.get() && observed_child.get());
+        assert!(!quarantined_child_fault);
+        Ok(())
+    }
+
+    #[test]
     fn requested_pending_child_framebuffer_mismatch_requeues_same_birth_before_first_slice()
     -> crate::Result<()> {
         let mut kernel = phase1_kernel("d011-pending-parent.exe")?;
@@ -87095,6 +87168,7 @@ mod unicorn_tests {
             &parked,
             Some(&mut custody),
             &mut quarantined_child_fault,
+            None,
         )
         .expect_err("nested native entry must refuse B before its first slice");
         drop(outer_native_entry);
