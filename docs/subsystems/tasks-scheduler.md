@@ -839,7 +839,7 @@ each passed **5/0**; same-source [broad release a03](../../evidence/stage3-selec
 passed 19 blocks **2,189/0/10 ignored**; broad no-default a04 passed 19
 blocks **1,548/0/2 ignored**, and a05–a07 feature checks exited 0
 ([receipt](../../evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
-The focused pre-admission candidate below consumes this stamp before queue
+The bounded pre-admission cut below consumes this stamp before queue
 drain, but the stamp is not a post-B restoration token and does not bind a
 cloned Kernel to machine/checkpoint lineage. The candidate checks the live
 owner/caller separately; the stamp itself does not prove execution-live
@@ -847,7 +847,7 @@ ownership. Direct mutation through public backing objects is not fully
 stamped. The connected whole-attempt port, exact parent selection
 restoration, leaf authority and exit event fence above remain open.
 
-##### Deferred-launch selected-context pre-admission (focused candidate)
+##### Deferred-launch selected-context pre-admission (bounded source/test gate)
 
 Immediately before A's native `emu_start`, the current source captures its
 selected-context stamp. If A stages deferred `CreateProcessW`, the post-native
@@ -855,17 +855,28 @@ tail checks that stamp against the selected exact parent birth, verifies the
 stopped caller remains execution-live under that birth, and requires a
 nonzero staged return PC. A mismatch returns typed `Backend` before the
 existing aggregate pending-launch queue is drained or a child CPU is
-constructed. It is a stopped failure requiring A recovery, not a rollback or
-an ordinary A resume. A test-only real-MIPS A `CreateProcessW` plus a
-preexisting raw `CeEventHasOccurred` launch is red-to-green on a same-birth
+constructed. In the tested canonical/private A path, the stopped refusal
+poisons its saved continuation and requires recovery rather than rollback or
+resume; aliasless synthetic nonprivate attempts do not establish that poison
+or an exact `failure_operation` record. A test-only real-MIPS
+control makes A call `CreateProcessW` after a preexisting raw
+`CeEventHasOccurred` launch; it is red-to-green on a same-birth
 selected metadata rewrite: both original births remain queued in FIFO order,
 live and unresolved. An unchanged-context mixed control confirms the current
 aggregate drain still admits both in FIFO order; it does not attribute them
-to the `CreateProcessW` caller. Existing non-live and both-mode controls also
-pass focused tests. Broad validation remains pending. An exact-birth pending
-claim and fair trigger must later change that mixed control deliberately;
-this preflight does not supply the claim, a post-B restoration token,
-`ParentSuspension`, a connected port, Step 2/Stage 3 acceptance or live proof.
+to the `CreateProcessW` caller. Existing non-live, both-mode and final
+parent-resume controls also pass. The final `unicorn.rs` SHA-256 is
+`ED2A2AB693735794DB86DCC97E672DCB16AB5071C13EA0010D0A877E8393E2B8`.
+The [sealed receipt](../../evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
+records a13 focused `deferred_` **17/0**, a14 no-default 19 blocks
+**1,548/0/2 ignored**, a15 release-feature 19 blocks **2,192/0/9 ignored**,
+a16 parent-resume **1/0**, and a17–a19 feature checks exiting 0. Source
+hashes remained stable despite backup-only HEAD movement during a15. Raw
+`CreateProcessW` queues B before the post-native caller-birth verification;
+there is no independent event/shell trigger. An exact-birth pending claim and
+fair trigger must later change the mixed control deliberately. This cut does
+not supply that claim, a post-B restoration token, `ParentSuspension`, a
+connected port, Step 2/Stage 3 acceptance or live proof.
 
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
 acceptance:
@@ -896,7 +907,7 @@ acceptance:
 
 A pre-CPU exact-birth claim/return cut in Kernel's existing pending-launch
 queue can be independently correct before this port, and its retry/tail-order
-controls should precede nested execution. The focused pre-admission check
+controls should precede nested execution. The bounded pre-admission check
 above does not provide that claim: its unchanged-context mixed control still
 drains older event and new `CreateProcessW` launches together. A fair trigger
 must retain older work without silently admitting it as A's child. A

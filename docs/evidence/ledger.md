@@ -2599,7 +2599,7 @@ restoration token. The parked red remains evidence to preserve; its ignored
 fixture is no longer active in current source. Runnable/parked custody stays
 open.
 
-## Deferred-launch selected-context pre-admission (2026-10-17, focused candidate)
+## Deferred-launch selected-context pre-admission (2026-10-17, bounded source/test gate)
 
 Source captures A's selected-context stamp before native `emu_start`. The
 post-native deferred-launch preflight checks the same selected process birth
@@ -2609,16 +2609,42 @@ real-MIPS A executes `CreateProcessW` after an older raw
 `CeEventHasOccurred` launch was queued. A same-birth selected metadata rewrite
 between native stop and the tail changed the stamp: the focused red-to-green
 control now receives typed `Backend` before either queued birth is drained or
-resolved; both stay live in original FIFO order. This is a stopped refusal
-requiring A recovery, not a rollback or ordinary resume. The unchanged-
-context mixed control confirms that the existing aggregate drain admits both
+resolved; both stay live in original FIFO order. In the tested
+canonical/private A path, this stopped refusal poisons its saved continuation
+and requires recovery rather than rollback or resume; aliasless synthetic
+nonprivate attempts do not establish that poison or an exact
+`failure_operation` record. The unchanged-context mixed control confirms
+that the existing aggregate drain admits both
 launches in order; it does not attribute either to the current caller.
-Existing non-live and both-mode deferred-launch controls passed focused tests.
-Broad validation is pending. This is not an exact-birth pending claim, a
-connected `MachineKernelPort` or post-B restoration token, Step 2/Stage 3
-acceptance or live iNavi evidence. No app or writable mount was run. The next
-queue gate needs an exact-birth claim/return and a fair trigger, intentionally
-changing that mixed control. Separately, source review found that the raw
+Existing non-live, both-mode and final parent-resume controls passed.
+Final-source `unicorn.rs` SHA-256 was
+`ED2A2AB693735794DB86DCC97E672DCB16AB5071C13EA0010D0A877E8393E2B8`.
+The [validation receipt](../../evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
+ties a13 focused `deferred_` **17/0**
+([log](../../evidence/stage3-deferred-context-preflight-20261017/a13-focused-final.raw.log),
+SHA-256 `BA47EF75A6BDBEBBDEBEA525B6FA5ABDE2B1AF90D4439316C52E9A7ABEE05626`),
+a14 no-default 19 blocks **1,548/0/2 ignored**
+([log](../../evidence/stage3-deferred-context-preflight-20261017/a14-broad-no-default.raw.log),
+SHA-256 `652C9B226AD637FF69532955EA7172A7C344459525D337679D95DF02DDD2C072`),
+a15 release-feature 19 blocks **2,192/0/9 ignored**
+([log](../../evidence/stage3-deferred-context-preflight-20261017/a15-broad-release.raw.log),
+SHA-256 `09A2F12323C28EB445249C21768C745EA4FA77BB3CB5ADD18B773400741914D8`),
+and a16 parent-resume **1/0**
+([log](../../evidence/stage3-deferred-context-preflight-20261017/a16-parent-resume-final.raw.log),
+SHA-256 `75F5EF2FE323CD6015C1792DE07E271EB6677E8B4F1FDB280FF1A00E3A89FE50`).
+Feature checks [a17 unicorn](../../evidence/stage3-deferred-context-preflight-20261017/a17-check-unicorn-final.raw.log),
+[a18 unicorn+desktop](../../evidence/stage3-deferred-context-preflight-20261017/a18-check-unicorn-desktop-final.raw.log)
+and [a19 normal](../../evidence/stage3-deferred-context-preflight-20261017/a19-check-normal-final.raw.log)
+all exited 0. All stamped source hashes matched before/after; a15 HEAD
+moved from `a8ec2928` to `5c405df6` through backup-only commits.
+
+Raw `CreateProcessW` queues B before the post-native caller-birth check.
+No independent event/shell launch trigger exists in this gate. It is not an
+exact-birth pending claim, a connected `MachineKernelPort` or post-B
+restoration token, Step 2/Stage 3 acceptance or live iNavi evidence. No app
+or writable mount was run. The next queue gate needs an exact-birth
+claim/return and a fair trigger, intentionally changing that mixed control.
+Separately, source review found that the raw
 `CreateProcessW` shim queues before four fallible `PROCESS_INFORMATION`
 writes; a failed write can return `FALSE` with a queued live child. No
 failing-write execution control is claimed yet.
