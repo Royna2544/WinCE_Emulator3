@@ -45,15 +45,18 @@ retained. An earlier live checkpoint cannot clear this hold today: repair the
 cause, quit and restart. These source-tested boundaries do not establish
 whole-exit atomicity after preflight or live-app recovery.
 
-### Candidate callback-scoped machine-state port (not implemented)
+### Callback-scoped machine-state port (bounded foundation; full lease open)
 
 The [anchor](../ARCHITECTURE.md) A1/A3 requires one executable leaf permit and
 no mutable Kernel, Task/frame, custody-directory or framebuffer loan across a
-nested child run. The [Task/custody plan](tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists)
-inventories the current raw-pointer hook families. Runtime composition must
-provide one checked machine-state port to those consumers, not an additional
-Kernel copy or another scheduler. `MachineKernelPort` and its operations below
-are candidate responsibilities, not Rust APIs that already exist.
+nested child run. The [Task/custody plan](tasks-scheduler.md#o-t7-slot-and-lease-contract-partial-foundation-connected-cuts-open)
+inventories the hook families. The bounded `MachineKernelPort` source cut
+already removes the named raw Kernel/framebuffer hook aliases and uses
+fallible short loans across the reviewed production path. Its process-scoped
+attempt check is not an independently directory-issued exact execution leaf.
+Runtime composition still needs one checked machine-state port for all
+remaining consumers, not an additional Kernel copy or another scheduler.
+The following full-leaf and restoration responsibilities remain targets.
 
 - A hook presents its exact active-leaf permit, Task/frame and attempt to a
   fallible, callback-scoped Kernel or framebuffer operation. The operation
@@ -73,13 +76,47 @@ are candidate responsibilities, not Rust APIs that already exist.
   the stopped owner; failure after irreversible effects retains non-runnable
   custody and reports partial effects, not a successful exit or rollback.
 
-The current `run_with_unicorn_attempt` still holds `&mut CeKernel` and a
-framebuffer reference across `emu_start` while hooks use raw pointers; the
-post-native pending-launch helper also holds a mutable Kernel reference across
-the child run. An independent memory-fault first-touch witness reaches that
-hook, but does not validate the proposed port. Design and source-gate each
-hook family, parent/child handoff and reentry/error case before claiming a
-sound machine-owned execution lease.
+The outer `run_with_unicorn_attempt` still receives Kernel/framebuffer
+references, but the reviewed native and post-native path passes them through
+the connected port; its named raw aliases have been removed. That bounded
+gate does not connect boot to directory-owned runnable CPU slots or issue a
+full leaf permit. Reentry/error cases and remaining consumers still need
+their own evidence before claiming a sound machine-owned execution lease.
+
+### O-T7a post-native host-turn protocol (candidate; not connected)
+
+The host, not an active `UnicornMips` wrapper, must commit the next runnable
+owner. One typed host-turn request covers ordinary execution, neutral Event
+service and monitor entry; pre/post rotation may retain today's policy but
+must submit selection through the same directory gate. A request freezes its
+producer's exact process birth, slot key/generation and attempt, native stop
+report and staged return PC. A deferred `CreateProcessW` request additionally
+carries the attempt-local publication/Kernel claim and checked parent
+selection witness. Neutral Event is not a synthetic CreateProcess child: it
+has its own reason and checked previous-selection restoration token.
+
+On native return, A's callback and `emu_start` have ended, but A's native
+owner and post-child view-sync/finish tail may remain. Before B enters, seal
+that tail as an A-owned suspended continuation and revoke A's executable
+process permit. A's slot may retain a scoped payload loan to pin native
+resources; no Kernel, framebuffer, queue, Task/frame or custody-topology loan
+may span B. The host reserves/constructs/admits B into its exact-birth slot
+before its first guest instruction, issues B's distinct process permit and
+classifies its stop back into custody. A witnessed B→C repeats this sequence;
+a C-root/B-parked return creates distinct C/B locators from each original
+CPU, not from the launch label or selected PID. Only then does A's exact tail
+resume for view sync/native close and checked selected-context restoration.
+Reissue A only after that tail and every child classification pass. This is
+a process-scoped Cut 1 protocol; Cut 2 adds intra-slice thread/frame leaves.
+
+Pre-CPU setup failure returns the exact claim for same-birth retry. A stale
+claim or selection, failed admission, exited parent, native child fault,
+reentry conflict or post-effect exit failure reports a typed terminal or
+partial-effects outcome with every admitted CPU still reachable and
+non-runnable; no fallback may execute an unported route. The connected gate
+requires boot and ordinary/Event/monitor route tests, pre/post rotation,
+A→B and witnessed A→B→C later slices, process/slot/attempt mismatch refusals,
+and from-boot checkpoint refusal. A separate exact thread/frame gate follows.
 
 ## Failure, lifetime and observation
 

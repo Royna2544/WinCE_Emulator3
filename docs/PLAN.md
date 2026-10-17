@@ -218,8 +218,9 @@ staging order remains callback-scoped Kernel/framebuffer port (step 2) before
 the full custody/leaf-permit migration (step 3); a non-runnable Cut 3a
 quarantine is the bounded exception.
 
-O-T7 is now a [reviewable candidate contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists),
-not an implemented owner. Stage its connected source cut in this order:
+O-T7 is now a [reviewable candidate contract](subsystems/tasks-scheduler.md#o-t7-slot-and-lease-contract-partial-foundation-connected-cuts-open),
+with bounded directory/port pieces but no connected production owner. Stage
+its source cut in this order:
 
 1. Add focused pre-CPU pending-claim/return, same-process multi-slot,
    stale-generation/PID-reuse and live-custody checkpoint-refusal controls.
@@ -509,6 +510,24 @@ not an implemented owner. Stage its connected source cut in this order:
    `CreateProcessW` has no nested in-callback guest entry; any future such
    route requires a separate source/test gate. `Completed` and other
    unported paths must refuse before effects until migrated.
+   First source-gate a typed post-native host-turn request from A's stopped
+   attempt. It must freeze A's exact process/slot/attempt, native result and
+   staged nonzero return PC, plus the one eligible launch-publication claim.
+   Keep A's still-needed native owner/view-sync tail pinned as a suspended
+   continuation in A's slot, with no mutable machine-state or queue loan
+   across child execution. The shared host selector revokes A's process
+   permit, admits B (and any witnessed C) before guest entry, issues each
+   distinct permit, and classifies each original CPU into its own slot before
+   resuming A's exact tail for required sync/close. Neutral Event has no
+   fabricated CreateProcess parent; it uses the same selector with a checked
+   prior-selection restoration rule. A returned C-root/B-parked tree must
+   yield separate C/B locators, not a guessed B return identity. Stale
+   selection, failed admission, parent death, native fault and tail failure
+   must end with typed retained custody or exact pre-CPU claim return.
+   Red-to-green controls must cover ordinary and Event/monitor offers,
+   pre/post rotation, A→B and witnessed A→B→C later slices, wrong-lineage
+   bypasses, no ownerless interval and from-boot checkpoint refusal. No
+   current source path satisfies this connected host-turn gate.
    Keep existing scheduling policy pending Stage 5; do not add a parallel
    pending-owner vector or use a queue borrow as the resource owner.
 4. Make every exit/prune path preflight exact-birth survivors and reserve the

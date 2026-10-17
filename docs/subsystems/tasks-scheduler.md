@@ -525,11 +525,14 @@ refuses a second guest entry from A's live callback. Any future in-callback
 child route needs a separate source/test gate and must release mutable parent
 queue/frame and machine-state loans before B runs.
 
-##### Candidate O-T7 slot and lease contract (for review; no Rust API exists)
+##### O-T7 slot and lease contract (partial foundation; connected cuts open)
 
 The full proposed machine-owned directory would hold each runnable/parked CPU
-payload exactly once. Cut 3a implements only a `CpuCustody` holding directory
-for faulted non-runnable children, not this slot/lease contract. A proposed
+payload exactly once. The source now has bounded `CpuCustody` reservation,
+admission, payload-loan, leaf-issue, finish, parent-suspension and quarantine
+APIs plus a checked `MachineKernelPort`; they are preparatory and not wired
+to the production boot/selector/rotation route. Its Cut 3a production use
+still holds only faulted non-runnable children. A proposed
 `CpuSlotKey` contains machine/checkpoint lineage, a slot
 index and a checked generation; generation exhaustion fails closed rather than
 wrapping. Each slot freezes its `ProcessBirthKey` at admission and retains the
@@ -545,8 +548,11 @@ Here, canonical HandleTable Task/frame state and Scheduler-derived wait/ready
 indexes remain authoritative; a CPU slot or parked locator is not a Task.
 That plan splits authority by level: Cut 1 connects process-birth CPU custody,
 selection and directory-issued process/slot/attempt permits; Cut 2 adds
-intra-slice exact thread/frame leaf updates. Neither cut is implemented by
-this candidate text. Existing thread-birth guards are not a directory leaf.
+intra-slice exact thread/frame leaf updates. Neither connected cut is
+implemented by the partial API above. The current `CpuLeafPermit` includes a
+thread birth and optional frame; Cut 1 still needs an independently issued
+process-scoped permit instead of treating that existing leaf as proof of Cut 2.
+Existing thread-birth guards are not a directory-issued execution leaf.
 
 One implementable *candidate*, not a selected Rust API, is a private directory
 of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
@@ -663,6 +669,16 @@ directory and parent queue/frame borrows before the nested run, use fallible
 reentry checks rather than panicking `RefCell` borrows, and return every lease
 to custody on all typed errors. An exposed cloneable pointer to a slot would
 not itself confer execution authority.
+
+The [runtime-control host-turn protocol](runtime-control.md#o-t7a-post-native-host-turn-protocol-candidate-not-connected)
+owns the missing transition from A's stopped native attempt to B/C admission,
+classification and A's exact tail. A's `emu_start` has returned at the current
+handoff, but its native owner and required post-child view sync have not
+necessarily closed. A held payload loan can pin that sealed tail while the
+directory and machine-state loans are released; it cannot license A's guest
+execution while B runs. The legacy `activate_parked_process` self-swap and
+post-child boxed publication must be replaced or fenced together with all
+host selectors, not merely hidden behind a new slot type.
 
 The slot representation alone does **not** make child execution a sound
 whole-machine lease. At the pre-port proposal seal,

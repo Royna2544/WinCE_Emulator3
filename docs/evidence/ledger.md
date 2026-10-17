@@ -2928,6 +2928,26 @@ O-T7a Cut 1 or exact intra-slice thread/frame Cut 2: boot, normal, Event,
 monitor and rotation still lack one directory-owned CPU/selector route.
 No iNavi or writable-mount run was made.
 
+## O-T7a outcome-coupled custody review fix (2026-10-17, development-only)
+
+The [review-fix receipt](../../evidence/stage3-machine-directory-20261017/validation.review-fix.receipt.md)
+records a26–a28 focused controls. `CpuCustody::finish_attempt` uses the actual
+`AttemptExecution` result/report before accepting a requested runnable or
+parked end: errors, absent attempts and unverified exits quarantine the
+original slot, and a bad parked locator cannot strand it as leased. The
+bound reciprocal Send control refuses before queue/wait or CPU-state effects;
+finishing that refusal retains its error and quarantines the original CPU.
+The final-HEAD a35 debug rerun passed **2,258/0/9 ignored**, a34
+stable-HEAD release passed **2,257/0/9 ignored**, and a31 no-default passed
+**1,584/0/2 ignored**, each across 19 blocks with unchanged six-file source
+hashes. A32 Unicorn-only and a33 CI desktop checks exited 0. Earlier a29
+passed the same debug count at an older stable `HEAD`; a35 is the accepted
+final-HEAD debug result. A30 passed the same release count but `HEAD` changed
+during its run; a34 is the accepted release result. This is API/test groundwork,
+not connected production Cut 1,
+intra-slice Cut 2, host-turn selection, checked post-child re-boxing, or
+live-app acceptance. No iNavi or writable-mount run was made.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

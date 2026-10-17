@@ -161,7 +161,19 @@ without moving the only owner into an unprotected local variable. This is a
 target contract, not a description of the current parked queues.
 
 The current `CreateProcessW` child runs at a deferred post-native handoff:
-A's native attempt has closed and its staged return context remains held.
+A's `emu_start` and callback have returned, but its native owner and
+post-native sync/finish tail can still be open while its staged return context
+is held. The connected host-turn cut must represent that tail as an exact
+A-owned suspended continuation, not as an untyped local CPU or runnable A.
+It records A's process/slot/attempt and native stop evidence, the checked
+launch-publication claim, and staged nonzero return PC before asking the host
+selector to run B. If A's native owner must stay open for post-child view
+sync, it stays pinned to A's custody slot; no native callback, mutable
+directory/topology, Kernel, Task/frame, queue or framebuffer loan spans B.
+After B and any witnessed C are classified into their own slots, the host
+resumes A's exact tail, performs required sync/close, and only then considers
+reissuing A's execution permit. A stale claim, parent death, child fault or
+tail failure stops with typed retained custody, never an ownerless interval.
 Under the proposed Cut 1, A's executable process permit is revoked before B
 receives a separate one. A's per-slot payload loan may remain on the outer
 post-native call stack, but no
@@ -210,8 +222,10 @@ frame/version leaf to that same directory permit. Every intra-slice
 `set_verified` must obtain a checked, fallible leaf update before further
 guest execution, register effects or wait consumption; `set_unverified`
 revokes or blocks the leaf at the same boundary. Neither may derive authority
-from a mutable selected-thread cell. These staged contracts are targets, not
-current `CeKernel`/`CpuCustody` APIs or evidence that either cut passed.
+from a mutable selected-thread cell. The current `CpuCustody` and
+`MachineKernelPort` implement bounded pieces of this interface, but
+production boot/host-turn routing is not connected and neither Cut 1 nor
+Cut 2 has passed. The full staged contracts remain targets.
 
 Custody phase is not canonical Task or wait state. For a verified slot, an
 attempt ends its `Leased` phase as derived runnable/parked eligibility, typed
