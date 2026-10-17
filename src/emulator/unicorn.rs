@@ -84049,6 +84049,57 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn public_cpu_without_custody_preserves_guest_created_child_launch() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+        );
+        let error = attempt
+            .result
+            .expect_err("public no-custody call must refuse child CPU admission");
+        assert!(
+            matches!(&error, Error::Backend(message) if message.contains("requires machine custody")),
+            "public admission refusal: {error}"
+        );
+        assert_eq!(attempt.report.start_process_birth(), Some(parent_birth));
+        let pending = kernel.take_pending_process_launches();
+        assert_eq!(pending.len(), 1, "the exact child remains retryable");
+        let launch = &pending[0];
+        let child_birth = launch.process_birth.expect("original child birth");
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert!(cpu.parked_child_processes.is_empty());
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            matches!(
+                record.op,
+                "CreateProcessChildParked" | "CreateProcessChildReturned"
+            ) && record.process_id == Some(launch.process_id)
+        }));
+        Ok(())
+    }
+
+    #[test]
     fn non_live_create_process_defers_child_before_parent_resume() -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
