@@ -21282,6 +21282,15 @@ where
                     child.set_initial_thread_id(launch.thread_id);
                     let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
                     child.load_pe_image_with_dlls(&image, &dll_images)?;
+                    // A direct CPU caller without the machine directory has
+                    // nowhere to retain an admitted child after a native
+                    // fault or an ownership conflict. Keep the exact launch
+                    // retryable; setup errors above retain their own result.
+                    if custody.is_none() {
+                        return Err(Error::Backend(
+                            "child CPU admission requires machine custody".to_owned(),
+                        ));
+                    }
                     // CPU admission ends the retryable pending-launch lifetime. The
                     // child now owns its exact launch descriptor; an execution error
                     // must quarantine that CPU, never publish this launch again.
@@ -73338,11 +73347,16 @@ mod unicorn_tests {
             live_pump: true,
         };
         let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::default_primary()?;
-        parent.run_until_import_trap_with_framebuffer_limits(
-            &mut kernel,
-            &mut framebuffer,
-            limits,
-        )?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        parent
+            .run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+                &mut custody,
+            )
+            .result?;
 
         if kernel.current_process_id() != 1 {
             assert!(parent.rotate_to_parked_process_id(&mut kernel, 1));
@@ -73361,11 +73375,14 @@ mod unicorn_tests {
                     .is_some_and(|snapshot| snapshot.host_wall_clock_stop.is_some())
         }));
 
-        parent.run_until_import_trap_with_framebuffer_limits(
-            &mut kernel,
-            &mut framebuffer,
-            limits,
-        )?;
+        parent
+            .run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+                &mut custody,
+            )
+            .result?;
 
         let queued_launches = kernel
             .recent_process_ops()
@@ -79647,7 +79664,10 @@ mod unicorn_tests {
             .file_mapping_mut(view_handles[1])?
             .views
             .clear();
-        super::run_pending_process_launches(
+        let mut retry_custody =
+            super::CpuCustody::new().expect("retry child CPU custody initializes");
+        let mut quarantined_child_fault = false;
+        super::run_pending_process_launches_with_custody(
             &mut parent_uc,
             &mut kernel,
             parent_pid,
@@ -79661,6 +79681,10 @@ mod unicorn_tests {
             },
             &[],
             &parked,
+            Some(&mut retry_custody),
+            &mut quarantined_child_fault,
+            None,
+            None,
         )?;
         assert!(kernel.take_pending_process_launches().is_empty());
         assert_eq!(parked.borrow().len(), 1);
@@ -79702,8 +79726,7 @@ mod unicorn_tests {
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
-
-        super::run_pending_process_launches(
+        let error = super::run_pending_process_launches(
             &mut parent_uc,
             &mut kernel,
             parent_pid,
@@ -79850,6 +79873,7 @@ mod unicorn_tests {
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new().expect("sibling CPU custody initializes");
         let mut quarantined_child_fault = false;
         super::run_pending_process_launches_with_custody(
             &mut parent_uc,
@@ -79865,7 +79889,7 @@ mod unicorn_tests {
             },
             &[],
             &parked,
-            None,
+            Some(&mut custody),
             &mut quarantined_child_fault,
             Some(&observer),
             Some(&admission_observer),
@@ -79997,8 +80021,11 @@ mod unicorn_tests {
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut quarantined_child_fault = false;
 
-        super::run_pending_process_launches(
+        let error = super::run_pending_process_launches_with_custody(
             &mut parent_uc,
             &mut kernel,
             parent_pid,
@@ -80012,22 +80039,41 @@ mod unicorn_tests {
             },
             &[],
             &parked,
-        )?;
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+            None,
+            None,
+        )
+        .expect_err("nested returned CPU tree must stop before sibling admission");
+        assert!(
+            matches!(&error, Error::Backend(message) if message.contains("returned child CPU tree disagrees")),
+            "nested child stop: {error}"
+        );
         let resolved: Vec<_> = kernel
             .recent_process_ops()
             .iter()
             .filter(|record| record.op == "CreateProcessResolved")
             .map(|record| record.process_id.expect("resolved child PID"))
             .collect();
-        assert_eq!(resolved.len(), 4, "E, nested D, and outer B/C resolve once");
+        assert_eq!(resolved.len(), 2, "E and nested D resolve before the stop");
         assert_eq!(resolved[0], event.process_id);
-        assert_eq!(resolved[2], child.process_id);
-        assert_eq!(resolved[3], later.process_id);
         let nested_pid = resolved[1];
         assert_ne!(nested_pid, event.process_id);
         assert_ne!(nested_pid, child.process_id);
         assert_ne!(nested_pid, later.process_id);
-        assert!(!kernel.has_pending_process_launches());
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![child, later],
+            "untouched outer siblings retain their FIFO order"
+        );
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        assert_eq!(
+            custody.retained_tree_snapshots()[0].origin_birth,
+            event.process_birth.unwrap()
+        );
+        assert!(!quarantined_child_fault);
+        assert!(parked.borrow().is_empty());
         Ok(())
     }
 
@@ -82282,8 +82328,10 @@ mod unicorn_tests {
             stamp_synthetic_saved_context(&mut cpu, &kernel);
             cpu.running_guest_thread = Some((cpu.current_thread_id, u32::MAX));
             let mut framebuffer = VirtualFramebuffer::default_primary()?;
+            let mut custody = super::CpuCustody::new()
+                .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
 
-            let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
                 &mut kernel,
                 &mut framebuffer,
                 super::UnicornRunLimits {
@@ -82292,6 +82340,7 @@ mod unicorn_tests {
                     stop_pc: Some(entry + 0x10),
                     live_pump: false,
                 },
+                &mut custody,
             );
             first.result?;
             assert_eq!(first.report.start_process_birth(), Some(birth));
@@ -82308,7 +82357,7 @@ mod unicorn_tests {
             // carries the view base for the first guest instruction in slice two.
             cpu.saved_context.as_mut().expect("saved parent").regs.regs[4] = application_ptr;
 
-            let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            let second = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
                 &mut kernel,
                 &mut framebuffer,
                 super::UnicornRunLimits {
@@ -82317,6 +82366,7 @@ mod unicorn_tests {
                     stop_pc: None,
                     live_pump,
                 },
+                &mut custody,
             );
             second.result?;
             assert_eq!(second.report.start_process_birth(), Some(birth));
@@ -84023,6 +84073,7 @@ mod unicorn_tests {
         cpu.load_pe_image(&image)?;
         let entry = cpu.entry.expect("parent entry");
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new().expect("deferred child CPU custody initializes");
         let limits = super::UnicornRunLimits {
             instruction_limit: 128,
             wall_clock_limit_ms: 500,
@@ -84030,10 +84081,11 @@ mod unicorn_tests {
             live_pump: false,
         };
 
-        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
             &mut kernel,
             &mut framebuffer,
             limits,
+            &mut custody,
         );
         first.result?;
         assert_eq!(first.report.start_process_birth(), Some(parent_birth));
@@ -84080,13 +84132,14 @@ mod unicorn_tests {
             Some(expected[2])
         );
 
-        let second = cpu.run_until_import_trap_with_framebuffer_limits_report(
+        let second = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
             &mut kernel,
             &mut framebuffer,
             super::UnicornRunLimits {
                 stop_pc: Some(entry + 19 * 4),
                 ..limits
             },
+            &mut custody,
         );
         second.result?;
         assert_eq!(second.report.start_process_birth(), Some(parent_birth));
@@ -84373,16 +84426,18 @@ mod unicorn_tests {
             .thread_birth_key_by_id(cpu.current_thread_id())
             .expect("parent thread birth");
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new().expect("spinning child CPU custody initializes");
         let limits = super::UnicornRunLimits {
             instruction_limit: 128,
             wall_clock_limit_ms: 500,
             stop_pc: None,
             live_pump: false,
         };
-        let first = cpu.run_until_import_trap_with_framebuffer_limits_report(
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
             &mut kernel,
             &mut framebuffer,
             limits,
+            &mut custody,
         );
         first.result?;
         let queued: Vec<_> = kernel
@@ -84465,13 +84520,14 @@ mod unicorn_tests {
         let mut selected_births = vec![kernel.current_process_birth_key()];
         let mut parent_progressed = false;
         for _ in 0..4 {
-            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report(
+            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
                 &mut kernel,
                 &mut framebuffer,
                 super::UnicornRunLimits {
                     stop_pc: Some(entry + 19 * 4),
                     ..limits
                 },
+                &mut custody,
             );
             attempt.result?;
             selected_births.push(kernel.current_process_birth_key());
@@ -89132,8 +89188,11 @@ mod unicorn_tests {
         let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
         let guard = super::SealedHostWriteGuard::default();
+        let mut custody =
+            super::CpuCustody::new().expect("completed child CPU custody initializes");
+        let mut quarantined_child_fault = false;
         let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            super::run_pending_process_launches(
+            super::run_pending_process_launches_with_custody(
                 &mut root_uc,
                 &mut kernel,
                 root_pid,
@@ -89147,6 +89206,10 @@ mod unicorn_tests {
                 },
                 &[],
                 &parked,
+                Some(&mut custody),
+                &mut quarantined_child_fault,
+                None,
+                None,
             )
         }));
 
@@ -89202,8 +89265,10 @@ mod unicorn_tests {
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new().expect("primary child CPU custody initializes");
+        let mut quarantined_child_fault = false;
         super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
-        let result = super::run_pending_process_launches(
+        let result = super::run_pending_process_launches_with_custody(
             &mut root_uc,
             &mut kernel,
             root_pid,
@@ -89217,6 +89282,10 @@ mod unicorn_tests {
             },
             &[],
             &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+            None,
+            None,
         );
         let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
         assert_eq!(executed, Some((THREAD_EXIT_STUB_ADDR, 0x63, primary)));
@@ -89306,6 +89375,8 @@ mod unicorn_tests {
                 );
                 late_births.set(Some((survivor_handle, survivor, worker_handle, worker)));
             };
+        let mut custody =
+            super::CpuCustody::new().expect("reused-TID child CPU custody initializes");
         let mut quarantined_child_fault = false;
         super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
         let result = super::run_pending_process_launches_with_custody(
@@ -89322,7 +89393,7 @@ mod unicorn_tests {
             },
             &[],
             &parked,
-            None,
+            Some(&mut custody),
             &mut quarantined_child_fault,
             None,
             Some(&post_admission),
@@ -89448,6 +89519,8 @@ mod unicorn_tests {
                 assert_ne!(worker, original_primary);
                 late_worker.set(Some((worker_handle, worker)));
             };
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
         let mut quarantined_child_fault = false;
         super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
         let result = super::run_pending_process_launches_with_custody(
@@ -89464,7 +89537,7 @@ mod unicorn_tests {
             },
             &[],
             &parked,
-            None,
+            Some(&mut custody),
             &mut quarantined_child_fault,
             None,
             Some(&post_admission),
@@ -89478,11 +89551,8 @@ mod unicorn_tests {
             "guest MIPS must reach the raw exit stub in this attempt"
         );
         assert!(
-            matches!(
-                &result,
-                Err(Error::HostExitAuthorityRecoveryRequired { .. })
-            ),
-            "missing canonical primary must request typed recovery: {result:?}"
+            matches!(&result, Err(Error::Backend(message)) if message.contains("returned child CPU tree disagrees")),
+            "missing primary must stop before returned-tree classification: {result:?}"
         );
         assert!(kernel.handles.process_execution_live_by_birth(owner));
         assert_eq!(
@@ -89501,21 +89571,22 @@ mod unicorn_tests {
         }));
         assert_eq!(framebuffer.pixels(), pixels_before.as_slice());
         assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
-        let parked = parked.borrow();
-        assert_eq!(parked.len(), 1, "failed exit must retain its admitted CPU");
-        let retained = parked.front().expect("retained child CPU");
-        assert_eq!(retained.cpu.owned_process_launch.as_ref(), Some(&launch));
-        assert!(
-            retained.cpu.private_slab_attempt_poisoned,
-            "retry needs fresh-machine repair"
-        );
-        assert!(!retained.cpu.completed_active_process_exit);
-        assert_eq!(retained.cpu.saved_context_thread_birth, None);
-        assert!(
-            retained.cpu.saved_context.is_none(),
-            "the poisoned private attempt must discard unsafe restart registers"
-        );
-        assert!(retained.cpu.run_slice_generation > 0);
+        assert!(parked.borrow().is_empty(), "unverified CPU is not runnable");
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        let retained = custody.retained_tree_snapshots();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].origin_birth, owner);
+        custody
+            .with_retained_tree(retained[0].key, |tree| {
+                assert_eq!(tree.owned_process_launch.as_ref(), Some(&launch));
+                assert!(tree.private_slab_attempt_poisoned);
+                assert!(!tree.completed_active_process_exit);
+                assert_eq!(tree.saved_context_thread_birth, None);
+                assert!(tree.saved_context.is_none());
+                assert!(tree.run_slice_generation > 0);
+            })
+            .expect("failed exit retains the original child CPU tree");
         Ok(())
     }
 
@@ -89625,6 +89696,78 @@ mod unicorn_tests {
             Some(EXIT_CODE)
         );
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn no_custody_child_launch_refuses_before_cpu_admission() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        let child_path = test_root.join("child.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        let mut child_image = tiny_mips_spinner_pe();
+        write_vec_u32(&mut child_image, 0x200, 0x3c08_2000); // lui t0,0x2000
+        write_vec_u32(&mut child_image, 0x204, 0x8d02_0000); // lw v0,0(t0): READ_UNMAPPED
+        std::fs::write(&child_path, child_image).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let child_birth = launch.process_birth.expect("exact child birth");
+        let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let admission_seen = std::cell::Cell::new(false);
+        let admission_observer = |_: &mut CeKernel, _: &crate::ce::kernel::PendingProcessLaunch| {
+            admission_seen.set(true);
+        };
+        let mut quarantined_child_fault = false;
+        let error = super::run_pending_process_launches_with_custody(
+            &mut root_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+            None,
+            &mut quarantined_child_fault,
+            None,
+            Some(&admission_observer),
+        )
+        .expect_err("a child CPU must not be admitted without machine custody");
+        assert!(
+            !admission_seen.get(),
+            "child was admitted without custody: error={error}; exact_pending={}; live={}; parked={}",
+            kernel
+                .pending_process_launch_for_birth(child_birth)
+                .is_some(),
+            kernel.handles.process_execution_live_by_birth(child_birth),
+            parked.borrow().len()
+        );
+        assert!(
+            matches!(error, Error::Backend(ref message) if message.contains("requires machine custody")),
+            "typed pre-admission refusal: {error}"
+        );
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(child_birth),
+            Some(&launch)
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(child_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        assert!(parked.borrow().is_empty());
+        assert!(!quarantined_child_fault);
         Ok(())
     }
 
@@ -89883,7 +90026,10 @@ mod unicorn_tests {
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
-        let error = super::run_pending_process_launches(
+        let mut custody =
+            super::CpuCustody::new().expect("forged-return child CPU custody initializes");
+        let mut quarantined_child_fault = false;
+        let error = super::run_pending_process_launches_with_custody(
             &mut parent_uc,
             &mut kernel,
             parent_pid,
@@ -89897,6 +90043,10 @@ mod unicorn_tests {
             },
             &[],
             &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
+            None,
+            None,
         )
         .expect_err("forged child exit must fail closed");
         assert!(matches!(
