@@ -4,6 +4,25 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Post-native child handoff still restores a mutable process selection
+  without checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
+  identifies blind save/set/restore of selected module fields and
+  `CurrentProcessState` across B's run. The new crate-private birth-plus-
+  generation stamp has five focused no-default and release green tests each,
+  plus a 19-block **2,189/0/10 ignored** broad release pass
+  ([a01](evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log),
+  [a02](evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log),
+  [a03](evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log));
+  broad no-default passed **1,548/0/2 ignored** over 19 blocks, and three
+  feature checks exited 0
+  ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
+  No production caller
+  captures or checks it. It does not make the
+  existing restoration safe, prove the selected birth execution-live, bind
+  cloned Kernels to one machine lineage, or cover arbitrary mutation through
+  public backing objects. This is a source-audited risk, not an attributed
+  live-app failure. The connected callback-scoped port and checked
+  parent-suspension token remain the repair gate.
 - **Process exit leaves general private VM and mapped-file views behind:**
   exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
   heap/stack ranges, writable-image runs and heap state, but not ordinary
@@ -195,6 +214,19 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       covers only tested natural-parked and requested-active stopped exits;
       [first-slice receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md).
       This source-audited risk is not an attributed live-app failure.
+    - **Post-native `Parked` publication can lose a live child's CPU:** the
+      [test-only real-MIPS expected red](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+      makes A execute `CreateProcessW` and B execute a fixed-stack first
+      touch, then holds a parent parked-queue read borrow only around B's
+      publication. The path returns typed `Backend` and poisons A's private
+      attempt; B remains exact-birth Kernel-live, unsignaled and wait-unready,
+      but its parked queue is empty and the final assertion finds zero
+      machine-owned B CPU slots instead of one. The borrow is an artificial
+      test conflict, not demonstrated natural reentry, live-pump behavior or
+      a mounted-app failure. Cut 3a holds non-runnable native-fault children,
+      not this runnable/parked publication case. Preserve B's original CPU
+      through a connected O-T7 slot/leaf migration after the callback-scoped
+      machine-state port, not a queue-only owner patch.
     - At its earlier source seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
       executed A's actual `CreateProcessW` IAT call to launch B, then returned
       A through its saved startup RA. A exited `0x63`; B remained exact-birth

@@ -4,6 +4,73 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 unconnected machine-state port foundation (focused-only)
+
+The new crate-private `MachineKernelPort` module holds the caller's Kernel and
+framebuffer in one fallible short-loan cell and latches the first typed
+terminal failure. The [partial validation receipt](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
+records a01 focused no-default and a02 focused release, each **3/0** (exit
+0): owned observation and loan release, nonpanicking nested cross-resource
+refusal, and first-failure precedence. There is no separate compile-fail
+fixture. Broad and feature-matrix validation remain pending.
+
+This module has no production caller. Native attempts and hooks still use
+their prior Kernel/framebuffer paths; no attempt/leaf authority, hook
+teardown lifetime, selected-process restoration or exit-event fence has
+been connected. It is not Step 2 port acceptance or a live-app result. No
+app or writable mount was run.
+
+## 2026-10-17 preparatory selected-process context stamp (bounded source/test gate)
+
+`CeKernel` now exposes a crate-private selected-context stamp made from the
+canonical process birth and a checked generation. A stamp cannot be captured
+without a registered selected birth. Every selected-process metadata/state
+setter advances the generation before changing state; the two accepted exit
+compatibility-state writes also advance it, while tested refused exits leave
+it unchanged. Matching re-resolves the birth, so a PID reused through the
+public handle table cannot validate an old stamp without a selector write;
+generation overflow permanently poisons capture rather than wrapping.
+The stamped [a01 focused no-default](evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log)
+and [a02 focused release](evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log)
+attempts each passed **5/0**. Same-source
+[a03 broad release](evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log)
+passed 19 blocks **2,189/0/10 ignored**. [A04 broad no-default](evidence/stage3-selector-context-stamp-20261017/a04-broad-no-default.raw.log)
+passed 19 blocks **1,548/0/2 ignored**; a05–a07 feature checks exited 0.
+All seven attempts kept unchanged source hashes
+([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
+
+This is provenance only: no production run/restore path consumes the stamp,
+and it does not prove execution-live ownership, machine/checkpoint lineage or
+safe restoration after A→B→A. Clone copies the generation, and direct
+mutations of public backing objects are not all stamped. The callback-scoped
+Kernel/framebuffer port, checked handoff token and O-T7 leaf/custody migration
+remain separate work. No app or writable-mount run was made.
+
+## 2026-10-17 test-only parked-publication expected red
+
+The [bounded expected-red receipt](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+records a02's stamped focused ignored test (exit 101) on `unicorn.rs`
+SHA-256 `C5F6A48CDEE38DA122EAC8960BD84E3F5A900BAE628CFD6995A4AC48BBD3EF38`.
+Real-MIPS A executes `CreateProcessW` and B runs its post-native first slice,
+executing fixed-stack `SW`/`LW`; the test verifies the stored value. A
+test-only framebuffer gate holds a parent parked-queue read borrow only
+during B's `Parked` publication. The production path returns typed
+`Backend`; B remains exact-birth Kernel-live,
+unsignaled and wait-unready, but the final custody assertion finds zero B
+slots instead of one. The a01 fixture missed its intended expectation before
+this a02 witness. This forced borrow conflict does not establish natural
+reentry, a live-pump failure or an iNavi run. No production fix was made;
+Cut 3a's non-runnable native-fault quarantine does not cover a runnable B at
+the parked-publication boundary.
+
+On the same test-only source, loopback-enabled a04 release passed 19 blocks
+**2,184/0/10 ignored**, a05 no-default passed 19 blocks **1,543/0/2
+ignored**, and a06–a08 feature checks exited 0. The initial sandboxed a03
+release attempt had 45 failures concentrated in socket/remote tests, with
+multiple explicit Windows `10013` errors; its identical-source loopback
+rerun is the counted release result. An environment restriction is the
+supported inference, not an attributed source regression.
+
 ## 2026-10-17 bounded Cut 3a non-runnable child CPU quarantine
 
 An ordinary real-MIPS focused control passed under debug and release before

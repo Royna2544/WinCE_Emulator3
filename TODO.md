@@ -129,8 +129,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      adds synthetic production-helper A→B preservation and a terminal
      held-parent-queue-borrow control; it does not execute the guest classifier.
      Continue the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
-     and [O-T7](docs/DECISIONS.md) consumer inventory: held-queue
-     publication can still drop a live child CPU owner; the earlier ordinary
+     and [O-T7](docs/DECISIONS.md) consumer inventory: a
+     [test-only direct-MIPS held-queue expected red](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+     now reaches post-native B `Parked` publication and shows that a typed
+     queue conflict drops its only CPU owner while B remains Kernel-live and
+     unsignaled. The artificial read borrow is not natural reentry or a
+     live-pump result. The earlier ordinary
      post-admission first-slice error was separately narrowed by Cut 3a
      quarantine. At its earlier source seal, the
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
@@ -235,6 +239,29 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
      A-to-B handoff and full CPU-custody gates; do not count either
      guard as the connected port.
+     The preparatory crate-private selected-context stamp pairs canonical
+     birth with a checked generation. Focused no-default and release attempts
+     each passed **5/0**; same-source broad release passed 19 blocks
+     **2,189/0/10 ignored** ([a01](evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log),
+     [a02](evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log),
+     [a03](evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log)).
+     Broad no-default passed 19 blocks **1,548/0/2 ignored** and three
+     feature checks exited 0 on unchanged source
+     ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
+     It has no production consumer and is not a handoff/restoration token.
+     Connect it only after the whole-attempt port can release the parent
+     loan before B runs; reject changed selection lineage or reused birth
+     before restoring A, and add an execution-live/leaf check plus exit-event
+     fence. Direct public backing-object mutation and cloned Kernel lineage
+     need separate treatment before claiming complete provenance.
+     The unconnected `MachineKernelPort` foundation now groups the existing
+     Kernel/framebuffer behind fallible short loans and a first-terminal
+     latch; [a01 focused no-default and a02 focused release](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
+     each passed **3/0** on unchanged source. Broad and feature-matrix
+     checks are pending.
+     No production native attempt or hook uses it, so continue the connected
+     public-wrapper, setup/hook/tail and child-helper migration above with
+     attempt/leaf authority and callback-lifetime controls before Step 2.
      The bounded [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-bounded-source-test-gate)
      [receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
      seals one source: a11 focused release **1/0**, 19-block a12 release
@@ -270,11 +297,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      generic `immediate_process_sync_error` and `synchronize native process
      mapping` label (`unicorn.rs:15092`); an import-register failure must not
      be reported as a mapping-sync failure.
-     Keep the original direct-helper red as historical evidence; stage
-     further expected reds
-     before replacing parked Box ownership with checked locators; do not add
-     another pending owner vector. A controlled `Exited`-classifier fixture
-     and separate live-pump deferred-launch/later-exit fixture remain.
+     Keep the original direct-helper red as historical evidence. The new
+     Parked-publication red is an ownership contract control, not permission
+     for a queue-only production patch: complete the callback-scoped
+     Kernel/framebuffer port before full runnable/parked slot and leaf-permit
+     migration, then retain B's original CPU across publication failure.
+     Stage further expected reds before replacing parked Box ownership with
+     checked locators; do not add another pending owner vector. A controlled
+     `Exited`-classifier fixture and separate live-pump deferred-launch/
+     later-exit fixture remain.
      Extend the [exact-birth survivor design](docs/subsystems/tasks-scheduler.md#exact-birth-parked-cpu-survivors-on-process-exit-design-and-bounded-cuts)
      to other active exits, requested parked siblings,
      already-exited skips and generic duplicate pruning. Prove foreign CPUs
