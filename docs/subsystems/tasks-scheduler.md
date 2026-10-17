@@ -768,14 +768,22 @@ retain the alias defect.
 An unconnected crate-private [foundation module](../../src/emulator/machine_kernel_port.rs)
 now holds the caller's Kernel and framebuffer in one `RefCell` state, offers
 fallible higher-ranked short loans, and latches the first typed terminal
-failure. Its [partial receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
-records a01 focused no-default and a02 focused release, each **3/0** on
-unchanged source. It has no production consumer,
+failure. [A01 focused no-default](../../evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
+and [a02 focused release](../../evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
+each passed **3/0** on unchanged source. [A03 broad release](../../evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)
+passed 19 blocks **2,192/0/10 ignored**; stamped source hashes stayed
+stable while backup commits moved HEAD from `fa7de51a` to `a105546f`.
+This is development validation, not Step 2 acceptance. It has no production consumer,
 attempt/leaf authority, callback teardown proof, selected-process
-restoration or event fence; broad and feature-matrix checks are
+restoration or event fence; broad no-default and feature-matrix checks are
 pending. The target API above includes authority that the foundation does
 not yet take. This source cut does not move any normal native attempt or
-hook across the boundary and cannot satisfy Step 2.
+hook across the boundary and cannot satisfy Step 2. The existing
+selected-context stamp still needs a production handoff consumer. The a03
+suite predates retirement of the parked-publication red's test-only seam and
+ignored fixture. Its preserved receipt remains evidence, but current source
+has no active ignored fixture and the runnable/parked custody bug remains
+open.
 
 The connected signature changes, shown as responsibilities rather than
 compiled Rust APIs, are:

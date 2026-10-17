@@ -2508,6 +2508,11 @@ sandboxed release attempt had 45 failures concentrated in socket/remote
 tests with multiple explicit Windows `10013` errors; a04's identical command
 passed when loopback was permitted, supporting an environment explanation.
 The receipt preserves all closed log hashes and matching source stamps.
+The test-only one-shot seam and ignored red fixture were later retired from
+current `unicorn.rs`, whose SHA-256 is
+`B6C7FC7C89517F390D4309974F384B37B733EAC97B0250421F4DA03C984DC300`.
+The patch and raw logs remain the historical witness. This removal is not a
+production custody fix; the runnable/parked publication bug remains open.
 
 ## Selected-process context provenance stamp (2026-10-17, bounded source/test gate)
 
@@ -2547,7 +2552,7 @@ stamp; cloned Kernel lineage, direct backing-object mutation, execution-live
 ownership, a callback-scoped port and an exact parent-suspension token remain
 open. No live iNavi or writable-mount run occurred.
 
-## Unconnected machine-state port foundation (2026-10-17, partial focused gate)
+## Unconnected machine-state port foundation (2026-10-17, development evidence)
 
 The [partial receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
 preserves the a01 stamped `cargo test -j 1 machine_port_` attempt: three
@@ -2558,6 +2563,17 @@ The same-source [a02 focused release log](../../evidence/stage3-machine-port-fou
 records `cargo test --release --features unicorn,trace,win32-desktop --lib
 machine_port -j 1`: **3/0/0**, exit 0, SHA-256
 `4964F7C55C4E1D94B2A5FB2AB867952C8BBC3C7187FF889BD6BE9EA02352DFB9`.
+The [a03 broad release log](../../evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)
+records `cargo test --release --features unicorn,trace,win32-desktop -j 1`:
+19 blocks **2,192/0/10 ignored**, exit 0, closed SHA-256
+`BA54DF0289153B5686012F1319BA2DE641F12295A8B75E662AAFCB7F17BAAA7B`.
+Its source hashes match before and after, although backup commits moved
+HEAD from `fa7de51ab790af3c0f72467265f171c396055413` to
+`a105546f326181cee410383f7cc4fa80b83eb4f6` during that attempt.
+The preserved parked-publication red was still ignored in this pre-retirement
+a03 broad suite. Its test-only fixture has since been removed from current
+source without a custody repair. This broad pass is development validation,
+not port acceptance.
 Before/after source hashes matched for the new
 `src/emulator/machine_kernel_port.rs`
 (`89DACB64AFA8ACAC394E8CF9DC809D649E1D81D2A7164888F1B7D3E9332BA2F0`),
@@ -2573,8 +2589,11 @@ exercise owned observation after loan release, nested cross-resource busy
 refusal without panic, and terminal precedence. There is no independent
 compile-fail fixture, production caller, attempt/leaf authority, native-hook
 or child-helper migration, callback teardown proof, selection restoration,
-event fence or CPU-custody effect. Broad and feature-matrix checks
-remain pending; this is not Step 2 or live iNavi acceptance.
+event fence or CPU-custody effect. Broad no-default and feature-matrix
+checks remain pending; this is not Step 2 or live iNavi acceptance. The next
+connected cut needs a production consumer for the selected-context stamp;
+the parked red remains evidence to preserve; its ignored fixture is no
+longer active in current source. The runnable/parked custody bug stays open.
 
 ## Chat-project validation notes (not in this repository)
 
