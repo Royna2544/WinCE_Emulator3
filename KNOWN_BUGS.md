@@ -7,22 +7,28 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 - **Post-native child handoff still restores a mutable process selection
   without checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
   identifies blind save/set/restore of selected module fields and
-  `CurrentProcessState` across B's run. The new crate-private birth-plus-
-  generation stamp has five focused no-default and release green tests each,
-  plus a 19-block **2,189/0/10 ignored** broad release pass
-  ([a01](evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log),
-  [a02](evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log),
-  [a03](evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log));
-  broad no-default passed **1,548/0/2 ignored** over 19 blocks, and three
-  feature checks exited 0
-  ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
-  No production caller
-  captures or checks it. It does not make the
-  existing restoration safe, prove the selected birth execution-live, bind
-  cloned Kernels to one machine lineage, or cover arbitrary mutation through
-  public backing objects. This is a source-audited risk, not an attributed
-  live-app failure. The connected callback-scoped port and checked
-  parent-suspension token remain the repair gate.
+  `CurrentProcessState` across B's run. The selected-context stamp passed its
+  [bounded preparatory gate](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md).
+  A focused pre-admission source candidate now checks that stamp, exact live
+  A owner/caller and nonzero staged PC before the aggregate pending-launch
+  drain. A changed generation refuses with both original queued births still
+  present; an unchanged-context control still drains both, without creator
+  attribution. Broad validation is pending. The preflight does not check or
+  safely restore selection after B runs, bind cloned Kernels to one machine
+  lineage, or cover arbitrary mutation through public backing objects. It
+  does not provide an exact-birth queue claim or recover A by resuming it after
+  refusal. This is a source-audited risk, not an attributed live-app failure;
+  the connected callback-scoped port and checked parent-suspension token
+  remain open.
+- **`CreateProcessW` can queue a child even when its output write fails:**
+  [the raw shim](src/ce/coredll.rs#L29141) calls
+  `queue_process_launch_with_options` before four fallible
+  `PROCESS_INFORMATION` writes. If any write fails, it returns `FALSE` with
+  an already queued live child; a later pending-launch trigger may admit that
+  child despite the failed call. This is a source-audited path, not yet an
+  executed failing-write control or observed iNavi behavior. Fix queue
+  publication/output failure as one checked transaction, without confusing
+  it with the separate successful `TRUE`-before-load gap.
 - **Process exit leaves general private VM and mapped-file views behind:**
   exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
   heap/stack ranges, writable-image runs and heap state, but not ordinary

@@ -4,10 +4,29 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 unconnected machine-state port foundation (development evidence)
+## 2026-10-17 selected-context pre-admission candidate (focused only)
 
-The new crate-private `MachineKernelPort` module holds the caller's Kernel and
-framebuffer in one fallible short-loan cell and latches the first typed
+The current source captures a selected-context stamp immediately before A's
+native `emu_start`. On a deferred `CreateProcessW` stop, it checks that stamp,
+the exact execution-live parent/caller births and a nonzero staged return PC
+before the existing aggregate pending-launch queue is drained. A test-only
+real-MIPS control queues an older launch through raw `CeEventHasOccurred`,
+then makes A execute `CreateProcessW` and changes A's selected-context
+generation after native stop. Focused red-to-green validation now returns
+typed `Backend` before either queued birth is drained, resolved or given a
+CPU; both retain their FIFO order. This is a stopped refusal requiring A
+recovery, not rollback or permission to resume A. An unchanged-context mixed
+control confirms that the existing aggregate drain still admits both launches
+in order; the preflight does not attribute each launch to its creator.
+Existing non-live and both-mode deferred-launch controls pass focused tests.
+Broad validation remains pending. This is not an exact-birth queue claim,
+checked post-B parent restoration, a connected `MachineKernelPort`, Step 2 or
+Stage 3 acceptance, or a live-app result. No app or writable mount was run.
+
+## 2026-10-17 retired machine-state port foundation (development evidence)
+
+The former crate-private `MachineKernelPort` module held the caller's Kernel and
+framebuffer in one fallible short-loan cell and latched the first typed
 terminal failure. [A01 focused no-default](evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
 and [a02 focused release](evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
 each passed **3/0** (exit 0): owned observation and loan release,
@@ -17,16 +36,17 @@ fixture. [A03 broad release](evidence/stage3-machine-port-foundation-20261017/a0
 passed 19 blocks **2,192/0/10 ignored** (exit 0) with stable stamped
 source hashes; backup commits moved HEAD from `fa7de51a` to `a105546f`
 during the run. This is development validation only, not Step 2 acceptance.
-Broad no-default and feature-matrix checks remain pending. A03 is the
-pre-retirement suite: the parked-publication expected red was still ignored
+The a03 seal did not include broad no-default or feature-matrix checks. It was
+the pre-retirement suite: the parked-publication expected red was still ignored
 there. Its test-only seam and ignored fixture have since been removed from
-current `unicorn.rs`; that source file is SHA-256
+`unicorn.rs`; at retirement that source file was SHA-256
 `B6C7FC7C89517F390D4309974F384B37B733EAC97B0250421F4DA03C984DC300`.
 The red receipt remains historical evidence, not a repaired custody path.
 
-This module has no production caller. Native attempts and hooks still use
-their prior Kernel/framebuffer paths; no attempt/leaf authority, hook
-teardown lifetime, selected-process restoration or exit-event fence has
+The unconnected module has since been removed from active source and remains
+recoverable through Git and the preserved evidence. Native attempts and hooks
+still use their prior Kernel/framebuffer paths; no attempt/leaf authority,
+hook teardown lifetime, selected-process restoration or exit-event fence has
 been connected. It is not Step 2 port acceptance or a live-app result. No
 app or writable mount was run.
 
@@ -49,9 +69,10 @@ passed 19 blocks **1,548/0/2 ignored**; a05–a07 feature checks exited 0.
 All seven attempts kept unchanged source hashes
 ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
 
-This is provenance only: no production run/restore path consumes the stamp,
-and it does not prove execution-live ownership, machine/checkpoint lineage or
-safe restoration after A→B→A. Clone copies the generation, and direct
+The later pre-admission cut is the stamp's first production consumer, but
+only before pending-launch drain. The preparatory stamp gate itself did not
+prove execution-live ownership, machine/checkpoint lineage or safe
+restoration after A→B→A. Clone copies the generation, and direct
 mutations of public backing objects are not all stamped. The callback-scoped
 Kernel/framebuffer port, checked handoff token and O-T7 leaf/custody migration
 remain separate work. No app or writable-mount run was made.

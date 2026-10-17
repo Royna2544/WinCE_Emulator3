@@ -248,27 +248,31 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Broad no-default passed 19 blocks **1,548/0/2 ignored** and three
      feature checks exited 0 on unchanged source
      ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
-     It has no production consumer and is not a handoff/restoration token.
-     Connect it only after the whole-attempt port can release the parent
-     loan before B runs; reject changed selection lineage or reused birth
-     before restoring A, and add an execution-live/leaf check plus exit-event
-     fence. Direct public backing-object mutation and cloned Kernel lineage
-     need separate treatment before claiming complete provenance.
-     The unconnected `MachineKernelPort` foundation now groups the existing
-     Kernel/framebuffer behind fallible short loans and a first-terminal
-     latch; [a01 focused no-default](evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
-     and [a02 focused release](evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
-     each passed **3/0** on unchanged source. A03 broad release passed 19
-     blocks **2,192/0/10 ignored** with stable source hashes despite backup
-     commits moving HEAD during the run
-     ([raw log](evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)).
-     This remains development evidence, not a Step 2 gate; broad no-default
-     and feature-matrix checks are pending.
-     No production native attempt or hook uses it, so continue the connected
-     public-wrapper, setup/hook/tail and child-helper migration above with
-     attempt/leaf authority and callback-lifetime controls before Step 2.
-     The next connected cut must give the selected-context stamp a checked
-     production handoff consumer. The parked-publication red and receipt are
+     The focused pre-admission candidate now consumes that stamp only before
+     the existing aggregate pending-launch drain: it checks A's selected
+     context, exact live parent/caller and nonzero staged PC. Its test-only
+     real-MIPS A `CreateProcessW` plus older raw `CeEventHasOccurred` launch
+     is red-to-green on a changed selected generation: typed refusal leaves
+     both queued births in FIFO order and requires A recovery, not rollback
+     or resume. Unchanged-context mixed and existing non-live/both-mode
+     controls pass focused tests, but broad validation is pending. The mixed
+     control intentionally confirms that both launches still drain together;
+     creator attribution is not checked. Next make an exact-birth pending
+     claim/return with a fair trigger, then update that mixed control to
+     require only the claimed launch to run. Also test and fix the separate
+     `CreateProcessW` partial-output path: `coredll.rs` queues before four
+     `PROCESS_INFORMATION` writes, so a failed write can return `FALSE` while
+     leaving a queued live child for a later trigger. This is distinct from
+     the already-successful `TRUE`-before-load gap.
+     The unconnected `MachineKernelPort` foundation passed historical
+     [development tests](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
+     but has been removed from active source; Git and evidence preserve it.
+     Continue the connected public-wrapper, setup/hook/tail and child-helper
+     migration with attempt/leaf authority, callback lifetime, checked
+     post-B restoration and exit-event fencing before Step 2. The focused
+     pre-admission guard is neither that port nor a parent-suspension token;
+     public backing-object mutation and cloned Kernel lineage remain open.
+     The parked-publication red and receipt are
      preserved as historical evidence; its test-only seam and ignored fixture
      have now been retired from current `unicorn.rs`. Keep the runnable/parked
      CPU-custody bug open and stage a new connected gate after the port,
