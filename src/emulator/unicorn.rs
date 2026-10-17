@@ -20673,7 +20673,7 @@ fn sync_mapped_blobs_from_unicorn<D>(
 }
 
 #[cfg(feature = "unicorn")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct DeferredParentRestoreWitness {
     process_birth: crate::ce::object::ProcessBirthKey,
     caller_birth: crate::ce::object::ThreadBirthKey,
@@ -21495,24 +21495,38 @@ where
                     let leaf_command_line = kernel.process_command_line().to_owned();
                     let leaf_current_directory =
                         kernel.process_current_directory().map(ToOwned::to_owned);
+                    // A closed slice can have moved its loader module list
+                    // into run-owned state; the executable mapping and entry
+                    // are the retained CPU's own image witness in that case.
+                    let retained_leaf_image = root.loaded_modules.iter().any(|module| {
+                        module.base == leaf_base
+                            && module.host_path.as_ref() == Some(&leaf_host_path)
+                    }) || (root.loaded_modules.is_empty()
+                        && root.memory.contains_range(leaf_base, 4)
+                        && root
+                            .entry
+                            .is_some_and(|entry| root.memory.contains_range(entry, 4)));
+                    let pending_cross_process_send = root
+                        .last_debug
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
+                        .is_some();
                     if leaf_state.process_id != leaf_birth.process_id()
                         || leaf_state.exit_code != crate::ce::kernel::STILL_ACTIVE
                         || leaf_state.signaled
                         || root.entry_image_base != Some(leaf_base)
-                        || !root.loaded_modules.iter().any(|module| {
-                            module.base == leaf_base
-                                && module.host_path.as_ref() == Some(&leaf_host_path)
-                        })
-                        || root
-                            .last_debug
-                            .as_ref()
-                            .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
-                            .is_some()
+                        || !retained_leaf_image
+                        || pending_cross_process_send
                     {
-                        return Err(Error::Backend(
-                            "rotated child selected image or wait edge is not an exact leaf"
-                                .to_owned(),
-                        ));
+                        return Err(Error::Backend(format!(
+                            "rotated child selected image or wait edge is not an exact leaf: state={leaf_state:?} birth={leaf_birth:?} selected_base=0x{leaf_base:08x} entry_base={:?} host_path={} retained_leaf_image={retained_leaf_image} modules={:?} pending_send={pending_cross_process_send}",
+                            root.entry_image_base,
+                            leaf_host_path.display(),
+                            root.loaded_modules
+                                .iter()
+                                .map(|module| (module.base, module.host_path.as_ref()))
+                                .collect::<Vec<_>>(),
+                        )));
                     }
                     #[cfg(test)]
                     POST_CHILD_SELECTION_PROBE.with(|probe| {
@@ -21560,7 +21574,12 @@ where
                             })?;
                             custody
                                 .as_deref_mut()
-                                .expect("verified machine custody")
+                                .ok_or_else(|| {
+                                    Error::Backend(
+                                        "rotated child lost custody before CPU transfer"
+                                            .to_owned(),
+                                    )
+                                })?
                                 .cancel_reservation(key, launch_birth)
                                 .map_err(|error| {
                                     Error::Backend(format!(
@@ -83410,15 +83429,7 @@ mod unicorn_tests {
         );
         let observations = super::POST_CHILD_SELECTION_PROBE
             .with(|probe| probe.borrow_mut().take().expect("active selection probe"));
-        let error = attempt
-            .result
-            .expect_err("C returned through B's recursive child slot");
-        assert!(
-            matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
-            "nested returned tree must be retained before classification: {error}"
-        );
-        assert_eq!(custody.counts().unverified_stopped_trees, 1);
-        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        attempt.result?;
         assert_eq!(attempt.report.start_process_birth(), Some(parent_birth));
         assert_eq!(
             attempt.report.raw_stop_pc(),
@@ -83439,48 +83450,37 @@ mod unicorn_tests {
             .handles
             .process_birth_key_for_handle(queued[1].process_handle.expect("C handle"))
             .expect("C birth");
+        assert_ne!(child_birth, leaf_birth);
         assert_eq!(
             observations.len(),
-            1,
-            "B's mismatched return must stop before the second observation"
+            2,
+            "C's ordinary return and B's rotated return each record a boundary"
         );
-        assert_eq!(observations[0].launch_birth, leaf_birth);
+        let c_return = observations
+            .iter()
+            .find(|observation| observation.launch_birth == leaf_birth)
+            .expect("C's ordinary child return observation");
+        assert_eq!(c_return.selected_birth, Some(leaf_birth));
+        assert_eq!(c_return.selected_cpu_birth, Some(leaf_birth));
+        let b_return = observations
+            .iter()
+            .find(|observation| observation.launch_birth == child_birth)
+            .expect("B's rotated child return observation");
         eprintln!(
-            "POST_CHILD_SELECTION C={:?} parent={parent_birth:?} final_selected={:?}",
-            observations[0],
+            "POST_CHILD_SELECTION B={b_return:?} C={c_return:?} parent={parent_birth:?} final_selected={:?}",
             kernel.current_process_birth_key()
         );
-        assert_eq!(observations[0].selected_birth, Some(leaf_birth));
-        assert_eq!(observations[0].selected_cpu_birth, Some(leaf_birth));
-        let retained = custody.retained_tree_snapshots();
-        assert_eq!(retained.len(), 1);
-        assert_eq!(retained[0].origin_birth, child_birth);
+        assert_eq!(b_return.selected_birth, Some(leaf_birth));
+        assert_eq!(b_return.selected_cpu_birth, Some(leaf_birth));
         assert_eq!(
-            retained[0].state,
-            crate::emulator::cpu_custody::RetainedTreeState::UnverifiedStopped
+            kernel.current_process_birth_key(),
+            Some(parent_birth),
+            "A's exact selection is restored after the observed C-root/B-parked boundary"
         );
-        custody
-            .with_retained_tree(retained[0].key, |tree| {
-                assert_eq!(
-                    tree.owned_process_launch
-                        .as_ref()
-                        .and_then(|owned| owned.process_birth),
-                    Some(leaf_birth),
-                    "the mismatched returned root still owns C"
-                );
-                assert!(
-                    tree.parked_child_processes.iter().any(|parked| {
-                        parked
-                            .cpu
-                            .owned_process_launch
-                            .as_ref()
-                            .and_then(|owned| owned.process_birth)
-                            == Some(child_birth)
-                    }),
-                    "the retained C tree still contains B's original CPU"
-                );
-            })
-            .expect("mismatched returned tree remains in custody");
+        assert_eq!(custody.counts().reserved, 0);
+        assert_eq!(custody.counts().unverified_stopped_trees, 0);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        assert!(custody.retained_tree_snapshots().is_empty());
         Ok(())
     }
 
@@ -84320,6 +84320,10 @@ mod unicorn_tests {
             caller_birth: Some(parent_thread),
             caller_process_birth: Some(parent_birth),
         };
+        let parent_witness = super::DeferredParentRestoreWitness {
+            process_birth: parent_birth,
+            caller_birth: parent_thread,
+        };
         let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
         let guard = super::SealedHostWriteGuard::default();
@@ -84348,6 +84352,7 @@ mod unicorn_tests {
                 Some(&mut custody),
                 &mut quarantined_child_fault,
                 publication,
+                parent_witness,
             )
             .expect_err("invalid B image must refuse before CPU admission");
         }
@@ -84390,6 +84395,7 @@ mod unicorn_tests {
                 Some(&mut custody),
                 &mut quarantined_child_fault,
                 publication,
+                parent_witness,
             )?;
         }
         assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
