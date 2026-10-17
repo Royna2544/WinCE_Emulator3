@@ -228,9 +228,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      port cut must span native setup, all hook families, post-native teardown
      and deferred child handoff with no loan held across reentry; a one-hook
      fault test alone is diagnostic, not O-T7 acceptance. The
-     [current-source pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
-     enumerates the remaining raw-loan sites and the then-native-fault
-     CPU-drop path; it is source inventory, not a port implementation.
+     [current-source Step 2 inventory](docs/PLAN.md) counts 112 remaining
+     Kernel and nine framebuffer named-alias use-lines on the sealed
+     `FB855EEB…92E381` source, plus the live host, monitor, child, exit and
+     presentation boundaries. The earlier [pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
+     belongs to its older source and includes a then-native-fault CPU-drop
+     path; both are inventory, not a port implementation.
      The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
      routes that callback's 19 Kernel and two framebuffer dereferences
      through one guarded raw adapter and rejects a preseeded busy service
