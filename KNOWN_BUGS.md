@@ -38,7 +38,17 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   source-audited guest-visible liveness defect, not an observed iNavi failure
   or proof of its runtime frequency. Add a fair event/Shell drain trigger with an
   exact-birth claim; do not make those older launches A's child in the
-  current aggregate tail.
+  current aggregate tail. The [bounded Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+  corrected only a post-publication `FALSE` on failed output copying; it did
+  not add this trigger.
+- **Shell output success still leaves alias and status semantics open:** the
+  direct-EXE `hInstApp`/requested `hProcess` copy-fault controls passed under
+  the [sealed source gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md),
+  but an unwritable `hProcess` can leave its process alias undisclosed, with
+  no executed retirement control. The shim still sets success-path
+  `LastError=0`; bad-pointer CE behavior was not established. `TRUE` can
+  precede loader admission, and the independent Shell launch trigger above
+  remains absent. None is attributed to a live iNavi failure.
 - **`CreateProcessW` output correction leaves alias lifetime and loader status
   open:** [the raw shim](src/ce/coredll.rs#L29141) now returns `TRUE` for a
   published child even when optional `PROCESS_INFORMATION` is null or cannot

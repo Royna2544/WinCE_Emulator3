@@ -4,6 +4,19 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 bounded ShellExecuteEx output gate
+
+After a raw direct-EXE `ShellExecuteExW` call queues one exact-birth child,
+failed `hInstApp` or requested `hProcess` output copies no longer turn that
+published launch into a `FALSE` result. The [sealed receipt](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+records an a01 expected red **0/1**, focused green **2/0**, raw-kernel
+**137/0**, 19-block no-default **1,552/0/2 ignored** and release-feature
+**2,196/0/9 ignored**; all three feature checks exited 0 with stable source
+hashes. This is an emulator consistency result, not CE invalid-pointer parity.
+Success-path `LastError=0`, undisclosed process-alias lifetime, the
+`TRUE`-before-loader gap and an independent exact-birth Shell trigger remain
+open. No app or writable mount was run.
+
 ## 2026-10-17 raw CreateProcessW output Boolean gate
 
 The raw `CreateProcessW` shim now treats a null `PROCESS_INFORMATION` pointer

@@ -270,7 +270,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      launch to run. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
      passed A03 raw-kernel **135/0**, 19-block A04 no-default **1,550/0/2
      ignored**, A05 release-feature **2,194/0/9 ignored**, and a06–a08 feature
-     checks exit 0. The bounded [REA/Shell finding](evidence/ce6-rea-shell-trigger-20261017/findings.md)
+     checks exit 0. The separate [sealed Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+     prevents a failed direct-EXE `hInstApp` or requested `hProcess` copy from
+     reporting `FALSE` after queueing a live child: focused **2/0**,
+     raw-kernel **137/0**, 19-block no-default **1,552/0/2 ignored** and
+     release **2,196/0/9 ignored**, with three feature checks exiting 0.
+     It does not admit that child, prove bad-pointer CE parity or provide a
+     Shell trigger; keep the proposed exact-birth claim/producer gate next.
+     The bounded [REA/Shell finding](evidence/ce6-rea-shell-trigger-20261017/findings.md)
      supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and
      a `CeEventHasOccurred`→`DeviceIoControl` boundary routed through `NFY0:`
      in local CE6 source; it does not establish notification launch timing or
