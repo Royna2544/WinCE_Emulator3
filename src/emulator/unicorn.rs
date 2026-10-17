@@ -9586,6 +9586,28 @@ impl UnicornMips {
                 result: Err(error),
             };
         }
+        // The directory has not yet minted a checked T -> S leaf transition
+        // for either a completed sender or the reciprocal S -> T -> S path.
+        // Refuse the whole bound CPU attempt before native setup, timer/send
+        // probes, queue take, or register restoration. Legacy unbound CPUs
+        // keep the existing Send compatibility path.
+        if matches!(
+            &self.cpu_execution_binding,
+            CpuExecutionBinding::Directory { .. }
+        ) && self
+            .blocked_wait_threads
+            .iter()
+            .any(|wait| matches!(wait.kind, BlockedWaitKind::SendMessage { .. }))
+        {
+            report.failure_operation = Some("CPU custody Send handoff preflight");
+            return AttemptExecution {
+                report,
+                result: Err(Error::Backend(
+                    "CPU-directory Send handoff requires a checked thread-leaf transfer"
+                        .to_owned(),
+                )),
+            };
+        }
         if self.writable_main_image.is_some() {
             report.failure_operation = Some("unmigrated writable-image run boundary");
             return AttemptExecution {
@@ -32347,6 +32369,23 @@ fn try_resume_blocked_wait_with_active_pc_mode<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    // A Send wait can also be published by the current native slice and
+    // observed by a hook before the next public CPU entry. Bound machines
+    // must not mutate timer/send readiness or restore another thread's
+    // registers through this compatibility selector without a new leaf.
+    if kernel.cpu_machine_lineage().is_some()
+        && blocked_waits
+            .borrow()
+            .iter()
+            .any(|wait| matches!(wait.kind, BlockedWaitKind::SendMessage { .. }))
+    {
+        return abort_native_send_resume(
+            uc,
+            current_thread_id,
+            active_thread_id,
+            "CPU-directory Send handoff requires a checked thread-leaf transfer",
+        );
+    }
     if matches!(&send_phase, SendResumePhase::Prepared(_)) && running_thread.borrow().is_some() {
         return abort_native_send_resume(
             uc,
@@ -93242,15 +93281,23 @@ mod unicorn_tests {
     #[test]
     fn native_same_process_reciprocal_send_enters_blocked_sender_on_own_stack() -> crate::Result<()>
     {
-        reciprocal_send_fixture(false)
+        reciprocal_send_fixture(false, false)
     }
 
     #[test]
     fn native_same_process_reciprocal_send_rejects_wrong_parent_birth() -> crate::Result<()> {
-        reciprocal_send_fixture(true)
+        reciprocal_send_fixture(true, false)
     }
 
-    fn reciprocal_send_fixture(corrupt_parent_birth: bool) -> crate::Result<()> {
+    #[test]
+    fn bound_cpu_reciprocal_send_refuses_before_queue_or_wait_handoff() -> crate::Result<()> {
+        reciprocal_send_fixture(false, true)
+    }
+
+    fn reciprocal_send_fixture(
+        corrupt_parent_birth: bool,
+        bound_directory: bool,
+    ) -> crate::Result<()> {
         use crate::ce::coredll_ordinals::{ORD_GET_MESSAGE_W, ORD_SEND_MESSAGE_W, ORD_SLEEP};
         use crate::emulator::imports::{ImportModuleKind, ImportTrap};
 

@@ -248,6 +248,7 @@ pub enum CpuCustodyError {
     HandleCountExhausted,
     MissingCpu,
     CpuAlreadyBound,
+    ParkedChildProcessTree,
     UnsealedQuarantine,
     KernelLineage(CpuMachineLineageError),
     StaleParentProcess,
@@ -284,6 +285,9 @@ impl fmt::Display for CpuCustodyError {
             Self::HandleCountExhausted => "CPU slot handle count exhausted",
             Self::MissingCpu => "CPU custody slot has no payload",
             Self::CpuAlreadyBound => "CPU payload already has a custody binding",
+            Self::ParkedChildProcessTree => {
+                "CPU still owns parked child process CPUs; split the tree before admission"
+            }
             Self::UnsealedQuarantine => "CPU quarantine payload has not closed its active loan",
             Self::KernelLineage(error) => return write!(f, "CPU Kernel lineage rejected: {error}"),
             Self::StaleParentProcess => "suspended parent process birth is no longer live/selected",
@@ -870,6 +874,12 @@ impl CpuCustody {
             SlotState::Reserved { .. } => return Err((CpuCustodyError::WrongBirth, cpu)),
             _ => return Err((CpuCustodyError::NotReserved, cpu)),
         };
+        // One admitted slot names one process CPU. A legacy parked subtree
+        // still owns other process CPUs, so accepting it here would hide
+        // those leaves behind this slot's single-process permit.
+        if cpu.has_parked_child_processes() {
+            return Err((CpuCustodyError::ParkedChildProcessTree, cpu));
+        }
         let Ok(mut payload) = cell.cpu.try_borrow_mut() else {
             return Err((CpuCustodyError::BusyCpuLoan, cpu));
         };
@@ -1655,6 +1665,33 @@ mod tests {
     }
 
     #[test]
+    fn admit_reserved_accepts_clean_cpu_into_exact_runnable_slot() {
+        let (birth, _) = births();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        let mut cpu = UnicornMips::new().unwrap();
+        CpuBackend::map_region(&mut cpu, 0x1000, 0x1000, MemoryPerms::READ, "clean-cpu").unwrap();
+        assert!(!cpu.has_parked_child_processes());
+
+        custody.admit_reserved(key, birth, cpu).unwrap();
+
+        assert_eq!(custody.admitted_key_for_birth(birth), Some(key));
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Runnable)
+        );
+        assert_eq!(custody.counts().reserved, 0);
+        assert_eq!(custody.counts().runnable, 1);
+        assert_eq!(
+            custody
+                .snapshot_exact(key, birth)
+                .unwrap()
+                .virtual_region_bytes,
+            0x1000
+        );
+    }
+
+    #[test]
     fn admitted_cpu_is_owned_before_first_leaf_and_old_permits_revoke() {
         let ((birth, thread), (other_birth, other_thread)) = births_with_threads();
         let mut custody = CpuCustody::new().unwrap();
@@ -2170,6 +2207,140 @@ mod tests {
             custody.snapshot_exact(key, birth),
             Err(CpuCustodyError::StaleKey)
         );
+    }
+
+    #[test]
+    fn same_birth_wrong_machine_exit_witness_cannot_retire_quarantined_cpu() {
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\lineage-child.exe".to_owned()), None);
+        let birth = launch.process_birth.unwrap();
+        // Independent boots can issue the same numeric/incarnation birth.
+        // A Kernel clone is deliberately poisoned even before binding.
+        let mut wrong_kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let wrong_launch =
+            wrong_kernel.queue_process_launch(Some("\\Test\\lineage-child.exe".to_owned()), None);
+        let mut legacy_wrong_kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let legacy_wrong_launch = legacy_wrong_kernel
+            .queue_process_launch(Some("\\Test\\lineage-child.exe".to_owned()), None);
+        assert_eq!(wrong_launch.process_birth, Some(birth));
+        assert_eq!(legacy_wrong_launch.process_birth, Some(birth));
+        let mut custody = CpuCustody::new().unwrap();
+        let other = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
+        wrong_kernel
+            .bind_cpu_machine_lineage(other.machine_lineage())
+            .unwrap();
+        legacy_wrong_kernel
+            .bind_cpu_machine_lineage(other.machine_lineage())
+            .unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .quarantine_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+
+        let wrong = wrong_kernel
+            .try_mark_process_launch_exited_with_witness(&wrong_launch, 0x41, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(wrong.birth(), birth);
+        let (error, returned_witness) = custody
+            .retire_with_bound_accepted_exit(&kernel, key, wrong)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CpuCustodyError::KernelLineage(CpuMachineLineageError::WrongMachine {
+                bound: other.machine_lineage(),
+                requested: custody.machine_lineage(),
+            })
+        );
+        assert_eq!(returned_witness.birth(), birth);
+        assert_eq!(
+            returned_witness.cpu_machine_lineage(),
+            Some(other.machine_lineage())
+        );
+        assert_eq!(custody.counts().quarantined, 1);
+        assert_eq!(
+            custody.snapshot_exact(key, birth).unwrap().state,
+            CpuCustodyState::Quarantined
+        );
+
+        let legacy_wrong = legacy_wrong_kernel
+            .try_mark_process_launch_exited_with_witness(&legacy_wrong_launch, 0x42, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(legacy_wrong.birth(), birth);
+        assert!(matches!(
+            custody.retire_with_accepted_exit(key, legacy_wrong),
+            Err(CpuCustodyError::KernelLineage(
+                CpuMachineLineageError::WrongMachine { .. }
+            ))
+        ));
+        assert_eq!(custody.counts().quarantined, 1);
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+
+        let exact = kernel
+            .try_mark_process_launch_exited_with_witness(&launch, 0x43, None)
+            .unwrap()
+            .unwrap();
+        let _original_cpu = custody
+            .retire_with_bound_accepted_exit(&kernel, key, exact)
+            .unwrap();
+        assert!(!custody.has_any_custody());
+    }
+
+    #[test]
+    fn bound_terminal_retirement_refuses_unbound_same_birth_witness() {
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\unbound-child.exe".to_owned()), None);
+        let birth = launch.process_birth.unwrap();
+        let mut unbound_kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let unbound_launch =
+            unbound_kernel.queue_process_launch(Some("\\Test\\unbound-child.exe".to_owned()), None);
+        assert_eq!(unbound_launch.process_birth, Some(birth));
+        let mut custody = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .quarantine_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+
+        let unbound = unbound_kernel
+            .try_mark_process_launch_exited_with_witness(&unbound_launch, 0x51, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unbound.birth(), birth);
+        assert_eq!(unbound.cpu_machine_lineage(), None);
+        let (error, returned_witness) = custody
+            .retire_with_bound_accepted_exit(&kernel, key, unbound)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CpuCustodyError::KernelLineage(CpuMachineLineageError::Unbound)
+        );
+        assert_eq!(returned_witness.birth(), birth);
+        assert_eq!(returned_witness.cpu_machine_lineage(), None);
+        assert_eq!(custody.counts().quarantined, 1);
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+
+        let exact = kernel
+            .try_mark_process_launch_exited_with_witness(&launch, 0x52, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact.cpu_machine_lineage(), Some(custody.machine_lineage()));
+        let _original_cpu = custody
+            .retire_with_bound_accepted_exit(&kernel, key, exact)
+            .unwrap();
+        assert!(!custody.has_any_custody());
     }
 
     #[test]
