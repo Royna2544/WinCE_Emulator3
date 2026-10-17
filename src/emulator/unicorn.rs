@@ -21551,24 +21551,8 @@ where
                     let expected_leaf_path = kernel
                         .host_path_to_guest_mount(&leaf_host_path)
                         .unwrap_or_else(|| leaf_host_path.to_string_lossy().replace('/', "\\"));
-                    // The PE loader stamps every main-image run with the
-                    // source path used for this exact CPU. Unlike the module
-                    // list, those retained runs survive a closed slice and
-                    // bind the selected C path to C's own header and entry.
-                    let leaf_image_label = format!("image:{}", leaf_host_path.display());
-                    let leaf_entry = root.entry;
-                    let retained_leaf_image = root
-                        .mapped_blobs
-                        .iter()
-                        .any(|blob| blob.name == leaf_image_label && blob.base == leaf_base)
-                        && leaf_entry.is_some_and(|entry| {
-                            root.mapped_blobs.iter().any(|blob| {
-                                let end = u64::from(blob.base) + blob.bytes.len() as u64;
-                                blob.name == leaf_image_label
-                                    && u64::from(entry) >= u64::from(blob.base)
-                                    && u64::from(entry) < end
-                            })
-                        });
+                    let retained_leaf_image =
+                        retained_cpu_main_image_matches_path(root, leaf_base, &leaf_host_path);
                     let pending_cross_process_send = root
                         .last_debug
                         .as_ref()
@@ -22146,6 +22130,32 @@ fn verified_returned_child_tree_births(
 /// payloads still have distinct, live canonical owners. This is a read-only
 /// identity proof, not permission to run, split, or restore either process.
 #[cfg(feature = "unicorn")]
+fn retained_cpu_main_image_matches_path(
+    cpu: &UnicornMips,
+    module_base: u32,
+    host_path: &std::path::Path,
+) -> bool {
+    // The loader stamps every main-image run with the path supplied to
+    // PeImage::inspect. These original mapped runs remain with the CPU when
+    // a closed slice has no loaded_modules record. Require both its header
+    // base and entry to carry the same exact source label.
+    let label = format!("image:{}", host_path.display());
+    cpu.entry_image_base == Some(module_base)
+        && cpu
+            .mapped_blobs
+            .iter()
+            .any(|blob| blob.name == label && blob.base == module_base)
+        && cpu.entry.is_some_and(|entry| {
+            cpu.mapped_blobs.iter().any(|blob| {
+                let end = u64::from(blob.base) + blob.bytes.len() as u64;
+                blob.name == label
+                    && u64::from(entry) >= u64::from(blob.base)
+                    && u64::from(entry) < end
+            })
+        })
+}
+
+#[cfg(feature = "unicorn")]
 fn verified_rotated_child_pair(
     child: &UnicornMips,
     origin: crate::ce::object::ProcessBirthKey,
@@ -22207,6 +22217,9 @@ fn verified_rotated_child_pair(
     let active_birth = child.owned_process_launch.as_ref()?.process_birth?;
     let parked = child.parked_child_processes.front()?;
     let parked_launch = parked.cpu.owned_process_launch.as_ref()?;
+    let parked_guest_path = kernel
+        .host_path_to_guest_mount(&parked.module_host_path)
+        .unwrap_or_else(|| parked.module_host_path.to_string_lossy().replace('/', "\\"));
     if active_birth == origin
         || !parked.cpu.parked_child_processes.is_empty()
         || parked_launch.process_birth != Some(origin)
@@ -22217,6 +22230,15 @@ fn verified_rotated_child_pair(
         || parked.process_state.signaled
         || parked.thread_id != parked.cpu.representative_thread_id()
         || parked.blocked_send_id.is_some()
+        || !retained_cpu_main_image_matches_path(
+            &parked.cpu,
+            parked.module_base,
+            &parked.module_host_path,
+        )
+        || parked.module_path != parked_guest_path
+        || parked.application.as_deref() != Some(parked.module_path.as_str())
+        || parked.command_line != parked_launch.command_line.as_deref().unwrap_or("")
+        || parked.current_directory.as_deref() != parked_launch.current_directory.as_deref()
         || kernel.current_process_birth_key() != Some(active_birth)
         || kernel.current_process_state().exit_code != crate::ce::kernel::STILL_ACTIVE
         || kernel.current_process_state().signaled
