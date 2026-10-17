@@ -145,9 +145,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      reached post-native B `Parked` publication at its earlier seal and showed
      a typed queue conflict dropping its only CPU owner while B remained
      Kernel-live and unsignaled. The later connected `Some(custody)` early and
-     late conflict controls retain B's CPU, but other publication and public
-     no-custody paths remain open. The artificial read borrow is not natural
-     reentry or a live-pump result. The earlier ordinary
+     late conflict controls retain B's CPU. The later
+     [no-custody admission fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+     stops the tested public/direct path before guest child execution, leaving
+     its exact launch pending for machine-owned recovery. Other publication
+     and runnable custody paths remain open. The artificial read borrow is
+     not natural reentry or a live-pump result. The earlier ordinary
      post-admission first-slice error was separately narrowed by Cut 3a
      quarantine. At its earlier source seal, the
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
@@ -324,10 +327,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      The [connected port and custody gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
      now passes a bounded source/test seal. Next authenticate the final
      executing thread and exact leaf permit (including handoff), check
-     post-B selection restoration and exit-event fencing, and remove or
-     fence the public/direct-fixture `custody=None` bypass. Convert retained
-     unverified and legacy runnable/parked trees into checked executable
-     slots with exact locator migration, then prove later-slice progress and
+     post-B selection restoration and exit-event fencing. The bounded
+     [public no-custody fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+     now refuses the tested direct admission bypass before guest child
+     execution; the public parent is poisoned and the exact launch stays
+     pending for machine-owned recovery, not proven same-session retry.
+     Convert retained unverified and legacy runnable/parked trees into
+     checked executable slots with exact locator migration, then prove
+     later-slice progress and
      recovery/relineage. The historical parked-publication red is preserved;
      current tested `Some(custody)` conflicts retain B but do not provide a
      runnable hold or close every child/exit path. Public backing-object

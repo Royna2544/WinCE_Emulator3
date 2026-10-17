@@ -66,7 +66,13 @@ remote-control HTTP/WebSocket surface.
   C-root/B-parked return and retains it as `UnverifiedStopped`. Tested early
   and late queue conflicts and a native fault retain admitted B. The stopped
   tree is not runnable recovery; exact thread/leaf authority, checked post-B
-  restoration, public no-custody bypass removal and live iNavi remain open.
+  restoration and live iNavi remain open. A later bounded
+  [public no-custody fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+  refuses pending child admission with typed `Backend` after local setup but
+  before consuming the exact launch claim or executing child MIPS. The launch
+  stays pending for machine-owned recovery; the public parent's attempt is
+  poisoned, not an established same-session retry. This closes the tested
+  admission bypass, not runnable custody or a leaf permit.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,

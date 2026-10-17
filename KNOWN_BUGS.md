@@ -296,9 +296,12 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       natural reentry or mounted-app behavior. The later
       [connected gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
       retains B's original CPU as `UnverifiedStopped` on tested early and late
-      queue conflicts, with no abandoned unbound tree. It does not provide a
-      runnable B slot or cover public/direct-fixture `custody=None`, all
-      exit/classifier paths, or in-session recovery. Full O-T7 locator/leaf
+      queue conflicts, with no abandoned unbound tree. The later
+      [no-custody admission fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+      refuses the tested public/direct child path before admission and guest
+      execution, leaving the exact launch pending for machine-owned recovery.
+      It does not provide a runnable B slot, cover all exit/classifier paths,
+      or establish in-session recovery. Full O-T7 locator/leaf
       migration remains open; the historical red is not a current narrow
       `Some(custody)` failure.
     - At its earlier source seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
@@ -362,9 +365,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and a14–a16
       feature checks; all six source hashes matched. This bounded result did
       not by itself repair the nonempty descendant publication conflict above,
-      other parked/active owner-loss paths, or the public run wrapper's custody
-      bypass. The later connected gate covers its tested `Parked` conflicts
-      only. A
+      other parked/active owner-loss paths, or the then-public run wrapper's
+      custody bypass. The later connected gate covers its tested `Parked`
+      conflicts; the later no-custody fence refuses that tested public child
+      admission but does not supply runnable recovery. A
       stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
       error crossing the producer's `child_admitted` flag before poisoning and
       moving an unpoisoned CPU into quarantine. The test stopped at that

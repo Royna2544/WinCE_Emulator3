@@ -4,6 +4,21 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 public no-custody child-admission fence
+
+The [bounded source/test gate](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+checks the public CPU wrapper and direct child-helper path with
+`custody=None`. They refuse a pending child's CPU admission with typed
+`Backend` after local `UnicornMips` construction and PE/DLL setup, but
+before consuming the exact pending-launch claim, setting `child_admitted`,
+or executing a child guest instruction. The exact child launch remains
+pending and its canonical birth stays execution-live and unsignaled. The
+public parent's attempt is poisoned with no saved context; the pending
+launch is for machine-owned recovery, not a proven same-session retry.
+This is a bounded no-directory fence, not runnable child custody, checked
+thread/leaf authority, post-B restoration, in-session recovery or live
+iNavi acceptance. No app or writable-mount run was made.
+
 ## 2026-10-17 connected port and unbound child custody source/test gate
 
 The [bounded receipt](evidence/stage3-connected-port-20261017/validation.receipt.md)
@@ -33,9 +48,11 @@ unbound trees. Recursive mapped-blob bytes include parked descendants, not
 host RSS.
 
 This is not full Step 2 or O-T7: port entry checks selected process birth,
-not an independently authorized executing thread/leaf; public/direct-fixture
-`custody=None` still bypasses the holding cell. Unverified trees are stopped,
-not runnable recovery. Checked post-B restoration, an exit-event fence,
+not an independently authorized executing thread/leaf. At that connected
+seal, public/direct-fixture `custody=None` still bypassed the holding cell;
+the later pre-admission fence above stops that tested route before guest
+child execution. Unverified trees are stopped, not runnable recovery.
+Checked post-B restoration, an exit-event fence,
 whole-machine checkpoint relineage and live-app acceptance remain open. The
 earlier nested observation and census below describe their historical seals,
 not the new guarded outcome.
@@ -241,11 +258,13 @@ there. Its test-only seam and ignored fixture have since been removed from
 The red receipt remains historical evidence, not a repaired custody path.
 
 The unconnected module has since been removed from active source and remains
-recoverable through Git and the preserved evidence. Native attempts and hooks
-still use their prior Kernel/framebuffer paths; no attempt/leaf authority,
-hook teardown lifetime, selected-process restoration or exit-event fence has
-been connected. It is not Step 2 port acceptance or a live-app result. No
-app or writable mount was run.
+recoverable through Git and the preserved evidence. At that retirement seal,
+native attempts and hooks still used their prior Kernel/framebuffer paths;
+no attempt/leaf authority, hook teardown lifetime, selected-process
+restoration or exit-event fence had been connected. The later connected port
+replaced those named raw aliases, but not the leaf/restoration/event contract.
+The foundation was not Step 2 port acceptance or a live-app result. No app
+or writable mount was run.
 
 ## 2026-10-17 preparatory selected-process context stamp (bounded source/test gate)
 
@@ -336,9 +355,11 @@ owns custody, monitor save/restore refuse while it exists, and status/debug
 publish slot identity and retained mapped-blob bytes. Those bytes are not a
 measured host RSS peak. The Kernel-minted exit witness carries exact birth,
 not independent machine lineage; its production use relies on the same
-Kernel instance. General private VM and mapped-file-view exit cleanup,
-runnable/parked custody, public-run bypass removal, a callback-scoped
-Kernel/framebuffer port and live-app behavior remain open.
+Kernel instance. At that Cut 3a seal, general private VM and mapped-file-view
+exit cleanup, runnable/parked custody, public-run bypass removal, a
+callback-scoped Kernel/framebuffer port and live-app behavior remained open;
+the later connected port and pre-admission fence address only their named
+boundaries.
 
 The pre-seal a03 broad release result (**2,183/0/9 ignored**) remains
 development evidence only. No app or writable-mount run was made.
