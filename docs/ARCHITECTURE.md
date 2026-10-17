@@ -160,16 +160,18 @@ while same-process displaced contexts exist. A run lease borrows custody
 without moving the only owner into an unprotected local variable. This is a
 target contract, not a description of the current parked queues.
 
-Nested native callbacks require a stronger loan boundary than CPU custody
-alone. A suspended parent may retain its native call stack while a different
-child slot holds the one executable machine permit. A's per-slot CPU payload
-loan may remain on that paused stack, but no mutable custody directory or
-topology, Kernel, Task/frame or framebuffer loan may span the child run; A's
-payload cannot execute while its permit is suspended. Hook access to
-machine state must be callback-scoped, fallible and tied to the current leaf
-permit; reentrant or busy access fails closed rather than borrowing an
-already-loaned object through a raw pointer. A checked parent-suspension token
-resumes only after the child is classified and its resource is in custody.
+The current `CreateProcessW` child runs at a deferred post-native handoff:
+A's native attempt has closed, its staged return context remains pinned,
+and A's executable permit is revoked before B receives a separate one. A's
+per-slot payload loan may remain on the outer post-native call stack, but no
+mutable custody directory or topology, Kernel, Task/frame or framebuffer
+loan may span B's run. The native-entry precondition refuses a second guest
+entry from A's live callback; any future in-callback child route requires a
+separate source/test gate. Hook access to machine state must be
+callback-scoped, fallible and tied to the current leaf permit; reentrant or
+busy access fails closed rather than borrowing an already-loaned object
+through a raw pointer. A checked parent-suspension hold ends only after the
+child is classified and its resource is in custody.
 The bounded connected port removed the named raw Kernel/framebuffer hook
 aliases and uses short fallible loans, but its process-scoped check does not
 yet issue an exact executing-leaf permit or checked parent-suspension token.
@@ -180,6 +182,34 @@ retire latch must refuse slot retirement or reuse while any payload loan or
 run permit is outstanding. A private stable per-slot cell alone cannot enforce
 that lifetime rule. The proposed callback-scoped machine-state boundary also
 does not, by itself, prove every existing pending-return `RefCell` safe.
+
+The target machine binds its live Kernel instance to the CPU directory's
+machine lineage once, before any guest instruction. The directory issues an
+attempt-scoped leaf permit only after that pair, the exact slot generation,
+process/thread birth and applicable frame/version validate. The port checks
+the issued permit; it cannot mint one from mutable process selection or a
+thread cell. A cloned Kernel with copied numeric/incarnation births must not
+inherit the live binding through `Clone`; a clone is non-executable until an
+explicit whole-machine relineage. A mismatched Kernel/directory pair refuses
+before effects. Parent suspension revokes A's executable leaf while B runs,
+and checked thread changes update or revoke the leaf before another guest
+instruction. These are target contracts, not current `CeKernel`/`CpuCustody`
+APIs.
+
+Custody phase is not canonical Task or wait state. For a verified slot, an
+attempt ends its `Leased` phase as derived runnable/parked eligibility, typed
+non-runnable quarantine retaining the original CPU on a post-admission
+fault/recovery refusal, or retirement after accepted exact exit and zero
+outstanding loans/permits. An unverified mixed-birth returned tree remains a
+separate stopped whole-tree hold, not a falsely birth-bound slot. Admitting
+boot A to the directory makes the current strict checkpoint guard refuse
+save/restore from boot until atomic whole-machine relineage exists.
+Before CPU construction, an exact pending launch remains owned by Kernel's
+queue. After admission, every CPU has one machine owner at every point: its
+exact-birth slot or that stopped unbound hold; a local variable or legacy
+parked box cannot be the durable owner. Admission precedes the first guest
+instruction, and classification plus cross-process locator publication do
+not expose an ownerless interval.
 
 ## A2. Shared identity and lifetime
 
@@ -332,10 +362,11 @@ before a CPU exists resolves as either an explicit CE creation failure with
 no CPU or a retryable error with the exact pending launch retained; neither
 may orphan an admitted child. After admission, a refused exit, native error
 or publication conflict leaves the exact CPU tree in custody and reports a
-stopped/terminal outcome. A synchronous in-hook launch suspends/pins the
-parent's execution lease while the child takes the exclusive active lease;
-the parent is restored only after the child is classified and safely in
-custody, without a mutable frame/queue borrow across the nested run. The
+stopped/terminal outcome. The current deferred child handoff pins the
+parent's staged return after its native attempt has closed; B takes a
+distinct exclusive permit, and A can be reissued one only after B is
+classified and safely in custody, without a mutable frame/queue borrow
+across B's run. The
 machine cannot leave Kernel execution live while dropping its only CPU owner.
 Prepare a survivor's checked destination before irreversible exit effects;
 after accepted completion its ownership move must be infallible, or a

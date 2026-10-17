@@ -520,8 +520,10 @@ For the current successful `CreateProcessW` path, the parent native attempt
 stops at its staged import-return PC before the child runs post-native. The
 target lease must still pin the parent's return context and CPU custody while
 the child exclusively runs, then allow the parent to resume only after the
-child is classified and in custody. Any other nested in-hook child path must
-also release mutable parent queue/frame and machine-state loans before B runs.
+child is classified and in custody. The current native-entry precondition
+refuses a second guest entry from A's live callback. Any future in-callback
+child route needs a separate source/test gate and must release mutable parent
+queue/frame and machine-state loans before B runs.
 
 ##### Candidate O-T7 slot and lease contract (for review; no Rust API exists)
 
@@ -537,6 +539,11 @@ same-PID CPU with a different thread context, and a parked CPU may itself
 contain displaced contexts. The slot is resource custody, not a second
 Process/Task record. Canonical HandleTable remains the only lifecycle authority.
 
+The [common anchor](../ARCHITECTURE.md#a1-machine-authority) defines the
+machine/slot/permit contract, and [PLAN Step 3](../PLAN.md) stages O-T7a.
+Here, canonical HandleTable Task/frame state and Scheduler-derived wait/ready
+indexes remain authoritative; a CPU slot or parked locator is not a Task.
+
 One implementable *candidate*, not a selected Rust API, is a private directory
 of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
 a separately inspectable checked state header, and a `RefCell<CpuPayload>`;
@@ -546,13 +553,15 @@ loans may hold a temporary private `Rc`. A non-executing
 a short, fallible directory borrow, releases that borrow, then uses
 `try_borrow_mut` on **that slot only** for the closure. It does not
 build a self-referential guard containing both an `Rc` and a `RefMut`, return an
-unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry. A
-parent's payload loan may stay on the paused import-hook stack while a
-different child slot is admitted and run; metadata/readiness queries must use
-the separate header, not try to reborrow the paused parent payload. Attempted
-same-slot reentry stops or defers with a typed conflict, never creates a
-second executable loan. A separate slot-loan latch, checked with the key's
-generation, must make `retire_exact` refuse removal/reuse while any payload
+unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry.
+During the current deferred handoff, A's payload loan may stay on the outer
+post-native handoff stack while a different child slot is admitted and run;
+A's native callback and `emu_start` have already returned. Metadata/readiness
+queries must use the separate header, not try to reborrow the held parent
+payload. Attempted same-slot reentry stops or defers with a typed conflict;
+it never creates a second executable loan. A separate slot-loan latch,
+checked with the key's generation, must make `retire_exact` refuse
+removal/reuse while any payload
 loan or run permit exists; cloning the private `Rc` alone does not ensure
 that. The directory remains the durable registration/CPU owner after each
 scoped loan ends.
@@ -578,15 +587,17 @@ the machine gate in a connected implementation. A private `Rc` clone or
 mutable payload reference never grants execution authority by itself.
 
 The candidate machine run permit is a checked *leaf* token, distinct from a
-backend native-engine lease. `suspend_parent_for_child` changes A's permit to
-`SuspendedForChild` and issues a scoped `ParentSuspension`; B may then become
-the one executable leaf. For current `CreateProcessW`, A's native attempt has
-already stopped with its import-return PC staged; its CPU and return context
-remain pinned until B is classified and the parent token resumes after exact
-birth/frame revalidation. If another nested path pauses A's `emu_start` in a
-callback, A still cannot execute another guest instruction while B owns the
-leaf. Nested B→C repeats the transfer; no directory, parent queue or canonical
-Task borrow spans the child run. A typed
+backend native-engine lease. `suspend_parent_for_child` revokes A's executable
+permit and issues a scoped `ParentSuspension`; the directory issues a
+distinct exact-birth B permit as the one executable leaf. For current
+`CreateProcessW`, A's native attempt has already stopped with its
+import-return PC staged; its CPU and return context remain pinned until B is
+classified. A may receive a new permit only after exact birth/frame
+revalidation. The current native-entry precondition refuses another guest
+entry from A's live callback. Any future route that pauses A's `emu_start` in
+a callback needs a separate source/test gate and must still revoke A's permit
+before issuing B's. Nested B→C repeats revocation and separate issuance;
+no directory, parent queue or canonical Task borrow spans the child run. A typed
 execution/custody error or abandoned guard leaves the admitted slot
 stopped/non-runnable in custody and
 stops the parent instead of silently resuming either actor. Infallible
@@ -596,9 +607,9 @@ details and checked recovery remain explicit operations, not `Drop` success.
 The proposed operations are `reserve_launch` (exact-birth pending claim and
 capacity), `admit_cpu` (put the newly constructed payload in its slot before
 fallible DLL load or native entry), `begin_run`/`finish_run` (validated
-task/frame lease and typed stop), `suspend_parent_for_child` (exclusive token
-transfer at the deferred `CreateProcessW` handoff or another nested run),
-`prepare_exit_exact` and
+task/frame lease and typed stop), `suspend_parent_for_child` (revoke A's
+permit and separately issue B's at deferred `CreateProcessW`; another nested
+run would require its own route gate), `prepare_exit_exact` and
 `commit_exit` (preflight/reserve before Kernel effects, then infallible
 original-locator splice), and `quarantine_exact`/`retire_exact` (never infer
 retirement from queue absence). These names describe responsibilities, not
@@ -635,7 +646,7 @@ contract. The current `UnicornMips` recursively contains boxed
 locators as part of this cut. The two existing rotation-policy sites may
 retain their present policy until Stage 5, but cannot bypass custody or the
 canonical Task/Frame checks. A conventional long-lived `&mut CpuCustody`
-borrow cannot span parent A's native hook and also admit/run B; whichever
+borrow cannot span A's post-native child handoff and also admit/run B; whichever
 stable per-slot interior or scoped guard representation is chosen must release
 directory and parent queue/frame borrows before the nested run, use fallible
 reentry checks rather than panicking `RefCell` borrows, and return every lease
@@ -664,9 +675,9 @@ fail-closed, not a `RefCell` panic or an unchecked raw-pointer alias; this
 does not yet prove every existing pending-return `RefCell` safe. Until those
 hook/Kernel/framebuffer loans are removed or explicitly proven at one
 narrowly audited unsafe boundary, O-T7 cannot claim a sound machine lease
-even if CPU owner-loss reds turn green. In any remaining nested in-hook path,
-A's native owner may remain open while its callback is paused, but only the
-checked leaf permit grants guest execution to B.
+even if CPU owner-loss reds turn green. A future in-callback child route would
+need a separate source/test gate and the same checked leaf authority; current
+`CreateProcessW` does not run B while A's native callback is paused.
 
 ##### Cut 3a quarantine resource lifetime (bounded source-test gate)
 
@@ -859,7 +870,7 @@ requires B to remain selected would reject this reached path; treating the
 returned C payload as B's reserved CPU would mislabel custody. The focused
 witnessed two-node handoff below checks A restoration and transfers B/C
 under separate legacy-queue labels; general restoration and machine-owned
-slot/leaf transfer remain O-T7 work. This earlier fixture did not prove
+slot/leaf migration remain O-T7 work. This earlier fixture did not prove
 actual CPU loss or live-app behavior.
 
 The follow-on [enabled CPU census and refusal gate](../../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)

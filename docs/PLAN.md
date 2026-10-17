@@ -412,9 +412,12 @@ not an implemented owner. Stage its connected source cut in this order:
    closure-scoped fallible payload loans. Gate backend entry on the exact
    active leaf permit, and forbid slot retirement/reuse while any loan or
    permit exists; a private `Rc` clone is not that gate. A checked
-   `ParentSuspension` transfers the one executable leaf permit A→B while A's
-   staged return context is pinned; a different nested path may still pause
-   A's native callback. B is classified into custody before A may resume.
+   `ParentSuspension` revokes A's executable permit while its staged return
+   context is pinned; the directory then issues a distinct birth-bound B
+   permit. B runs only after A's native attempt closes at the deferred
+   post-native handoff and is classified in custody before A may resume.
+   The native-entry precondition refuses guest entry from A's live callback;
+   any future in-callback route needs a separate source/test gate.
    The **design-only O-T7a contract** specifies a directory key of
    machine lineage/index/checked generation and one exact process birth's
    process-local CPU payload per admitted slot, with its same-process thread
@@ -454,29 +457,36 @@ not an implemented owner. Stage its connected source cut in this order:
    register changes or wait consumption, failing terminally on refusal.
    `set_unverified` must revoke or block the leaf on the same boundary;
    neither operation may mint authority from the selected thread cell.
-   No admitted CPU may have two owners.
-   After review, migrate ordinary verified-child publication first, the
-   witnessed rotated pair second, `Completed` append with parked-tree
-   locators third, then modal and wait families. The first connected
-   source/test cut must include its red and fix together: an ordinary
-   real-MIPS A→B control requires A's boot CPU and B's original CPU in the
-   same machine directory, each in exactly one birth-bound slot, with B
-   `Runnable` under canonical revalidation, absent as a CPU box from
-   `parked_child_processes`, and B's next slice under a directory-issued
-   primary-thread permit. Merely putting B in a slot while A stays an
-   external CPU owner is preparatory, not connected custody. Retain
-   rotated-pair, queue-conflict, checkpoint refusal and
-   zero-abandoned-unbound-tree controls. Fence every unported execution
-   bypass in that gate, including public/direct and neutral Event child
-   paths; connect the normal drain and both selectors for its supported
-   shape. Full O-T7 still needs active/park/switch, exit/prune/hoist,
-   monitor/checkpoint and all remaining owner paths under the same
-   authority. Because boot A would live in custody, the current strict
-   checkpoint lineage guard will refuse monitor save/restore from boot;
-   update checkpoint controls to expect that refusal explicitly. Rewind
-   remains unavailable until whole-machine relineage lands. This staged
-   contract is not an implemented slot API or
-   live-app acceptance.
+   Before CPU construction, Kernel's exact pending-launch claim owns the
+   launch, not a CPU. Admit each constructed B/C payload into its own
+   exact-birth slot before its first guest instruction; a failed admission
+   releases the exact claim for same-birth retry before guest effects. At
+   every point after admission, each CPU has exactly one owner: its slot or
+   the separate stopped unbound hold for an unverifiable legacy tree.
+   Neither a local variable nor `parked_child_processes` may own an admitted
+   CPU. Resolve the run's `Leased` phase and publish cross-process locator
+   edges atomically after classification.
+   The first connected source/test cut migrates boot A and verified child
+   publication for both ordinary A→B and the already-green witnessed
+   A→B→C path together. B and C each enter their own slots before running;
+   the shared destination and both main/monitor selectors issue exact
+   directory permits. Fence `activate_parked_process` for directory-owned
+   births and every unported public/direct or neutral Event execution path
+   before effects. Keep the old two-node decomposition only as a checked
+   import if an already-existing tree can still reach it; remove it if no
+   producer remains. The paired red and fix must cover ordinary A→B and
+   the A→B→C directory/progress census, B's next-slice primary-thread
+   permit, a pre-native-entry custody witness for each child, bypass
+   refusal and from-boot checkpoint refusal. Preserve the
+   green rotated progress, queue-conflict and zero-abandoned-tree controls.
+   An ordinary-only slot while rotated execution still uses boxed CPUs is
+   preparatory, not connected custody. Migrate `Completed` locator append
+   next, then modal and wait families. Full O-T7 still needs remaining
+   active/park/switch, exit/prune/hoist, monitor/checkpoint and owner paths
+   under the same authority. With boot A in custody, the strict checkpoint
+   guard refuses save/restore from boot; rewind remains unavailable until
+   whole-machine relineage. This is not an implemented slot API or live-app
+   acceptance.
    Keep a claimed launch in Kernel's original queue until admission/checked
    completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive

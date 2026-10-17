@@ -59,33 +59,8 @@ image/DLL, safe heap reuse, clone-lineage or full Stage 2 gates.
 | O-T4 | Scope of termination-in-progress and pending-suspend parity with CE6. | open |
 | O-T5 | Priority-inheritance/ceiling coverage (shared with O-K6). | open |
 | O-T6 | OEM default quantum configuration; extract from dumped kernel/OAL evidence, not a guessed 10 ms or the shim's 100 ms. | open |
-| O-T7 | Review the [candidate machine-owned CPU slot/lease contract](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists): one centrally owned payload per slot, key = machine lineage + index + checked generation, exact process birth fixed at admission, task/frame provenance checked on each context lease, and Scheduler queues containing only locators. Multiple slots per process and distinct frames per slot are allowed, but executable lease and structural locator cardinality must be checked. The proposed private stable per-slot cell plus short directory borrow/closure-scoped fallible payload loan avoids a self-referential lease; a checked leaf permit and `ParentSuspension` transfer A→B while A's native callback is paused. Settle exact pending-launch claim in Kernel's existing queue, connected conversion of every recursive/active/displaced CPU owner to locators, non-runnable post-admission custody, partial-effect quarantine, infallible accepted-exit survivor splice, and atomic checkpoint relineage or fail-closed live-custody save/restore. Before claiming a sound whole-machine lease, replace or narrowly prove current long-lived `&mut CeKernel`/raw `kernel_ptr` and framebuffer reentry with callback-scoped fallible machine-state loans and an exit event fence. This candidate is not implementation or a decision to change Stage 5 policy. | open |
-| O-T7a | Review the [Step 3 staged slot/leaf contract](PLAN.md): first migrate both A's boot CPU and B's original CPU into one machine directory for ordinary verified A→B, then the witnessed rotated pair, `Completed` locators, and modal/wait families. Each verified slot binds one exact-birth process-local CPU payload; cross-process parked edges become locators. Same-process extra slots require an explicit distinct-payload custody fork and review; unverified mixed trees remain separately held, not falsely birth-bound. `Reserved`/`Runnable`/`Leased`/`Parked`/`Quarantined`/`Retired` describe custody, never replace canonical Task/frame lifecycle or Scheduler readiness. A directory-issued, attempt-scoped leaf permit binds slot generation, exact thread birth and optional frame provenance; `MachineKernelPort` and fallible intra-slice thread switches must validate it. Parent suspension and accepted-exit zero-loan retirement remain required. The next connected cut must include both expected-red and fix for ordinary A→B, plus owner-count and existing conflict/checkpoint controls. This is a selected *review sequence*, not an implemented Rust API or a resolved whole-machine lease. | open |
-
-O-T7 review must also distinguish a generic `with_cpu` payload loan from an
-executable lease: only the exact active-leaf run permit can enter the backend.
-The private per-slot cell does not by itself prevent retirement or reuse;
-a generation-checked slot-loan/retire latch must reject either while a payload
-loan or permit is outstanding. Callback-scoped machine-state loans alone do
-not prove every pending-return `RefCell` safe.
-
-For O-T7a, every `Leased` attempt must resolve to derived `Runnable` or
-`Parked` eligibility on success, typed non-runnable `Quarantined` custody on a
-post-admission native fault or terminal/`RecoveryRequired` port failure, or
-`Retired` after accepted exact exit and zero outstanding loans/permits. Boot A
-custody also makes the existing strict checkpoint guard refuse save/restore
-from boot until whole-machine relineage; its controls must expect that refusal.
-These are design requirements, not implemented transitions or checkpoint
-acceptance. The future permit also needs a checked binding to the live Kernel
-instance/lineage: `CeKernel` is currently cloneable and its process/thread
-birth keys contain no machine lineage, so a copied birth alone must never
-authorize execution of a clone. The live Kernel/directory lineage pair must
-be established once at machine creation and checked before permit issuance
-and use; a custom clone or non-clone lineage cell must make a Kernel clone
-fresh or poisoned, never copy the live lineage. Cloned Kernel + original
-directory and original Kernel + fresh directory each need typed pre-effect
-refusal controls. Clone/checkpoint execution stays fail-closed until explicit
-whole-machine relineage.
+| O-T7 | Review the [candidate machine-owned CPU directory](subsystems/tasks-scheduler.md#candidate-o-t7-slot-and-lease-contract-for-review-no-rust-api-exists) against [A1's normative ownership contract](ARCHITECTURE.md#a1-machine-authority): multi-slot/frame cardinality, scoped payload loans versus executable permits, checked retirement/survivor moves, partial-effect quarantine, callback reentry and the exit fence. A's permit is revoked before a distinct exact-birth B permit is issued; no permit object transfers between tasks. Full connected conversion and checkpoint relineage remain open; this does not change Stage 5 policy. | open |
+| O-T7a | The [PLAN Step 3 sequence](PLAN.md) combines ordinary real-MIPS A→B and the already-green witnessed A→B→C path in one first connected red-and-fix cut: boot A and each admitted child own distinct exact-birth slots before guest execution; both selectors use directory-issued permits, and legacy/unported execution bypasses refuse before effects. Preserve rotated progress, queue-conflict and unbound-hold controls. `Completed`, modal and wait families follow. Clone/directory mismatch and from-boot checkpoint refusals are required controls. This is an open implementation gate, not an implemented Rust API or whole-machine lease. | open |
 
 ### Clock and timers ([page](subsystems/clock-timers.md)) - needed before Stage 6
 
