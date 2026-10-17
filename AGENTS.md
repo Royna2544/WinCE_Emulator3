@@ -359,16 +359,20 @@ image setup but before consuming its exact claim or executing guest child
 instructions. The launch remains pending for machine-owned recovery; the
 public parent's attempt is poisoned, not safely retryable in-session. This
 does not create a runnable custody slot or exact executing-leaf permit. The
-[focused witnessed two-node rotated handoff](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+[bounded witnessed two-node rotated handoff](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
 verifies C-root/parked-B with exact live births and selected C image, restores
 A's caller, and publishes the original B/C CPUs under their own legacy-queue
 labels; later real-MIPS A/B/C slices execute. The separate
-[a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+[a21 final-source no-witness control](evidence/stage3-rotated-handoff-20261017/a21-final-no-witness.raw.log)
 retains an unwitnessed nested E→D tree whole and stopped. The
 [a09 selection observation](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
 ends with ordinary outer rotation selecting B/B after A restoration, not A.
-These are focused tests only, not a broad seal, machine-owned runnable slots,
-exact leaf authority, general recovery or live-app acceptance. The
+The final-source a20 inherited-directory controls passed **3/0**, a21
+no-witness **1/0**, 19-block release-feature **2,231/0/9 ignored** and
+no-default **1,564/0/2 ignored**; Unicorn-only and CI desktop feature checks
+exited 0. B's inherited directory is checked against the saved A directory;
+a later guest mutation can fail closed. This is not machine-owned runnable
+slots, exact leaf authority, general recovery or live-app acceptance. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
 passes 171 source/build-chain controls and 83 runner guards; it requires a
 future fresh output-hash-stamped rebuild and does not authorize a run.

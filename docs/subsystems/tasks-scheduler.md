@@ -64,7 +64,7 @@ In scope: authentic task birth/exit, runnable state, explicit suspension, waits,
 - Thread/process `DuplicateHandle` aliases now share canonical mutable records; O-K3 separately keeps execution-live births and exact registered Thread/Process wait pins after public-alias closure. The [E-26](../evidence/ledger.md) one-pass/twelve-ignored result and twelve explicit reds are historical pre-fix baselines. Later bounded [alias](../../evidence/stage3-alias-20261014/validation.receipt.md), [owner](../../evidence/stage3-owner-20261014/validation.receipt.md), [pin](../../evidence/stage3-pins-20261015/validation.receipt.md) and [wait-preparation](../../evidence/stage3-waitprep-20261015/validation.receipt.md) gates turned their named controls green, including the E-11 pin controls. Boot-main enumeration, full primary completion, public-ID exhaustion, machine clone relineage and generic object aliases are not thereby accepted.
 - [Scheduler](../../src/ce/scheduler.rs) stores waits through one [TaskWaitStore](../../src/ce/task_wait.rs), keyed by exact `Birth(ThreadBirthKey)` or explicit `LegacyUnknownTid(u32)` compatibility owner. Finite-Sleep waits carry an immutable `TaskFrameRef` and select only the exact active blocked frame; other waits preserve their compatibility selection/subscription behavior. Wait IDs are locators, not a second authority.
 - [UnicornMips](../../src/emulator/unicorn.rs) keeps a frame-addressed native register payload for finite Sleep alongside numerous compatibility pending return, blocked wait/GetMessage/modal/send/clipboard, suspended context and parked process records. SuspendedGuestThread slot/queue often contains **ready displaced contexts**, not explicit SuspendThread state.
-- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. That [bounded source-path gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md) alone did not provide machine-owned CPU custody. Cut 3a retains an admitted, faulted child CPU non-runnable after native sync/finish; the later connected cut adds the bounded Kernel/framebuffer port and unbound child-tree retention. A newer focused witnessed two-node A→B→C handoff executes later A/B/C slices through the legacy parked queue, with checked A restoration before B/C publication; a no-witness nested return still stops with the whole tree retained. The public no-custody path refuses child admission after local setup while preserving the pending launch. Machine-owned runnable custody, exact leaf authority, general restoration, Stage 5 scheduling and live-app acceptance remain open.
+- In the current D: source, a successful guest `CreateProcessW` stages the parent's nonzero import-return PC and stops that native attempt in both non-live and live-pump modes. Child loading/running uses the post-native pending-launch path, not an immediate child run through the parent import hook's raw Kernel/framebuffer pointers. Normal non-live rotation may select the child before the parent executes another instruction. That [bounded source-path gate](../../evidence/stage3-createprocess-deferred-20261017/validation.receipt.md) alone did not provide machine-owned CPU custody. Cut 3a retains an admitted, faulted child CPU non-runnable after native sync/finish; the later connected cut adds the bounded Kernel/framebuffer port and unbound child-tree retention. The [bounded witnessed two-node A→B→C handoff](../../evidence/stage3-rotated-handoff-20261017/validation.receipt.md) executes later A/B/C slices through the legacy parked queue, with checked A restoration before B/C publication; a no-witness nested return still stops with the whole tree retained. The public no-custody path refuses child admission after local setup while preserving the pending launch. Machine-owned runnable custody, exact leaf authority, general restoration, Stage 5 scheduling and live-app acceptance remain open.
 - Persistent process engines are an experiment (ledger E-2) deferred to Stage 8; Task migration proceeds on the fresh-engine lifetime ([D-003](../DECISIONS.md)). Exact-scalar-key native snapshots are an initial migration, not full per-task native contexts.
 
 ### Bounded exact-birth wait-owner gate (source-tested)
@@ -766,7 +766,7 @@ controls pass on one sealed source. It does **not** issue an independently
 checked executing-thread/leaf permit, check general post-B restoration or fence exit
 events. At that connected seal, public/direct-fixture `custody=None` and
 runnable recovery remained open; the later no-custody admission fence below
-closes only the tested admission bypass. A still-later focused witnessed
+closes only the tested admission bypass. A still-later bounded witnessed
 two-node handoff checks A's exact caller restoration before legacy-queue B/C
 publication; it is not this full port/leaf contract. Subsequent "current" wording and
 the table below describe the earlier pre-port proposal/seals unless a later
@@ -874,9 +874,10 @@ later bounded legacy-queue handoff below progresses the exact two-node
 shape; full O-T7 still requires machine-owned exact slots and an issued
 leaf permit, not a weakened preflight or relabeled payload.
 
-##### Witnessed two-node rotated child handoff (focused source tests)
+##### Witnessed two-node rotated child handoff (bounded source/test gate)
 
-An enabled real-MIPS A→B→C control first failed at the B-origin return
+The [final receipt](../../evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+seals this narrow cut. An enabled real-MIPS A→B→C control first failed at the B-origin return
 ([a01 red](../../evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)).
 The later focused [a10](../../evidence/stage3-rotated-handoff-20261017/a10-nested-three-shapes.raw.log)
 and [a11](../../evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
@@ -890,8 +891,15 @@ passes with C selected/active at B's return; after exact A restoration,
 ordinary outer rotation finally selects B with B's CPU, not A. The
 [a12 no-witness control](../../evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
 still stops the whole nested E→D tree and preserves untouched outer sibling
-order. This is focused legacy-queue progress, not a broad source seal,
-general rotated-tree transfer, machine-owned runnable slots, an independently
+order. Final-source a20 inherited-directory nested tests passed **3/0** and
+a21 no-witness **1/0**. The 19-block release-feature and no-default suites
+passed **2,231/0/9 ignored** and **1,564/0/2 ignored**; Unicorn-only and CI
+desktop checks exited 0 with unchanged source hashes. B's effective
+directory is bound to its explicit launch directory or the exact saved A
+directory used in setup, and C to its own launch or bound B directory. Later
+guest mutation of B's directory may fail closed. The interrupted a19 partial
+release output is invalid, not validation. This is bounded legacy-queue
+progress, not general rotated-tree transfer, machine-owned runnable slots, an independently
 issued leaf permit, in-session recovery, Stage 3/O-T7 or live-app acceptance.
 
 A preparatory crate-private `SelectedProcessContextStamp` now captures the

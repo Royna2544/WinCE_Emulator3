@@ -328,7 +328,8 @@ not an implemented owner. Stage its connected source cut in this order:
    preserved A/B/C payloads but reached typed `NoAttempt` on the next call
    because B was selected with C's CPU. At its seal the connected cut stopped
    earlier and retained the returned C-root/B-parked tree as unverified. A
-   newer focused witnessed two-node branch publishes B and C under their
+   newer [bounded witnessed two-node branch](../evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+   publishes B and C under their
    own legacy-queue labels and executes later exact-owner A/B/C guest slices;
    a no-witness nested E→D return remains `UnverifiedStopped`. This is not
    the full O-T7 slot/leaf migration or general post-child recovery.
@@ -342,7 +343,7 @@ not an implemented owner. Stage its connected source cut in this order:
    `emu_start` or B's nested run. This is not the full proposed contract:
    entry verifies selected process birth, not the final executing thread;
    callback thread/slice token values are self-compared rather than issued by
-   an independent leaf owner. The focused witnessed two-node branch checks
+   an independent leaf owner. The bounded witnessed two-node branch checks
    exact A caller restoration before publishing B/C, and its a09 observation
    finishes with B selected after ordinary outer rotation, not A. Prove
    framebuffer callback conflicts where reachable, exact selected-birth/PID
@@ -391,10 +392,14 @@ not an implemented owner. Stage its connected source cut in this order:
    before claim consumption, CPU admission or guest child execution. It
    retains the exact launch for machine-owned recovery while poisoning the
    public parent's attempt; no same-session retry, runnable slot, checked
-   leaf authority or broader classifier/exit closure follows. A later focused
-   real-MIPS witnessed two-node handoff publishes the exact B/C payloads
+   leaf authority or broader classifier/exit closure follows. A later
+   [bounded real-MIPS witnessed two-node handoff](../evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+   publishes the exact B/C payloads
    through the legacy queue, while a nested no-witness E→D return stays
-   stopped with its original tree. This does not migrate runnable/parked
+   stopped with its original tree. Its final-source 19-block release/no-default
+   suites pass **2,231/0/9 ignored** and **1,564/0/2 ignored**, plus two feature
+   checks. B's inherited directory is checked against saved A; a later guest
+   mutation can fail closed. This does not migrate runnable/parked
    CPUs into machine slots or complete O-T7.
    Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad

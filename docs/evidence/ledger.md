@@ -2878,7 +2878,7 @@ same-session retry is not proven. This gate does not create a runnable slot,
 issue a leaf permit, repair post-B restoration or settle other classifier/
 exit paths. No iNavi or writable-mount run followed.
 
-## Witnessed two-node rotated child handoff (2026-10-17, focused source tests)
+## Witnessed two-node rotated child handoff (2026-10-17, bounded source/test gate)
 
 The enabled real-MIPS A→B→C [a01 expected red](../../evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)
 stopped at the prior B-origin C-root/B-parked mismatch before the required
@@ -2895,8 +2895,15 @@ passed **1/0**: C is selected/active when B returns, and ordinary outer
 rotation finally selects B/B after A restoration, not A. The focused
 [a12 no-witness control](../../evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
 passed **1/0** and retains a nested E→D tree whole and stopped, preserving
-untouched outer siblings in order. These are focused attempts pending a
-final source/broad receipt, not machine-owned runnable slots, an exact
+untouched outer siblings in order. The [final source/broad receipt](../../evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+seals the later a20 inherited-directory nested controls at **3/0**, a21
+no-witness at **1/0**, 19-block a22 release-feature at **2,231/0/9 ignored**,
+19-block a23 no-default at **1,564/0/2 ignored**, and a24/a25 feature checks
+at exit 0, all with unchanged tested source hashes. B's effective directory
+is checked against its explicit launch or exact saved A directory, and C
+against its own launch or that bound B directory; later guest mutation can
+fail closed. The interrupted a19 partial release log lacks terminal stamps
+and is not validation. This is not machine-owned runnable slots, an exact
 executing-leaf permit, general recovery, full O-T7 or live-app acceptance.
 No app or writable mount was run.
 

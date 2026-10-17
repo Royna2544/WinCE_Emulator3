@@ -358,12 +358,16 @@ load error or a proven same-session retry. It does not issue an exact leaf
 permit, turn the child into a runnable custody slot, or close other
 post-admission publication/exit paths.
 
-A later focused real-MIPS source cut handles only a witnessed, exact
+A later [bounded real-MIPS source/test gate](../evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+handles only a witnessed, exact
 C-root/one-parked-B return from A→B→C. It verifies the original CPU and
 canonical process/primary-thread births, C's selected image, and A's live
 caller/selection restoration before one fallible parent-queue borrow and
 two-entry reservation. It then publishes the original B and C payloads under
-their own labels; later A/B/C guest slices execute in the focused control.
+their own labels; later A/B/C guest slices execute in the sealed control.
+It binds B's effective directory to its explicit launch directory or the
+saved A directory inherited during setup, then checks C against its own
+launch or that bound B directory; later guest mutation can fail closed.
 Selection/image challenges stop with the intact tree retained. Without the
 parent witness, a nested E→D control still retains the whole tree as
 `UnverifiedStopped`. At B's return C remains selected; after A restoration,
