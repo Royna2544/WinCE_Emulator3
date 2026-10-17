@@ -83049,23 +83049,48 @@ mod unicorn_tests {
             .handles
             .process_birth_key_for_handle(queued[1].process_handle.expect("C handle"))
             .expect("C birth");
-        assert_eq!(observations.len(), 2, "one observation per child return");
+        assert_eq!(
+            observations.len(),
+            1,
+            "B's mismatched return must stop before the second observation"
+        );
         assert_eq!(observations[0].launch_birth, leaf_birth);
-        assert_eq!(observations[1].launch_birth, child_birth);
         eprintln!(
-            "POST_CHILD_SELECTION C={:?} B={:?} parent={parent_birth:?} final_selected={:?}",
+            "POST_CHILD_SELECTION C={:?} parent={parent_birth:?} final_selected={:?}",
             observations[0],
-            observations[1],
             kernel.current_process_birth_key()
         );
         assert_eq!(observations[0].selected_birth, Some(leaf_birth));
         assert_eq!(observations[0].selected_cpu_birth, Some(leaf_birth));
+        let retained = custody.retained_tree_snapshots();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].origin_birth, child_birth);
         assert_eq!(
-            observations[1].selected_birth,
-            Some(leaf_birth),
-            "nested C is the selected process when B returns before A's restoration"
+            retained[0].state,
+            crate::emulator::cpu_custody::RetainedTreeState::UnverifiedStopped
         );
-        assert_eq!(observations[1].selected_cpu_birth, Some(leaf_birth));
+        custody
+            .with_retained_tree(retained[0].key, |tree| {
+                assert_eq!(
+                    tree.owned_process_launch
+                        .as_ref()
+                        .and_then(|owned| owned.process_birth),
+                    Some(leaf_birth),
+                    "the mismatched returned root still owns C"
+                );
+                assert!(
+                    tree.parked_child_processes.iter().any(|parked| {
+                        parked
+                            .cpu
+                            .owned_process_launch
+                            .as_ref()
+                            .and_then(|owned| owned.process_birth)
+                            == Some(child_birth)
+                    }),
+                    "the retained C tree still contains B's original CPU"
+                );
+            })
+            .expect("mismatched returned tree remains in custody");
         Ok(())
     }
 
