@@ -6,7 +6,12 @@
 
 use std::cell::{Cell, OnceCell, RefCell, RefMut};
 
-use crate::ce::{framebuffer::Framebuffer, kernel::CeKernel, object::ProcessBirthKey};
+use super::cpu_custody::{CpuCustodyError, CpuLeafPermit, CpuLeafVerifier};
+use crate::ce::{
+    framebuffer::Framebuffer,
+    kernel::{CeKernel, CpuMachineLineageError},
+    object::ProcessBirthKey,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AttemptAuthority {
@@ -22,6 +27,20 @@ pub(crate) enum MachinePortFailure {
     WrongAttempt { operation: &'static str },
     #[error("machine-state attempt already active during {operation}")]
     AttemptBusy { operation: &'static str },
+    #[error("CPU directory is required during {operation}")]
+    MissingCpuDirectory { operation: &'static str },
+    #[error("CPU machine binding refused during {operation}: {reason}")]
+    CpuMachineBinding {
+        operation: &'static str,
+        reason: CpuMachineLineageError,
+    },
+    #[error("CPU execution permit is required during {operation}")]
+    MissingCpuLeaf { operation: &'static str },
+    #[error("CPU execution permit refused during {operation}: {reason}")]
+    CpuLeaf {
+        operation: &'static str,
+        reason: CpuCustodyError,
+    },
 }
 
 struct MachineState<'machine> {
@@ -59,6 +78,8 @@ impl MachineStateLoan<'_, '_> {
 pub(crate) struct MachineKernelPort<'machine> {
     state: RefCell<MachineState<'machine>>,
     active: Cell<Option<AttemptAuthority>>,
+    leaf_verifier: Option<CpuLeafVerifier>,
+    selected_leaf: Cell<Option<CpuLeafPermit>>,
     first_terminal: OnceCell<MachinePortFailure>,
 }
 
@@ -71,6 +92,7 @@ impl Drop for ActiveAttemptGuard<'_, '_> {
     fn drop(&mut self) {
         if self.port.active.get() == Some(self.authority) {
             self.port.active.set(None);
+            self.port.selected_leaf.set(None);
         }
     }
 }
@@ -80,14 +102,86 @@ impl<'machine> MachineKernelPort<'machine> {
         kernel: &'machine mut CeKernel,
         framebuffer: &'machine mut (dyn Framebuffer + 'machine),
     ) -> Self {
+        Self::new_with_optional_cpu_directory(kernel, framebuffer, None)
+    }
+
+    pub(crate) fn new_with_cpu_directory(
+        kernel: &'machine mut CeKernel,
+        framebuffer: &'machine mut (dyn Framebuffer + 'machine),
+        verifier: CpuLeafVerifier,
+    ) -> Self {
+        Self::new_with_optional_cpu_directory(kernel, framebuffer, Some(verifier))
+    }
+
+    fn new_with_optional_cpu_directory(
+        kernel: &'machine mut CeKernel,
+        framebuffer: &'machine mut (dyn Framebuffer + 'machine),
+        leaf_verifier: Option<CpuLeafVerifier>,
+    ) -> Self {
         Self {
             state: RefCell::new(MachineState {
                 kernel,
                 framebuffer,
             }),
             active: Cell::new(None),
+            leaf_verifier,
+            selected_leaf: Cell::new(None),
             first_terminal: OnceCell::new(),
         }
+    }
+
+    fn check_cpu_pairing(
+        &self,
+        kernel: &CeKernel,
+        operation: &'static str,
+    ) -> Result<(), MachinePortFailure> {
+        match &self.leaf_verifier {
+            Some(verifier) => kernel
+                .require_cpu_machine_lineage(verifier.machine_lineage())
+                .map_err(|reason| {
+                    self.record_terminal(MachinePortFailure::CpuMachineBinding {
+                        operation,
+                        reason,
+                    })
+                }),
+            None if kernel.requires_cpu_machine_relineage() => {
+                Err(self.record_terminal(MachinePortFailure::CpuMachineBinding {
+                    operation,
+                    reason: CpuMachineLineageError::RequiresRelineage,
+                }))
+            }
+            None if kernel.cpu_machine_lineage().is_some() => {
+                Err(self.record_terminal(MachinePortFailure::MissingCpuDirectory { operation }))
+            }
+            None => Ok(()),
+        }
+    }
+
+    fn check_cpu_leaf(
+        &self,
+        authority: AttemptAuthority,
+        operation: &'static str,
+    ) -> Result<(), MachinePortFailure> {
+        let Some(verifier) = &self.leaf_verifier else {
+            return Ok(());
+        };
+        let permit = self.selected_leaf.get().ok_or_else(|| {
+            self.record_terminal(MachinePortFailure::MissingCpuLeaf { operation })
+        })?;
+        if authority.process_birth != Some(permit.birth()) {
+            return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
+        }
+        verifier
+            .validate(
+                permit,
+                permit.key(),
+                permit.birth(),
+                permit.thread_birth(),
+                permit.frame(),
+            )
+            .map_err(|reason| {
+                self.record_terminal(MachinePortFailure::CpuLeaf { operation, reason })
+            })
     }
 
     pub(crate) fn record_terminal(&self, failure: MachinePortFailure) -> MachinePortFailure {
@@ -108,6 +202,7 @@ impl<'machine> MachineKernelPort<'machine> {
             .state
             .try_borrow_mut()
             .map_err(|_| self.record_terminal(MachinePortFailure::LoanBusy { operation }))?;
+        self.check_cpu_pairing(state.kernel, operation)?;
         Ok(MachineStateLoan { state })
     }
 
@@ -131,6 +226,27 @@ impl<'machine> MachineKernelPort<'machine> {
         if state.kernel.current_process_birth_key() != authority.process_birth {
             return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
         }
+        self.check_cpu_pairing(state.kernel, operation)?;
+        if let Some(verifier) = &self.leaf_verifier {
+            let permit = verifier.current_permit().ok_or_else(|| {
+                self.record_terminal(MachinePortFailure::MissingCpuLeaf { operation })
+            })?;
+            if authority.process_birth != Some(permit.birth()) {
+                return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
+            }
+            verifier
+                .validate(
+                    permit,
+                    permit.key(),
+                    permit.birth(),
+                    permit.thread_birth(),
+                    permit.frame(),
+                )
+                .map_err(|reason| {
+                    self.record_terminal(MachinePortFailure::CpuLeaf { operation, reason })
+                })?;
+            self.selected_leaf.set(Some(permit));
+        }
         drop(state);
         self.active.set(Some(authority));
         Ok(ActiveAttemptGuard {
@@ -150,7 +266,9 @@ impl<'machine> MachineKernelPort<'machine> {
         if self.active.get() != Some(authority) {
             return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
         }
-        self.try_loan(operation)
+        let state = self.try_loan(operation)?;
+        self.check_cpu_leaf(authority, operation)?;
+        Ok(state)
     }
 
     pub(crate) fn try_with_attempt_state<R>(

@@ -1,19 +1,22 @@
-//! Terminal, exact-birth custody for a CPU whose native attempt failed.
+//! Exact-birth CPU custody and a directory-issued, revocable execution leaf.
 //!
-//! This is a deliberately narrow holding directory. It does not schedule a
-//! quarantined CPU, reconstruct a continuation, or own Kernel VM/file views.
-//! A caller reserves capacity before constructing/running the child, then
-//! moves the original CPU into that slot without allocation after a fault.
+//! The runnable-slot API is a resource owner, not a Task or Scheduler. The
+//! caller must independently validate the canonical Kernel lineage, thread
+//! birth and frame before issuing or using a leaf. The legacy terminal slot
+//! and separate unverified whole-tree hold remain available during migration.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell, RefMut},
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::{
-    ce::{kernel::AcceptedProcessExit, object::ProcessBirthKey},
+    ce::{
+        kernel::{AcceptedProcessExit, CeKernel, CpuMachineLineageError},
+        object::{ProcessBirthKey, TaskFrameKey, TaskFrameRef, ThreadBirthKey},
+    },
     emulator::{
         cpu::{CpuBackend, UnicornMips},
         types::{NativeSliceOutcome, UnicornMemoryFault},
@@ -92,7 +95,96 @@ impl CpuCustodyKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CpuCustodyState {
     Reserved,
+    Runnable,
+    Leased,
+    Parked,
+    SuspendedForChild,
     Quarantined,
+}
+
+/// A canonical frame key plus its observed version, when a route has one.
+/// `None` is permitted only for routes that have not yet acquired a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuFrameStamp {
+    key: TaskFrameKey,
+    version: u64,
+}
+
+impl CpuFrameStamp {
+    pub fn new(key: TaskFrameKey, version: u64) -> Self {
+        Self { key, version }
+    }
+
+    pub fn key(self) -> TaskFrameKey {
+        self.key
+    }
+
+    pub fn version(self) -> u64 {
+        self.version
+    }
+}
+
+/// The typed, non-runnable disposition of an admitted CPU. It says nothing
+/// about canonical process exit and does not authorize automatic retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuQuarantineReason {
+    NativeFault,
+    BackendFailure,
+    PortFailure,
+    RecoveryRequired,
+    UnresolvedLeaf,
+    UnresolvedParentSuspension,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuLeaseEnd {
+    Runnable,
+    Parked(TaskFrameRef),
+    Quarantined(CpuQuarantineReason),
+}
+
+/// A snapshot of one exact admitted slot's custody phase. Canonical Task and
+/// wait state still live in Kernel; this phase is only cached eligibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CpuAdmittedPhase {
+    Runnable,
+    Leased,
+    Parked(TaskFrameRef),
+    SuspendedForChild,
+    Quarantined(CpuQuarantineReason),
+}
+
+/// An opaque witness of the one currently issued execution leaf. Copies are
+/// harmless: every use must revalidate the directory's active nonce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CpuLeafPermit {
+    key: CpuCustodyKey,
+    birth: ProcessBirthKey,
+    thread_birth: ThreadBirthKey,
+    frame: Option<CpuFrameStamp>,
+    attempt_generation: u64,
+}
+
+impl CpuLeafPermit {
+    pub fn key(self) -> CpuCustodyKey {
+        self.key
+    }
+
+    pub fn birth(self) -> ProcessBirthKey {
+        self.birth
+    }
+
+    pub fn thread_birth(self) -> ThreadBirthKey {
+        self.thread_birth
+    }
+
+    pub fn frame(self) -> Option<CpuFrameStamp> {
+        self.frame
+    }
+
+    pub fn attempt_generation(self) -> u64 {
+        self.attempt_generation
+    }
 }
 
 /// Diagnostic values only: neither an executable lease nor a CPU clone.
@@ -101,6 +193,10 @@ pub struct CpuCustodySnapshot {
     pub key: CpuCustodyKey,
     pub birth: ProcessBirthKey,
     pub state: CpuCustodyState,
+    /// False while a scoped payload loan is open; zero metrics then mean
+    /// unavailable, not an empty CPU address space.
+    pub metrics_available: bool,
+    pub quarantine_reason: Option<CpuQuarantineReason>,
     /// Copied/sealed mapped blobs across the retained CPU payload tree, not
     /// Kernel physical-page usage or host RSS.
     pub mapped_blob_bytes: u64,
@@ -114,6 +210,10 @@ pub struct CpuCustodySnapshot {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct CpuCustodyCounts {
     pub reserved: usize,
+    pub runnable: usize,
+    pub leased: usize,
+    pub parked: usize,
+    pub suspended_for_child: usize,
     pub quarantined: usize,
     pub reserved_unbound_trees: usize,
     pub unverified_stopped_trees: usize,
@@ -132,6 +232,26 @@ pub enum CpuCustodyError {
     NotReserved,
     NotQuarantined,
     NotRetainedTree,
+    NotAdmitted,
+    NotRunnable,
+    NotLeased,
+    NotParked,
+    NotSuspendedForChild,
+    ActiveLeafBusy,
+    StalePermit,
+    WrongSlot,
+    WrongThread,
+    WrongFrame,
+    WrongAttempt,
+    BusyCpuLoan,
+    OutstandingCpuHandle,
+    HandleCountExhausted,
+    MissingCpu,
+    UnsealedQuarantine,
+    KernelLineage(CpuMachineLineageError),
+    StaleParentProcess,
+    StaleParentThread,
+    ParentFrameValidationUnavailable,
 }
 
 impl fmt::Display for CpuCustodyError {
@@ -147,6 +267,28 @@ impl fmt::Display for CpuCustodyError {
             Self::NotReserved => "CPU custody slot is not reserved",
             Self::NotQuarantined => "CPU custody slot is not quarantined",
             Self::NotRetainedTree => "CPU tree holding slot has no retained payload",
+            Self::NotAdmitted => "CPU custody slot has no admitted payload",
+            Self::NotRunnable => "CPU custody slot is not runnable",
+            Self::NotLeased => "CPU custody slot has no active run lease",
+            Self::NotParked => "CPU custody slot is not parked at that wait locator",
+            Self::NotSuspendedForChild => "CPU parent slot is not suspended for a child",
+            Self::ActiveLeafBusy => "another CPU execution leaf is active",
+            Self::StalePermit => "CPU execution leaf permit is revoked or stale",
+            Self::WrongSlot => "CPU execution leaf names a different slot",
+            Self::WrongThread => "CPU execution leaf names a different thread birth",
+            Self::WrongFrame => "CPU execution leaf names a different frame/version",
+            Self::WrongAttempt => "CPU execution leaf attempt generation differs",
+            Self::BusyCpuLoan => "CPU payload already has a scoped loan",
+            Self::OutstandingCpuHandle => "CPU slot still has a payload handle",
+            Self::HandleCountExhausted => "CPU slot handle count exhausted",
+            Self::MissingCpu => "CPU custody slot has no payload",
+            Self::UnsealedQuarantine => "CPU quarantine payload has not closed its active loan",
+            Self::KernelLineage(error) => return write!(f, "CPU Kernel lineage rejected: {error}"),
+            Self::StaleParentProcess => "suspended parent process birth is no longer live/selected",
+            Self::StaleParentThread => "suspended parent thread birth is no longer live/owned",
+            Self::ParentFrameValidationUnavailable => {
+                "suspended parent frame/version validation is not implemented"
+            }
         };
         f.write_str(reason)
     }
@@ -155,10 +297,244 @@ impl fmt::Display for CpuCustodyError {
 impl std::error::Error for CpuCustodyError {}
 
 #[derive(Debug)]
+struct LeafAuthority {
+    machine_lineage: u64,
+    alive: Cell<bool>,
+    active: Cell<Option<CpuLeafPermit>>,
+}
+
+/// Read-only proof checker for callbacks and the machine-state port. Holding
+/// it never borrows the mutable slot topology across a child run.
+#[derive(Debug, Clone)]
+pub struct CpuLeafVerifier {
+    authority: Rc<LeafAuthority>,
+}
+
+impl CpuLeafVerifier {
+    pub fn machine_lineage(&self) -> u64 {
+        self.authority.machine_lineage
+    }
+
+    /// Observe the currently directory-issued token without granting a new
+    /// lease. The machine port captures this value at native entry and must
+    /// revalidate the same value on every callback.
+    pub(crate) fn current_permit(&self) -> Option<CpuLeafPermit> {
+        self.authority.alive.get().then(|| self.authority.active.get()).flatten()
+    }
+
+    pub fn validate(
+        &self,
+        permit: CpuLeafPermit,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+        thread_birth: ThreadBirthKey,
+        frame: Option<CpuFrameStamp>,
+    ) -> Result<(), CpuCustodyError> {
+        if !self.authority.alive.get()
+            || permit.key.machine_lineage != self.authority.machine_lineage
+            || key.machine_lineage != self.authority.machine_lineage
+        {
+            return Err(CpuCustodyError::WrongMachine);
+        }
+        if permit.key != key {
+            return Err(CpuCustodyError::WrongSlot);
+        }
+        if permit.birth != birth {
+            return Err(CpuCustodyError::WrongBirth);
+        }
+        if permit.thread_birth != thread_birth {
+            return Err(CpuCustodyError::WrongThread);
+        }
+        if permit.frame != frame {
+            return Err(CpuCustodyError::WrongFrame);
+        }
+        match self.authority.active.get() {
+            Some(active) if active == permit => Ok(()),
+            Some(active) if active.attempt_generation != permit.attempt_generation => {
+                Err(CpuCustodyError::WrongAttempt)
+            }
+            _ => Err(CpuCustodyError::StalePermit),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AdmittedCpuCell {
+    key: CpuCustodyKey,
+    birth: ProcessBirthKey,
+    phase: Cell<CpuAdmittedPhase>,
+    cpu: RefCell<Option<UnicornMips>>,
+    quarantine_sealed: Cell<bool>,
+    open_handles: Cell<usize>,
+}
+
+impl AdmittedCpuCell {
+    fn new(key: CpuCustodyKey, birth: ProcessBirthKey) -> Self {
+        Self {
+            key,
+            birth,
+            phase: Cell::new(CpuAdmittedPhase::Runnable),
+            cpu: RefCell::new(None),
+            quarantine_sealed: Cell::new(false),
+            open_handles: Cell::new(0),
+        }
+    }
+
+    /// The seal mutates only fields in the already-owned payload. If a
+    /// callback still has a scoped mutable loan, its drop performs the same
+    /// operation before that borrow is released, including during unwind.
+    fn quarantine(&self, reason: CpuQuarantineReason) {
+        self.phase.set(CpuAdmittedPhase::Quarantined(reason));
+        if let Ok(mut payload) = self.cpu.try_borrow_mut() {
+            self.seal_borrowed_if_quarantined(&mut payload);
+        }
+    }
+
+    fn seal_borrowed_if_quarantined(&self, payload: &mut Option<UnicornMips>) {
+        if !matches!(self.phase.get(), CpuAdmittedPhase::Quarantined(_))
+            || self.quarantine_sealed.get()
+        {
+            return;
+        }
+        if let Some(cpu) = payload.as_mut() {
+            #[cfg(feature = "unicorn")]
+            cpu.seal_for_quarantine();
+            self.quarantine_sealed.set(true);
+        }
+    }
+}
+
+/// Ends a payload borrow with the terminal seal even if the caller unwinds.
+struct AdmittedCpuLoan<'a> {
+    cell: &'a AdmittedCpuCell,
+    payload: RefMut<'a, Option<UnicornMips>>,
+}
+
+impl Drop for AdmittedCpuLoan<'_> {
+    fn drop(&mut self) {
+        self.cell.seal_borrowed_if_quarantined(&mut self.payload);
+    }
+}
+
+/// A stable payload locator. It owns no CPU copy and cannot itself authorize
+/// guest execution; each loan checks the current directory-issued permit.
+#[derive(Debug)]
+pub struct CpuSlotHandle {
+    cell: Rc<AdmittedCpuCell>,
+    verifier: CpuLeafVerifier,
+}
+
+impl CpuSlotHandle {
+    pub fn key(&self) -> CpuCustodyKey {
+        self.cell.key
+    }
+
+    pub fn birth(&self) -> ProcessBirthKey {
+        self.cell.birth
+    }
+
+    pub fn with_cpu_mut<R>(
+        &self,
+        permit: CpuLeafPermit,
+        use_cpu: impl for<'loan> FnOnce(&'loan mut UnicornMips) -> R,
+    ) -> Result<R, CpuCustodyError> {
+        self.verifier.validate(
+            permit,
+            self.cell.key,
+            self.cell.birth,
+            permit.thread_birth,
+            permit.frame,
+        )?;
+        if self.cell.phase.get() != CpuAdmittedPhase::Leased {
+            return Err(CpuCustodyError::NotLeased);
+        }
+        let payload = self
+            .cell
+            .cpu
+            .try_borrow_mut()
+            .map_err(|_| CpuCustodyError::BusyCpuLoan)?;
+        let mut loan = AdmittedCpuLoan {
+            cell: &self.cell,
+            payload,
+        };
+        let cpu = loan.payload.as_mut().ok_or(CpuCustodyError::MissingCpu)?;
+        Ok(use_cpu(cpu))
+    }
+}
+
+impl Drop for CpuSlotHandle {
+    fn drop(&mut self) {
+        let remaining = self
+            .cell
+            .open_handles
+            .get()
+            .checked_sub(1)
+            .expect("CPU slot handle count must include this handle");
+        self.cell.open_handles.set(remaining);
+    }
+}
+
+/// Non-clone attempt owner. Call `finish_leaf` or `suspend_for_child`; an
+/// unresolved drop revokes its permit and quarantines the original CPU.
+#[must_use = "finish or suspend the CPU leaf before returning"]
+#[derive(Debug)]
+pub struct CpuLeafLease {
+    permit: CpuLeafPermit,
+    cell: Rc<AdmittedCpuCell>,
+    authority: Rc<LeafAuthority>,
+    finished: bool,
+}
+
+impl CpuLeafLease {
+    pub fn permit(&self) -> CpuLeafPermit {
+        self.permit
+    }
+}
+
+impl Drop for CpuLeafLease {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if self.authority.active.get() == Some(self.permit) {
+            self.authority.active.set(None);
+        }
+        if self.cell.phase.get() == CpuAdmittedPhase::Leased {
+            self.cell.quarantine(CpuQuarantineReason::UnresolvedLeaf);
+        }
+    }
+}
+
+/// A suspended parent remains in its exact slot while another leaf runs.
+/// The guard does not borrow the directory or the parent's CPU payload.
+#[must_use = "resume the parent after classifying the child"]
+#[derive(Debug)]
+pub struct CpuParentSuspension {
+    cell: Rc<AdmittedCpuCell>,
+    authority: Rc<LeafAuthority>,
+    parent_permit: CpuLeafPermit,
+    resolved: bool,
+}
+
+impl Drop for CpuParentSuspension {
+    fn drop(&mut self) {
+        if !self.resolved && self.cell.phase.get() == CpuAdmittedPhase::SuspendedForChild {
+            self.cell
+                .quarantine(CpuQuarantineReason::UnresolvedParentSuspension);
+        }
+    }
+}
+
+#[derive(Debug)]
 enum SlotState {
     Vacant,
     Reserved {
         birth: ProcessBirthKey,
+        cell: Rc<AdmittedCpuCell>,
+    },
+    Admitted {
+        birth: ProcessBirthKey,
+        cell: Rc<AdmittedCpuCell>,
     },
     Quarantined {
         birth: ProcessBirthKey,
@@ -170,7 +546,9 @@ impl SlotState {
     fn birth(&self) -> Option<ProcessBirthKey> {
         match self {
             Self::Vacant => None,
-            Self::Reserved { birth } | Self::Quarantined { birth, .. } => Some(*birth),
+            Self::Reserved { birth, .. }
+            | Self::Admitted { birth, .. }
+            | Self::Quarantined { birth, .. } => Some(*birth),
         }
     }
 }
@@ -273,6 +651,8 @@ impl Drop for CpuDepositTicket {
 pub struct CpuCustody {
     machine_lineage: u64,
     next_generation: u64,
+    next_attempt_generation: u64,
+    leaf_authority: Rc<LeafAuthority>,
     slots: Vec<Slot>,
     retained_trees: Vec<Rc<RetainedTreeCell>>,
 }
@@ -287,6 +667,12 @@ impl CpuCustody {
         Ok(Self {
             machine_lineage,
             next_generation: 0,
+            next_attempt_generation: 0,
+            leaf_authority: Rc::new(LeafAuthority {
+                machine_lineage,
+                alive: Cell::new(true),
+                active: Cell::new(None),
+            }),
             slots: Vec::new(),
             retained_trees: Vec::new(),
         })
@@ -294,6 +680,14 @@ impl CpuCustody {
 
     pub fn machine_lineage(&self) -> u64 {
         self.machine_lineage
+    }
+
+    /// A read-only validator suitable for a callback-scoped machine port.
+    /// Kernel lineage and canonical Task/frame checks remain the port's job.
+    pub fn leaf_verifier(&self) -> CpuLeafVerifier {
+        CpuLeafVerifier {
+            authority: Rc::clone(&self.leaf_authority),
+        }
     }
 
     /// Reserve a whole-tree holding cell before a child enters guest code.
@@ -406,28 +800,295 @@ impl CpuCustody {
                     .try_reserve(1)
                     .map_err(|_| CpuCustodyError::SlotCapacityExhausted)?;
                 let index = self.slots.len();
-                self.slots.push(Slot {
-                    generation,
-                    state: SlotState::Reserved { birth },
-                });
-                self.next_generation = generation;
-                return Ok(CpuCustodyKey {
+                let key = CpuCustodyKey {
                     machine_lineage: self.machine_lineage,
                     index,
                     generation,
+                };
+                self.slots.push(Slot {
+                    generation,
+                    state: SlotState::Reserved {
+                        birth,
+                        cell: Rc::new(AdmittedCpuCell::new(key, birth)),
+                    },
                 });
+                self.next_generation = generation;
+                return Ok(key);
             }
         };
-        self.slots[index] = Slot {
-            generation,
-            state: SlotState::Reserved { birth },
-        };
-        self.next_generation = generation;
-        Ok(CpuCustodyKey {
+        let key = CpuCustodyKey {
             machine_lineage: self.machine_lineage,
             index,
             generation,
+        };
+        self.slots[index] = Slot {
+            generation,
+            state: SlotState::Reserved {
+                birth,
+                cell: Rc::new(AdmittedCpuCell::new(key, birth)),
+            },
+        };
+        self.next_generation = generation;
+        Ok(key)
+    }
+
+    /// Deposit the original CPU into its preallocated exact-birth cell before
+    /// any guest instruction. Every refusal returns that same CPU to the
+    /// caller; no allocation is needed at this transfer boundary.
+    pub fn admit_reserved(
+        &mut self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+        cpu: UnicornMips,
+    ) -> Result<(), (CpuCustodyError, UnicornMips)> {
+        let slot = match self.slot_mut(key) {
+            Ok(slot) => slot,
+            Err(error) => return Err((error, cpu)),
+        };
+        let cell = match &slot.state {
+            SlotState::Reserved {
+                birth: frozen,
+                cell,
+            } if *frozen == birth => Rc::clone(cell),
+            SlotState::Reserved { .. } => return Err((CpuCustodyError::WrongBirth, cpu)),
+            _ => return Err((CpuCustodyError::NotReserved, cpu)),
+        };
+        let Ok(mut payload) = cell.cpu.try_borrow_mut() else {
+            return Err((CpuCustodyError::BusyCpuLoan, cpu));
+        };
+        if payload.is_some() {
+            return Err((CpuCustodyError::NotReserved, cpu));
+        }
+        *payload = Some(cpu);
+        drop(payload);
+        cell.phase.set(CpuAdmittedPhase::Runnable);
+        slot.state = SlotState::Admitted { birth, cell };
+        Ok(())
+    }
+
+    pub fn admitted_key_for_birth(&self, birth: ProcessBirthKey) -> Option<CpuCustodyKey> {
+        self.slots.iter().enumerate().find_map(|(index, slot)| {
+            matches!(&slot.state, SlotState::Admitted { birth: owner, .. } if *owner == birth)
+                .then_some(CpuCustodyKey {
+                    machine_lineage: self.machine_lineage,
+                    index,
+                    generation: slot.generation,
+                })
         })
+    }
+
+    pub fn admitted_phase(
+        &self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+    ) -> Result<CpuAdmittedPhase, CpuCustodyError> {
+        let cell = self.admitted_cell(key, birth)?;
+        Ok(cell.phase.get())
+    }
+
+    /// Obtain a stable handle without borrowing directory topology. The
+    /// handle cannot execute without a separately issued current leaf.
+    pub fn acquire_cpu_handle(
+        &self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+    ) -> Result<CpuSlotHandle, CpuCustodyError> {
+        let cell = self.admitted_cell(key, birth)?;
+        let next = cell
+            .open_handles
+            .get()
+            .checked_add(1)
+            .ok_or(CpuCustodyError::HandleCountExhausted)?;
+        cell.open_handles.set(next);
+        Ok(CpuSlotHandle {
+            cell: Rc::clone(cell),
+            verifier: self.leaf_verifier(),
+        })
+    }
+
+    /// Issue the only executable leaf from an exact admitted runnable slot.
+    /// The attempt generation is minted here, never supplied by a caller.
+    /// Kernel lineage, live thread ownership and frame-version checks must be
+    /// performed by the machine port before issue and again before use.
+    pub fn issue_leaf(
+        &mut self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+        thread_birth: ThreadBirthKey,
+        frame: Option<CpuFrameStamp>,
+    ) -> Result<CpuLeafLease, CpuCustodyError> {
+        if self.leaf_authority.active.get().is_some() {
+            return Err(CpuCustodyError::ActiveLeafBusy);
+        }
+        if frame.is_some_and(|stamp| stamp.key.owner_birth() != thread_birth) {
+            return Err(CpuCustodyError::WrongFrame);
+        }
+        let cell = Rc::clone(self.admitted_cell(key, birth)?);
+        if cell.phase.get() != CpuAdmittedPhase::Runnable {
+            return Err(CpuCustodyError::NotRunnable);
+        }
+        let generation = self
+            .next_attempt_generation
+            .checked_add(1)
+            .ok_or(CpuCustodyError::GenerationExhausted)?;
+        let permit = CpuLeafPermit {
+            key,
+            birth,
+            thread_birth,
+            frame,
+            attempt_generation: generation,
+        };
+        self.next_attempt_generation = generation;
+        cell.phase.set(CpuAdmittedPhase::Leased);
+        self.leaf_authority.active.set(Some(permit));
+        Ok(CpuLeafLease {
+            permit,
+            cell,
+            authority: Rc::clone(&self.leaf_authority),
+            finished: false,
+        })
+    }
+
+    /// Revoke the previous thread's token before another instruction or
+    /// register transition. The replacement nonce is directory-minted.
+    pub fn update_leaf_thread(
+        &mut self,
+        lease: &mut CpuLeafLease,
+        thread_birth: ThreadBirthKey,
+        frame: Option<CpuFrameStamp>,
+    ) -> Result<CpuLeafPermit, CpuCustodyError> {
+        self.verify_lease(lease)?;
+        if frame.is_some_and(|stamp| stamp.key.owner_birth() != thread_birth) {
+            return Err(CpuCustodyError::WrongFrame);
+        }
+        let generation = self
+            .next_attempt_generation
+            .checked_add(1)
+            .ok_or(CpuCustodyError::GenerationExhausted)?;
+        let next = CpuLeafPermit {
+            thread_birth,
+            frame,
+            attempt_generation: generation,
+            ..lease.permit
+        };
+        self.next_attempt_generation = generation;
+        self.leaf_authority.active.set(Some(next));
+        lease.permit = next;
+        Ok(next)
+    }
+
+    pub fn finish_leaf(
+        &mut self,
+        lease: &mut CpuLeafLease,
+        end: CpuLeaseEnd,
+    ) -> Result<(), CpuCustodyError> {
+        self.verify_lease(lease)?;
+        let phase = match end {
+            CpuLeaseEnd::Runnable => CpuAdmittedPhase::Runnable,
+            CpuLeaseEnd::Parked(locator) => {
+                if locator.key().owner_birth() != lease.permit.thread_birth {
+                    return Err(CpuCustodyError::WrongThread);
+                }
+                if lease
+                    .permit
+                    .frame
+                    .is_some_and(|stamp| stamp.key != locator.key())
+                {
+                    return Err(CpuCustodyError::WrongFrame);
+                }
+                CpuAdmittedPhase::Parked(locator)
+            }
+            CpuLeaseEnd::Quarantined(reason) => CpuAdmittedPhase::Quarantined(reason),
+        };
+        if let CpuAdmittedPhase::Quarantined(reason) = phase {
+            lease.cell.quarantine(reason);
+        } else {
+            lease.cell.phase.set(phase);
+        }
+        self.leaf_authority.active.set(None);
+        lease.finished = true;
+        Ok(())
+    }
+
+    /// Revoke A, leaving its CPU in its own slot while its outer scoped
+    /// payload loan and staged return context may remain open. B receives a
+    /// distinct permit from `issue_leaf` after B is admitted and selected.
+    pub fn suspend_for_child(
+        &mut self,
+        lease: &mut CpuLeafLease,
+    ) -> Result<CpuParentSuspension, CpuCustodyError> {
+        self.verify_lease(lease)?;
+        lease.cell.phase.set(CpuAdmittedPhase::SuspendedForChild);
+        self.leaf_authority.active.set(None);
+        lease.finished = true;
+        Ok(CpuParentSuspension {
+            cell: Rc::clone(&lease.cell),
+            authority: Rc::clone(&self.leaf_authority),
+            parent_permit: lease.permit,
+            resolved: false,
+        })
+    }
+
+    /// The caller cannot self-supply a replacement parent tuple. A's original
+    /// issued permit freezes its birth/thread/frame, and the live Kernel must
+    /// authenticate that original lineage before the slot becomes runnable.
+    pub fn resume_parent(
+        &mut self,
+        suspension: &mut CpuParentSuspension,
+        kernel: &CeKernel,
+    ) -> Result<(), CpuCustodyError> {
+        if !Rc::ptr_eq(&self.leaf_authority, &suspension.authority) {
+            return Err(CpuCustodyError::WrongMachine);
+        }
+        if self.leaf_authority.active.get().is_some() {
+            return Err(CpuCustodyError::ActiveLeafBusy);
+        }
+        let cell = self.admitted_cell(suspension.cell.key, suspension.cell.birth)?;
+        if !Rc::ptr_eq(cell, &suspension.cell) {
+            return Err(CpuCustodyError::StaleKey);
+        }
+        if cell.phase.get() != CpuAdmittedPhase::SuspendedForChild || suspension.resolved {
+            return Err(CpuCustodyError::NotSuspendedForChild);
+        }
+        kernel
+            .require_cpu_machine_lineage(self.machine_lineage)
+            .map_err(CpuCustodyError::KernelLineage)?;
+        let parent = suspension.parent_permit;
+        if parent.key != cell.key
+            || parent.birth != cell.birth
+            || kernel.current_process_birth_key() != Some(parent.birth)
+            || !kernel.handles.process_execution_live_by_birth(parent.birth)
+        {
+            return Err(CpuCustodyError::StaleParentProcess);
+        }
+        if !kernel.is_live_thread_birth(parent.thread_birth)
+            || kernel
+                .handles
+                .live_thread_creation_owner_by_id(parent.thread_birth.thread_id())
+                != Some(parent.birth)
+        {
+            return Err(CpuCustodyError::StaleParentThread);
+        }
+        if parent.frame.is_some() {
+            return Err(CpuCustodyError::ParentFrameValidationUnavailable);
+        }
+        cell.phase.set(CpuAdmittedPhase::Runnable);
+        suspension.resolved = true;
+        Ok(())
+    }
+
+    pub fn wake_parked(
+        &mut self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+        locator: TaskFrameRef,
+    ) -> Result<(), CpuCustodyError> {
+        let cell = self.admitted_cell(key, birth)?;
+        if cell.phase.get() != CpuAdmittedPhase::Parked(locator) {
+            return Err(CpuCustodyError::NotParked);
+        }
+        cell.phase.set(CpuAdmittedPhase::Runnable);
+        Ok(())
     }
 
     /// Move the original failed CPU into its pre-reserved slot. An authentic
@@ -444,7 +1105,7 @@ impl CpuCustody {
             Err(error) => return Err((error, cpu)),
         };
         match &slot.state {
-            SlotState::Reserved { birth: frozen } if *frozen == birth => {
+            SlotState::Reserved { birth: frozen, .. } if *frozen == birth => {
                 // The directory owns the terminal invariant, not whichever
                 // producer happened to transfer this exact admitted CPU.
                 #[cfg(feature = "unicorn")]
@@ -468,7 +1129,7 @@ impl CpuCustody {
     ) -> Result<(), CpuCustodyError> {
         let slot = self.slot_mut(key)?;
         match &slot.state {
-            SlotState::Reserved { birth: frozen } if *frozen == birth => {
+            SlotState::Reserved { birth: frozen, .. } if *frozen == birth => {
                 slot.state = SlotState::Vacant;
                 Ok(())
             }
@@ -490,6 +1151,23 @@ impl CpuCustody {
         match &slot.state {
             SlotState::Quarantined { birth: frozen, cpu } if *frozen == birth => Ok(inspect(cpu)),
             SlotState::Quarantined { .. } => Err(CpuCustodyError::WrongBirth),
+            SlotState::Admitted {
+                birth: frozen,
+                cell,
+            } if *frozen == birth => {
+                if !matches!(cell.phase.get(), CpuAdmittedPhase::Quarantined(_)) {
+                    return Err(CpuCustodyError::NotQuarantined);
+                }
+                if !cell.quarantine_sealed.get() {
+                    return Err(CpuCustodyError::UnsealedQuarantine);
+                }
+                let loan = cell
+                    .cpu
+                    .try_borrow()
+                    .map_err(|_| CpuCustodyError::BusyCpuLoan)?;
+                Ok(inspect(loan.as_ref().ok_or(CpuCustodyError::MissingCpu)?))
+            }
+            SlotState::Admitted { .. } => Err(CpuCustodyError::WrongBirth),
             _ => Err(CpuCustodyError::NotQuarantined),
         }
     }
@@ -512,6 +1190,57 @@ impl CpuCustody {
             SlotState::Quarantined { cpu, .. } => Ok(cpu),
             _ => unreachable!("checked quarantined slot changed before terminal transfer"),
         }
+    }
+
+    /// A separate admitted-slot retirement keeps the unique accepted-exit
+    /// witness on every refusal. The caller can release a held loan/handle
+    /// and retry without asking Kernel to commit the same exit twice.
+    pub(crate) fn retire_admitted_with_accepted_exit(
+        &mut self,
+        key: CpuCustodyKey,
+        accepted_exit: AcceptedProcessExit,
+    ) -> Result<UnicornMips, (CpuCustodyError, AcceptedProcessExit)> {
+        let cell = match self.admitted_cell(key, accepted_exit.birth()) {
+            Ok(cell) => Rc::clone(cell),
+            Err(error) => return Err((error, accepted_exit)),
+        };
+        if !matches!(
+            cell.phase.get(),
+            CpuAdmittedPhase::Runnable
+                | CpuAdmittedPhase::Parked(_)
+                | CpuAdmittedPhase::Quarantined(_)
+        ) {
+            return Err((CpuCustodyError::NotQuarantined, accepted_exit));
+        }
+        if self
+            .leaf_authority
+            .active
+            .get()
+            .is_some_and(|permit| permit.key == key)
+        {
+            return Err((CpuCustodyError::ActiveLeafBusy, accepted_exit));
+        }
+        let mut payload = match cell.cpu.try_borrow_mut() {
+            Ok(payload) => payload,
+            Err(_) => return Err((CpuCustodyError::BusyCpuLoan, accepted_exit)),
+        };
+        if cell.open_handles.get() != 0 {
+            return Err((CpuCustodyError::OutstandingCpuHandle, accepted_exit));
+        }
+        if matches!(cell.phase.get(), CpuAdmittedPhase::Quarantined(_))
+            && !cell.quarantine_sealed.get()
+        {
+            return Err((CpuCustodyError::UnsealedQuarantine, accepted_exit));
+        }
+        let cpu = match payload.take() {
+            Some(cpu) => cpu,
+            None => return Err((CpuCustodyError::MissingCpu, accepted_exit)),
+        };
+        drop(payload);
+        self.slot_mut(key)
+            .expect("verified admitted CPU slot cannot change before retirement")
+            .state = SlotState::Vacant;
+        Ok(cpu)
     }
 
     pub fn snapshot_exact(
@@ -588,6 +1317,13 @@ impl CpuCustody {
                 SlotState::Vacant => {}
                 SlotState::Reserved { .. } => counts.reserved += 1,
                 SlotState::Quarantined { .. } => counts.quarantined += 1,
+                SlotState::Admitted { cell, .. } => match cell.phase.get() {
+                    CpuAdmittedPhase::Runnable => counts.runnable += 1,
+                    CpuAdmittedPhase::Leased => counts.leased += 1,
+                    CpuAdmittedPhase::Parked(_) => counts.parked += 1,
+                    CpuAdmittedPhase::SuspendedForChild => counts.suspended_for_child += 1,
+                    CpuAdmittedPhase::Quarantined(_) => counts.quarantined += 1,
+                },
             }
         }
         for cell in &self.retained_trees {
@@ -618,6 +1354,11 @@ impl CpuCustody {
             .iter()
             .filter_map(|slot| match &slot.state {
                 SlotState::Quarantined { cpu, .. } => Some(Self::blob_bytes(cpu)),
+                SlotState::Admitted { cell, .. } => cell
+                    .cpu
+                    .try_borrow()
+                    .ok()
+                    .and_then(|payload| payload.as_ref().map(Self::blob_bytes)),
                 _ => None,
             })
             .fold(0, u64::saturating_add);
@@ -638,6 +1379,44 @@ impl CpuCustody {
             return Err(CpuCustodyError::StaleKey);
         }
         Ok(slot)
+    }
+
+    fn admitted_cell(
+        &self,
+        key: CpuCustodyKey,
+        birth: ProcessBirthKey,
+    ) -> Result<&Rc<AdmittedCpuCell>, CpuCustodyError> {
+        match &self.slot(key)?.state {
+            SlotState::Admitted {
+                birth: frozen,
+                cell,
+            } if *frozen == birth => Ok(cell),
+            SlotState::Admitted { .. } => Err(CpuCustodyError::WrongBirth),
+            _ => Err(CpuCustodyError::NotAdmitted),
+        }
+    }
+
+    fn verify_lease(&self, lease: &CpuLeafLease) -> Result<(), CpuCustodyError> {
+        if !Rc::ptr_eq(&self.leaf_authority, &lease.authority) {
+            return Err(CpuCustodyError::WrongMachine);
+        }
+        if lease.finished {
+            return Err(CpuCustodyError::NotLeased);
+        }
+        let cell = self.admitted_cell(lease.permit.key, lease.permit.birth)?;
+        if !Rc::ptr_eq(cell, &lease.cell) {
+            return Err(CpuCustodyError::StaleKey);
+        }
+        if cell.phase.get() != CpuAdmittedPhase::Leased {
+            return Err(CpuCustodyError::NotLeased);
+        }
+        self.leaf_verifier().validate(
+            lease.permit,
+            lease.permit.key,
+            lease.permit.birth,
+            lease.permit.thread_birth,
+            lease.permit.frame,
+        )
     }
 
     fn slot_mut(&mut self, key: CpuCustodyKey) -> Result<&mut Slot, CpuCustodyError> {
@@ -671,10 +1450,12 @@ impl CpuCustody {
     fn snapshot_slot(key: CpuCustodyKey, slot: &Slot) -> Option<CpuCustodySnapshot> {
         match &slot.state {
             SlotState::Vacant => None,
-            SlotState::Reserved { birth } => Some(CpuCustodySnapshot {
+            SlotState::Reserved { birth, .. } => Some(CpuCustodySnapshot {
                 key,
                 birth: *birth,
                 state: CpuCustodyState::Reserved,
+                metrics_available: false,
+                quarantine_reason: None,
                 mapped_blob_bytes: 0,
                 virtual_region_bytes: 0,
                 native_outcome: None,
@@ -684,6 +1465,8 @@ impl CpuCustody {
                 key,
                 birth: *birth,
                 state: CpuCustodyState::Quarantined,
+                metrics_available: true,
+                quarantine_reason: None,
                 mapped_blob_bytes: Self::blob_bytes(cpu),
                 virtual_region_bytes: CpuBackend::memory(cpu)
                     .regions()
@@ -694,7 +1477,51 @@ impl CpuCustody {
                     .last_debug_snapshot()
                     .and_then(|snapshot| snapshot.memory_fault.clone()),
             }),
+            SlotState::Admitted { birth, cell } => {
+                let phase = cell.phase.get();
+                let (state, quarantine_reason) = match phase {
+                    CpuAdmittedPhase::Runnable => (CpuCustodyState::Runnable, None),
+                    CpuAdmittedPhase::Leased => (CpuCustodyState::Leased, None),
+                    CpuAdmittedPhase::Parked(_) => (CpuCustodyState::Parked, None),
+                    CpuAdmittedPhase::SuspendedForChild => {
+                        (CpuCustodyState::SuspendedForChild, None)
+                    }
+                    CpuAdmittedPhase::Quarantined(reason) => {
+                        (CpuCustodyState::Quarantined, Some(reason))
+                    }
+                };
+                let payload = cell.cpu.try_borrow().ok();
+                let cpu = payload.as_ref().and_then(|payload| payload.as_ref());
+                Some(CpuCustodySnapshot {
+                    key,
+                    birth: *birth,
+                    state,
+                    metrics_available: cpu.is_some(),
+                    quarantine_reason,
+                    mapped_blob_bytes: cpu.map(Self::blob_bytes).unwrap_or(0),
+                    virtual_region_bytes: cpu
+                        .map(|cpu| {
+                            CpuBackend::memory(cpu)
+                                .regions()
+                                .map(|region| u64::from(region.size))
+                                .fold(0, u64::saturating_add)
+                        })
+                        .unwrap_or(0),
+                    native_outcome: cpu.map(UnicornMips::last_native_slice_outcome),
+                    memory_fault: cpu.and_then(|cpu| {
+                        cpu.last_debug_snapshot()
+                            .and_then(|snapshot| snapshot.memory_fault.clone())
+                    }),
+                })
+            }
         }
+    }
+}
+
+impl Drop for CpuCustody {
+    fn drop(&mut self) {
+        self.leaf_authority.active.set(None);
+        self.leaf_authority.alive.set(false);
     }
 }
 
@@ -711,6 +1538,319 @@ mod tests {
             handles.process_birth_key(2).unwrap(),
             handles.process_birth_key(3).unwrap(),
         )
+    }
+
+    fn births_with_threads() -> (
+        (ProcessBirthKey, ThreadBirthKey),
+        (ProcessBirthKey, ThreadBirthKey),
+    ) {
+        let mut handles = HandleTable::default();
+        handles.create_process(20);
+        handles.create_process(21);
+        let first = handles.process_birth_key(20).unwrap();
+        let second = handles.process_birth_key(21).unwrap();
+        handles
+            .try_create_thread_in_birth(first, 201, 0x1000, 0, false)
+            .unwrap();
+        handles
+            .try_create_thread_in_birth(second, 211, 0x2000, 0, false)
+            .unwrap();
+        (
+            (first, handles.thread_birth_key_by_id(201).unwrap()),
+            (second, handles.thread_birth_key_by_id(211).unwrap()),
+        )
+    }
+
+    #[test]
+    fn admitted_cpu_is_owned_before_first_leaf_and_old_permits_revoke() {
+        let ((birth, thread), (other_birth, other_thread)) = births_with_threads();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        let other_key = custody.reserve(other_birth).unwrap();
+        let mut cpu = UnicornMips::new().unwrap();
+        CpuBackend::map_region(&mut cpu, 0x1000, 0x1000, MemoryPerms::READ, "admitted").unwrap();
+        custody.admit_reserved(key, birth, cpu).unwrap();
+        assert_eq!(custody.admitted_key_for_birth(birth), Some(key));
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Runnable)
+        );
+        assert_eq!(custody.counts().runnable, 1);
+        assert_eq!(
+            custody
+                .snapshot_exact(key, birth)
+                .unwrap()
+                .virtual_region_bytes,
+            0x1000
+        );
+        let handle = custody.acquire_cpu_handle(key, birth).unwrap();
+        let verifier = custody.leaf_verifier();
+        let mut lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        let old = lease.permit();
+        assert_eq!(custody.counts().leased, 1);
+        assert_eq!(
+            handle.with_cpu_mut(old, |cpu| CpuBackend::memory(cpu).regions().count()),
+            Ok(1)
+        );
+        assert_eq!(
+            verifier.validate(old, other_key, birth, thread, None),
+            Err(CpuCustodyError::WrongSlot)
+        );
+        assert_eq!(
+            verifier.validate(old, key, other_birth, thread, None),
+            Err(CpuCustodyError::WrongBirth)
+        );
+        assert_eq!(
+            verifier.validate(old, key, birth, other_thread, None),
+            Err(CpuCustodyError::WrongThread)
+        );
+        let other_machine = CpuCustody::new().unwrap();
+        assert_eq!(
+            other_machine
+                .leaf_verifier()
+                .validate(old, key, birth, thread, None),
+            Err(CpuCustodyError::WrongMachine)
+        );
+        let renewed = custody
+            .update_leaf_thread(&mut lease, thread, None)
+            .unwrap();
+        assert_ne!(renewed.attempt_generation(), old.attempt_generation());
+        assert_eq!(
+            verifier.validate(old, key, birth, thread, None),
+            Err(CpuCustodyError::WrongAttempt)
+        );
+        assert_eq!(
+            handle.with_cpu_mut(old, |_| ()),
+            Err(CpuCustodyError::WrongAttempt)
+        );
+        assert_eq!(verifier.validate(renewed, key, birth, thread, None), Ok(()));
+        custody
+            .finish_leaf(&mut lease, CpuLeaseEnd::Runnable)
+            .unwrap();
+        drop(lease);
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Runnable)
+        );
+        assert_eq!(
+            verifier.validate(renewed, key, birth, thread, None),
+            Err(CpuCustodyError::StalePermit)
+        );
+        drop(handle);
+    }
+
+    #[test]
+    fn suspended_parent_loan_allows_child_but_not_old_parent_reentry() {
+        let ((birth_a, thread_a), (birth_b, thread_b)) = births_with_threads();
+        let mut custody = CpuCustody::new().unwrap();
+        let key_a = custody.reserve(birth_a).unwrap();
+        let key_b = custody.reserve(birth_b).unwrap();
+        custody
+            .admit_reserved(key_a, birth_a, UnicornMips::new().unwrap())
+            .unwrap();
+        custody
+            .admit_reserved(key_b, birth_b, UnicornMips::new().unwrap())
+            .unwrap();
+        let handle_a = custody.acquire_cpu_handle(key_a, birth_a).unwrap();
+        let handle_b = custody.acquire_cpu_handle(key_b, birth_b).unwrap();
+        let mut leaf_a = custody.issue_leaf(key_a, birth_a, thread_a, None).unwrap();
+        let old_a = leaf_a.permit();
+        handle_a
+            .with_cpu_mut(old_a, |_cpu_a| {
+                let mut parent = custody.suspend_for_child(&mut leaf_a).unwrap();
+                assert_eq!(
+                    custody.admitted_phase(key_a, birth_a),
+                    Ok(CpuAdmittedPhase::SuspendedForChild)
+                );
+                let mut leaf_b = custody.issue_leaf(key_b, birth_b, thread_b, None).unwrap();
+                let permit_b = leaf_b.permit();
+                assert_eq!(
+                    handle_a.with_cpu_mut(old_a, |_| ()),
+                    Err(CpuCustodyError::WrongAttempt)
+                );
+                assert_eq!(handle_b.with_cpu_mut(permit_b, |_| 7), Ok(7));
+                custody
+                    .finish_leaf(&mut leaf_b, CpuLeaseEnd::Runnable)
+                    .unwrap();
+                drop(leaf_b);
+                custody.resume_parent(&mut parent).unwrap();
+            })
+            .unwrap();
+        drop(leaf_a);
+        assert_eq!(
+            handle_a.with_cpu_mut(old_a, |_| ()),
+            Err(CpuCustodyError::StalePermit)
+        );
+        let mut resumed = custody.issue_leaf(key_a, birth_a, thread_a, None).unwrap();
+        assert_ne!(
+            resumed.permit().attempt_generation(),
+            old_a.attempt_generation()
+        );
+        assert_eq!(handle_a.with_cpu_mut(resumed.permit(), |_| 11), Ok(11));
+        custody
+            .finish_leaf(&mut resumed, CpuLeaseEnd::Runnable)
+            .unwrap();
+        drop(resumed);
+        drop(handle_b);
+        drop(handle_a);
+    }
+
+    #[test]
+    fn unresolved_leaf_and_parent_suspension_retain_nonrunnable_cpu() {
+        let ((birth_a, thread_a), (birth_b, thread_b)) = births_with_threads();
+        let mut custody = CpuCustody::new().unwrap();
+        let key_a = custody.reserve(birth_a).unwrap();
+        let key_b = custody.reserve(birth_b).unwrap();
+        custody
+            .admit_reserved(key_a, birth_a, UnicornMips::new().unwrap())
+            .unwrap();
+        custody
+            .admit_reserved(key_b, birth_b, UnicornMips::new().unwrap())
+            .unwrap();
+        let mut leaf_a = custody.issue_leaf(key_a, birth_a, thread_a, None).unwrap();
+        let parent = custody.suspend_for_child(&mut leaf_a).unwrap();
+        drop(leaf_a);
+        let leaf_b = custody.issue_leaf(key_b, birth_b, thread_b, None).unwrap();
+        drop(leaf_b);
+        drop(parent);
+        assert_eq!(
+            custody.admitted_phase(key_a, birth_a),
+            Ok(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::UnresolvedParentSuspension
+            ))
+        );
+        assert_eq!(
+            custody.admitted_phase(key_b, birth_b),
+            Ok(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::UnresolvedLeaf
+            ))
+        );
+        assert_eq!(custody.counts().quarantined, 2);
+        assert!(
+            custody
+                .admitted_cell(key_a, birth_a)
+                .unwrap()
+                .quarantine_sealed
+                .get()
+        );
+        assert!(
+            custody
+                .admitted_cell(key_b, birth_b)
+                .unwrap()
+                .quarantine_sealed
+                .get()
+        );
+        assert!(
+            custody
+                .snapshot_exact(key_a, birth_a)
+                .unwrap()
+                .metrics_available
+        );
+        assert_eq!(
+            custody
+                .issue_leaf(key_a, birth_a, thread_a, None)
+                .unwrap_err(),
+            CpuCustodyError::NotRunnable
+        );
+    }
+
+    #[test]
+    fn admitted_native_fault_seals_after_open_loan_and_preserves_exit_witness() {
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch = kernel.queue_process_launch(Some("\\Test\\admitted-fault.exe".to_owned()), None);
+        let birth = launch.process_birth.unwrap();
+        let thread = launch.primary_thread_birth.unwrap();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let handle = custody.acquire_cpu_handle(key, birth).unwrap();
+        let mut lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        let permit = lease.permit();
+        let cell = Rc::clone(custody.admitted_cell(key, birth).unwrap());
+        let accepted = handle
+            .with_cpu_mut(permit, |_cpu| {
+                custody
+                    .finish_leaf(
+                        &mut lease,
+                        CpuLeaseEnd::Quarantined(CpuQuarantineReason::NativeFault),
+                    )
+                    .unwrap();
+                assert!(!cell.quarantine_sealed.get(), "open loan defers sealing");
+                let accepted = kernel
+                    .try_mark_process_launch_exited_with_witness(&launch, 0x31, None)
+                    .unwrap()
+                    .unwrap();
+                let (error, accepted) = custody
+                    .retire_admitted_with_accepted_exit(key, accepted)
+                    .unwrap_err();
+                assert_eq!(error, CpuCustodyError::BusyCpuLoan);
+                accepted
+            })
+            .unwrap();
+        assert!(cell.quarantine_sealed.get(), "loan drop must seal original CPU");
+        assert_eq!(
+            custody.with_quarantined(key, birth, |cpu| cpu.has_saved_context()),
+            Ok(false)
+        );
+        drop(lease);
+        let (error, accepted) = custody
+            .retire_admitted_with_accepted_exit(key, accepted)
+            .unwrap_err();
+        assert_eq!(error, CpuCustodyError::OutstandingCpuHandle);
+        drop(handle);
+        let _original_cpu = custody
+            .retire_admitted_with_accepted_exit(key, accepted)
+            .unwrap();
+        assert!(!custody.has_any_custody());
+    }
+
+    #[test]
+    fn unresolved_leaf_drop_inside_payload_loan_seals_and_can_retire() {
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch = kernel.queue_process_launch(Some("\\Test\\unresolved-leaf.exe".to_owned()), None);
+        let birth = launch.process_birth.unwrap();
+        let thread = launch.primary_thread_birth.unwrap();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let handle = custody.acquire_cpu_handle(key, birth).unwrap();
+        let lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        let permit = lease.permit();
+        let cell = Rc::clone(custody.admitted_cell(key, birth).unwrap());
+        handle
+            .with_cpu_mut(permit, |_cpu| {
+                drop(lease);
+                assert!(!cell.quarantine_sealed.get());
+                assert_eq!(
+                    custody.with_quarantined(key, birth, |_| ()),
+                    Err(CpuCustodyError::UnsealedQuarantine)
+                );
+            })
+            .unwrap();
+        assert!(cell.quarantine_sealed.get());
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::UnresolvedLeaf
+            ))
+        );
+        drop(handle);
+        let accepted = kernel
+            .try_mark_process_launch_exited_with_witness(&launch, 0x32, None)
+            .unwrap()
+            .unwrap();
+        let _original_cpu = custody
+            .retire_admitted_with_accepted_exit(key, accepted)
+            .unwrap();
+        assert!(!custody.has_any_custody());
     }
 
     #[test]

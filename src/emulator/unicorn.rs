@@ -9408,7 +9408,19 @@ impl UnicornMips {
         limits: UnicornRunLimits,
         custody: Option<&mut CpuCustody>,
     ) -> AttemptExecution {
-        let port = MachineKernelPort::new(kernel, framebuffer);
+        let port = match custody.as_ref() {
+            Some(directory)
+                if kernel.cpu_machine_lineage().is_some()
+                    || kernel.requires_cpu_machine_relineage() =>
+            {
+                MachineKernelPort::new_with_cpu_directory(
+                    kernel,
+                    framebuffer,
+                    directory.leaf_verifier(),
+                )
+            }
+            _ => MachineKernelPort::new(kernel, framebuffer),
+        };
         self.run_until_import_trap_with_framebuffer_limits_report_on_port(&port, limits, custody)
     }
 
@@ -20811,6 +20823,11 @@ impl UnicornMips {
         if !kernel.has_unreserved_event_launch() {
             return Ok(false);
         }
+        if kernel.cpu_machine_lineage().is_some() || kernel.requires_cpu_machine_relineage() {
+            kernel
+                .require_cpu_machine_lineage(custody.machine_lineage())
+                .map_err(|error| Error::Backend(error.to_string()))?;
+        }
         // A callback cannot run this machine-level service while another
         // engine still owns raw Kernel/framebuffer pointers.
         drop(NativeGuestExecutionGuard::enter()?);
@@ -20847,7 +20864,17 @@ impl UnicornMips {
         };
         let mut parent_queue = DirectPendingLaunchParentQueue(&mut self.parked_child_processes);
         let mut quarantined_child_fault = false;
-        let port = MachineKernelPort::new(kernel, framebuffer);
+        let port = if kernel.cpu_machine_lineage().is_some()
+            || kernel.requires_cpu_machine_relineage()
+        {
+            MachineKernelPort::new_with_cpu_directory(
+                kernel,
+                framebuffer,
+                custody.leaf_verifier(),
+            )
+        } else {
+            MachineKernelPort::new(kernel, framebuffer)
+        };
         let service = run_pending_process_launch_batch_with_custody(
             &port,
             limits,
@@ -20977,10 +21004,28 @@ fn run_pending_process_launches_with_custody<D>(
         &dyn Fn(&mut CeKernel, &crate::ce::kernel::PendingProcessLaunch),
     >,
 ) -> Result<()> {
+    if kernel.cpu_machine_lineage().is_some() || kernel.requires_cpu_machine_relineage() {
+        let directory = custody.as_ref().ok_or_else(|| {
+            Error::Backend("pending launch on bound Kernel requires CPU directory".to_owned())
+        })?;
+        kernel
+            .require_cpu_machine_lineage(directory.machine_lineage())
+            .map_err(|error| Error::Backend(error.to_string()))?;
+    }
     let Some(batch) = kernel.reserve_pending_process_launch_batch()? else {
         return Ok(());
     };
-    let port = MachineKernelPort::new(kernel, framebuffer);
+    let port = if let Some(directory) = custody.as_ref()
+        && (kernel.cpu_machine_lineage().is_some() || kernel.requires_cpu_machine_relineage())
+    {
+        MachineKernelPort::new_with_cpu_directory(
+            kernel,
+            framebuffer,
+            directory.leaf_verifier(),
+        )
+    } else {
+        MachineKernelPort::new(kernel, framebuffer)
+    };
     let mut parent_queue = SharedPendingLaunchParentQueue(parked_child_processes);
     run_pending_process_launch_batch_with_custody(
         &port,
@@ -84429,6 +84474,127 @@ mod unicorn_tests {
             );
             assert!(!effects.get());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn machine_port_requires_live_kernel_directory_pair_and_issued_process_leaf()
+    -> crate::Result<()> {
+        use crate::{
+            ce::kernel::CpuMachineLineageError,
+            emulator::{
+                cpu_custody::{CpuCustodyError, CpuLeaseEnd},
+                machine_kernel_port::MachinePortFailure,
+            },
+        };
+
+        let mut kernel = phase1_kernel("lineage-port.exe")?;
+        let birth = kernel.current_process_birth_key().expect("boot process birth");
+        let thread_birth = kernel
+            .handles
+            .process_primary_thread_birth(birth)
+            .expect("boot primary thread birth");
+        let mut directory = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let key = directory
+            .reserve(birth)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        directory
+            .admit_reserved(key, birth, super::UnicornMips::new()?)
+            .map_err(|(error, _)| Error::Backend(error.to_string()))?;
+        kernel
+            .bind_cpu_machine_lineage(directory.machine_lineage())
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let authority = super::AttemptAuthority {
+            process_birth: Some(birth),
+            slice_generation: 1,
+        };
+
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            assert_eq!(
+                port.enter_attempt(authority, "bound without directory").err(),
+                Some(MachinePortFailure::MissingCpuDirectory {
+                    operation: "bound without directory"
+                })
+            );
+        }
+        {
+            let port = super::MachineKernelPort::new_with_cpu_directory(
+                &mut kernel,
+                &mut framebuffer,
+                directory.leaf_verifier(),
+            );
+            assert_eq!(
+                port.enter_attempt(authority, "no issued leaf").err(),
+                Some(MachinePortFailure::MissingCpuLeaf {
+                    operation: "no issued leaf"
+                })
+            );
+        }
+
+        let mut lease = directory
+            .issue_leaf(key, birth, thread_birth, None)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        {
+            let port = super::MachineKernelPort::new_with_cpu_directory(
+                &mut kernel,
+                &mut framebuffer,
+                directory.leaf_verifier(),
+            );
+            let guard = port
+                .enter_attempt(authority, "issued leaf")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            directory
+                .finish_leaf(&mut lease, CpuLeaseEnd::Runnable)
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let effects = std::cell::Cell::new(false);
+            assert_eq!(
+                port.try_with_attempt_state(authority, "revoked callback", |_, _| {
+                    effects.set(true);
+                }),
+                Err(MachinePortFailure::CpuLeaf {
+                    operation: "revoked callback",
+                    reason: CpuCustodyError::StalePermit,
+                })
+            );
+            assert!(!effects.get());
+            drop(guard);
+        }
+
+        let mut cloned = kernel.clone();
+        let port = super::MachineKernelPort::new_with_cpu_directory(
+            &mut cloned,
+            &mut framebuffer,
+            directory.leaf_verifier(),
+        );
+        assert_eq!(
+            port.enter_attempt(authority, "cloned kernel").err(),
+            Some(MachinePortFailure::CpuMachineBinding {
+                operation: "cloned kernel",
+                reason: CpuMachineLineageError::RequiresRelineage,
+            })
+        );
+        drop(port);
+
+        let fresh = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let port = super::MachineKernelPort::new_with_cpu_directory(
+            &mut kernel,
+            &mut framebuffer,
+            fresh.leaf_verifier(),
+        );
+        assert_eq!(
+            port.enter_attempt(authority, "fresh directory").err(),
+            Some(MachinePortFailure::CpuMachineBinding {
+                operation: "fresh directory",
+                reason: CpuMachineLineageError::WrongMachine {
+                    bound: directory.machine_lineage(),
+                    requested: fresh.machine_lineage(),
+                },
+            })
+        );
         Ok(())
     }
 
