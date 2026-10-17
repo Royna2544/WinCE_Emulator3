@@ -4,6 +4,22 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Nested A→B→C launch retains CPUs but cannot run its next selected slice:**
+  the [enabled real-MIPS census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+  counted exactly one physical CPU payload each for live A, B and C both
+  after nested launch and after the next call, with empty Cut 3a custody.
+  B's first slice rotated the local `child` CPU payload to C; the outer
+  [child helper](src/emulator/unicorn.rs#L21376) then published that C payload
+  inside B's parked wrapper. Subsequent activation selected B while the
+  active payload remained C. The exact-owner
+  [preflight](src/emulator/unicorn.rs#L9418) correctly refused before native
+  entry with typed `Backend("child CPU does not own the selected live process
+  birth")`, `NoAttempt`, and no attempt ID. This is reproducible guest
+  non-progress, not observed CPU loss. A B-only restore guard, relabeling C
+  as B, or quarantining C under B's reservation would be unsound; the
+  connected callback-scoped port and O-T7 exact-slot/leaf transfer must
+  preserve both original payloads and align selection with the executing
+  slot. No iNavi or mount run is attributed to this failure.
 - **Post-native child handoff still restores a mutable process selection
   without checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
   identifies blind save/set/restore of selected module fields and
@@ -32,7 +48,16 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   nonprivate attempts do not prove that poison or an exact `failure_operation`
   record. This is a source-audited risk, not an attributed live-app failure;
   the connected callback-scoped port and checked parent-suspension token
-  remain open.
+  remain open. A later [test-only real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+  reached B's post-child/pre-parent-restore boundary with Kernel selecting C
+  and the returned child CPU slot owning C's launch, not B's. The current
+  [parked-process activation](src/emulator/unicorn.rs#L8229) can swap the
+  active CPU payload during B's slice. A B-only restoration check or transfer
+  of that returned payload into B's reservation would reject or mislabel this
+  reached nested shape; it is not a safe preparatory fix. The blind restore
+  remains, and exact rotated-subtree ownership plus checked restoration move
+  to O-T7. The observation does not demonstrate actual CPU loss or a live-app
+  failure.
 - **Independent launch service remains incomplete outside the bounded
   routes:** raw [`CeEventHasOccurred`](src/ce/coredll.rs#L23551) and
   [`ShellExecuteExW`](src/ce/coredll.rs#L34785) publish exact-birth launches

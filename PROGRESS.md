@@ -4,6 +4,34 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 nested post-child selection observation (test-only)
+
+A [focused real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+passed **1/0** on stable test source. At B's post-child/pre-parent-restore
+boundary, Kernel selected C's exact birth (PID 67/incarnation 3), and the
+returned child CPU slot owned C's launch; B's launch birth was PID
+66/incarnation 2. A later ordinary rotation selected B. A guard requiring B
+to remain selected at that boundary would reject this reached nested path,
+and the current B-key reservation cannot be assumed to own the returned C
+payload. No restore guard or production behavior changed. The failing a01
+development run had an overstrict *later* selector assertion; its same
+pre-restore observation is retained but not a production red. General
+post-B restoration and rotated-subtree custody remain O-T7 work. No broad
+suite, iNavi or writable-mount run was made for this observation.
+
+A separate [enabled real-MIPS nested CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+passed **1/0** on stable test source. Immediately after A→B→C and after one
+ordinary follow-on call, recursive CPU payload counts were exactly A/B/C =
+1/1/1, with live unsignaled canonical B/C births and empty Cut 3a custody.
+Yet the follow-on call executed no guest slice: Kernel selected B while the
+active CPU payload owned C, and exact-owner preflight returned typed
+`Backend("child CPU does not own the selected live process birth")`,
+`NoAttempt`, with no attempt ID. The a02 development red demanded an executed
+second slice; enabled a03 instead asserts this precise current fail-closed
+behavior. This is reproduced selection/lease non-progress, not observed CPU
+loss. It does not make the nested route acceptable; O-T7 acceptance must turn
+that follow-on call into witnessed guest progress with exact slot ownership.
+
 ## 2026-10-17 combined monitor Event + P2 witnessed B-only launch gate
 
 Native `CreateProcessW` and original non-shortcut direct `.exe`
@@ -28,6 +56,9 @@ ignored** and release-feature **2,218/0/9 ignored**, plus three feature
 checks at exit 0. Every counted raw log has a stable five-file source hash and
 a verified closed-log SHA-256. Claude's `f96f31d9` backup commit contains the
 same source; later docs commits moved `HEAD` without changing counted files.
+The subsequent nested-launch diagnostics added test-only code to
+`unicorn.rs`; the combined totals belong to their recorded five-file seal,
+not the current test-source hash.
 No live iNavi or writable mount run was made. `.lnk`/association/URL Shell
 service, CE `NFY0:` launch timing, post-B parent restoration, runnable CPU
 custody and full Stage 3/O-T7 remain open.
@@ -55,8 +86,12 @@ counted files; a12's HEAD moved only across docs/backup commits. At that P1
 seal, a nested P0 `CreateProcessW` batch could still admit older E, siblings
 and B together; no attempt-local B-only producer witness or independent Shell
 service was present. The later combined monitor/P2 source cut supersedes those
-limits, but does not prove live iNavi behavior. The dumped `notify.dll` `NFY0:`
-binding and static IOCTL arm do not establish CE launch timing. No app or
+limits, but does not prove live iNavi behavior. A hash-identical NTFS-copy
+[REA follow-up](evidence/ce6-rea-nfy0-20261017/findings.md) decompiled the
+dumped `notify.dll` event IOCTL through notification-record writes and alarm
+service, plus a separate worker path. Its direct IOCTL-to-alarm call chain
+does not invoke `CreateProcessW`; an exact event-to-launch or
+before/after-return timing rule remains unknown. No app or
 writable mount was run for this cut.
 
 ## 2026-10-17 bounded P0 in-place pending-launch ownership gate

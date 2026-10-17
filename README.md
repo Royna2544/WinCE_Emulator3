@@ -47,7 +47,13 @@ remote-control HTTP/WebSocket surface.
   independent host turn. Monitor `continue` can offer E and avoids re-entering
   a completed CPU; `stop_pc` intentionally keeps E queued. Other Shell routes,
   checked post-B restoration, full CPU custody and live-app behavior remain
-  open. The NAND `notify.dll` trace has not established CE launch timing.
+  open. A [test-only nested A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+  found C selected and occupying the returned child CPU slot when B's
+  post-native handoff returned, so a B-only restore guard is deferred to
+  O-T7. A follow-on [CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+  found A/B/C payloads intact but the next selected slice refused before
+  guest execution because B selection was paired with C's CPU. The NAND
+  `notify.dll` trace has not established CE launch timing.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,

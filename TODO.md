@@ -99,7 +99,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    [exit retry](evidence/stage2-writable-image-exit-retire-20261016/validation.receipt.md)).
 1. Continue the user-authorized Stage 3 migration. Passed bounded gates are
    listed in `PROGRESS.md` ("2026-10-16 and 2026-10-15 Stage 3 source gates"); open defects
-   are in `KNOWN_BUGS.md`. Next, in order:
+   are in `KNOWN_BUGS.md`. The [test-only real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+   shows C selected and occupying the returned child CPU slot at B's
+   post-child boundary. Do not add a B-only post-restore guard or quarantine
+   that C payload under B's reservation; carry checked selection restoration
+   and the rotated subtree into O-T7's slot/leaf design. The follow-on
+   [enabled CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+   now reproduces exact-owner `NoAttempt` non-progress with all three CPUs
+   retained; the connected port and slot/leaf cut must convert its next
+   call to an executed exact-owner guest slice. Next, in order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
      [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
