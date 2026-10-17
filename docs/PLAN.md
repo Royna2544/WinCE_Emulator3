@@ -236,15 +236,16 @@ not an implemented owner. Stage its connected source cut in this order:
    and new B under A's tail; this is an ownership repair, not creator
    attribution or a new service trigger. During-run queue visibility and an
    active-claim checkpoint save were not independently executed in this cut.
-   The [P1 Event-service source cut](subsystems/tasks-scheduler.md#p1-independent-event-service-trigger-focused-source-gate-broad-pending)
+   The [bounded P1 Event-service gate](subsystems/tasks-scheduler.md#p1-independent-event-service-trigger-bounded-source-test-gate)
    now tags each event-published entry with checked publisher provenance and
    offers one oldest Event in place at a neutral bounded host-loop turn,
    independent of `CreateProcessW`. Focused Kernel, real-MIPS, path,
-   raw-kernel, retry and host-loop controls pass; broad suites and final seal
-   are pending. Nested P0 E+B batches can still drain siblings under A. Do
-   not infer `NFY0:` return timing or accept debugger-stop, monitor or live
-   behavior from this gate. Complete P1 validation before the witnessed gate.
-   Only then stage the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
+   raw-kernel, retry and host-loop controls pass; the [P1 receipt](../evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
+   seals 19-block no-default **1,558/0/2 ignored**, release-feature
+   **2,210/0/9 ignored**, and three feature checks at exit 0. Nested P0 E+B
+   batches can still drain siblings under A. Do not infer `NFY0:` return
+   timing or accept debugger-stop, monitor or live
+   behavior from this gate. Next stage the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
    carry an attempt-local exact publication witness through the import
    boundary; claim only B after the selected-context preflight; and test mixed
    E/B isolation, nested sibling visibility and pre-CPU retry order. A first

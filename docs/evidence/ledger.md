@@ -2740,7 +2740,7 @@ was refused by the backing volume, so IOCTL handling and notification launch
 timing remain unknown. This identifies a concrete driver candidate, not a P1
 timing rule or a runtime service witness.
 
-## P1 independent Event service (2026-10-17, focused source cut; broad pending)
+## P1 independent Event service (2026-10-17, bounded source/test gate)
 
 The current source tags each notification Event descriptor with checked
 publisher thread/process births and retains the publisher's path base. A
@@ -2749,7 +2749,7 @@ from Kernel's in-place queue, even without another `CreateProcessW`. It does
 not create a dummy native owner. A retryable pre-CPU error returns the same
 birth to its queue slot; ordinary B and unselected siblings remain queued.
 The nested P0 `CreateProcessW` path still admits its aggregate E+B batch, so
-this focused cut does not isolate a witnessed B or add Shell service.
+this bounded gate does not isolate a witnessed B or add Shell service.
 
 Stamped focused logs: [a04 Kernel 2/0](../../evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
 [a05 real-MIPS Event 2/0](../../evidence/stage3-event-trigger-p1-20261017/a05-guest-event-focused.raw.log),
@@ -2760,9 +2760,14 @@ and [a10 host-loop wiring 1/0](../../evidence/stage3-event-trigger-p1-20261017/a
 [A09](../../evidence/stage3-event-trigger-p1-20261017/a09-host-loop-wiring.raw.log)
 failed because the test harness propagated its expected uninitialized-CPU
 error before asserting it; a10 corrected that assertion, not production
-behavior. Broad release/no-default suites, feature checks and a final source
-seal remain pending. The requested debugger-stop and monitor paths, live
-iNavi, CPU/Task custody and CE `NFY0:` notification timing are not proved;
+behavior. The [P1 receipt](../../evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
+seals 19-block a11 no-default **1,558/0/2 ignored** and a12 release-feature
+**2,210/0/9 ignored** suites. A13 `unicorn`, a14 `unicorn,win32-desktop` and
+a15 full-feature checks exited 0; counted source hashes stayed unchanged.
+A12's HEAD moved from `5b0d3696` to `ff9016c3` across docs/backup commits,
+while seal commit `ce2a4e7d` matches the counted source files. The requested
+debugger-stop and monitor paths, live iNavi, CPU/Task custody and CE `NFY0:`
+notification timing are not proved;
 the [NAND driver finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 is a binding candidate, not a timing witness. No app or writable mount was
 run for this source cut.

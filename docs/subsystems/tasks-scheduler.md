@@ -938,12 +938,12 @@ evidence or a policy to extend. P0 does not establish Stage 3, O-T7, a
 callback-scoped port, runnable CPU custody or live-app acceptance. No app or
 writable mount was run.
 
-The focused P1 cut follows P0 and precedes the witnessed producer gate below.
+The bounded P1 gate follows P0 and precedes the witnessed producer gate below.
 The [dumped `notify.dll`/hive binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 identifies a concrete `NFY0:` driver candidate but does not settle
 before/after-IOCTL-return timing.
 
-##### P1 independent event-service trigger (focused source gate; broad pending)
+##### P1 independent event-service trigger (bounded source-test gate)
 
 The source now stores Event origin on each published descriptor: event ID and
 the checked publishing thread/process births are provenance, not the child
@@ -965,9 +965,13 @@ Stamped focused logs passed [a04 Kernel **2/0**](../../evidence/stage3-event-tri
 [a08 same-birth pre-CPU retry **1/0**](../../evidence/stage3-event-trigger-p1-20261017/a08-event-retry.raw.log)
 and [a10 real host-loop wiring **1/0**](../../evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log).
 A09 failed because its harness propagated an intentionally expected no-PE
-error; a10 corrected the assertion without a production fix. Broad suites,
-feature checks and the final source seal are pending. The controls do not
-establish requested debugger-stop/monitor paths, full selected-context or
+error; a10 corrected the assertion without a production fix. The bounded
+[P1 receipt](../../evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
+records 19-block a11 no-default **1,558/0/2 ignored** and a12 release-feature
+**2,210/0/9 ignored** suites, with a13–a15 feature checks at exit 0; counted
+source remained unchanged through those runs and matches seal commit
+`ce2a4e7d`. A12's HEAD moved across docs/backup commits only. The controls do
+not establish requested debugger-stop/monitor paths, full selected-context or
 parked-CPU ownership on every error, independent Shell service, a witnessed
 B-only handoff, the callback-scoped port, full Stage 3/O-T7 or live iNavi.
 The timing claim is only eventual host-loop service; `NFY0:` driver behavior
@@ -1014,8 +1018,8 @@ as an ignored red:
    as a pending launch; that error boundary remains a custody concern.
 
 Raw `CeEventHasOccurred` had no independent service trigger at P0's seal; the
-focused P1 source now offers one Event at a neutral host turn, with broad
-validation pending. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+bounded P1 gate now offers one Event at a neutral host turn. The same
+[REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing; the
 [dumped driver binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 identifies `notify.dll` but not its scheduling/return timing. The P1 eventual-
