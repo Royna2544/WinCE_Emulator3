@@ -353,7 +353,10 @@ pub struct CeKernel {
     lowest_scheduled_win32_priority: u32,
     thread_priority_overrides: BTreeMap<u32, i32>,
     thread_suspend_counts: BTreeMap<u32, u32>,
-    pending_process_launches: Vec<PendingProcessLaunch>,
+    pending_process_launches: Vec<PendingLaunchEntry>,
+    next_pending_launch_entry_generation: u64,
+    next_pending_launch_batch_generation: u64,
+    next_pending_launch_claim_generation: u64,
     next_process_id: u32,
     loaded_modules: BTreeMap<String, LoadedModule>,
     next_loaded_module_order: u64,
@@ -1019,6 +1022,53 @@ pub struct PendingProcessLaunch {
     pub primary_thread_birth: Option<ThreadBirthKey>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingLaunchPhase {
+    Unreserved,
+    Reserved {
+        batch_generation: u64,
+    },
+    Claimed {
+        batch_generation: u64,
+        claim_generation: u64,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct PendingLaunchEntry {
+    launch: PendingProcessLaunch,
+    entry_generation: u64,
+    phase: PendingLaunchPhase,
+}
+
+/// An entry-time locator, not a second owner of the published launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingLaunchLocator {
+    process_birth: ProcessBirthKey,
+    primary_thread_birth: ThreadBirthKey,
+    entry_generation: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingLaunchBatch {
+    generation: u64,
+    locators: Vec<PendingLaunchLocator>,
+}
+
+impl PendingLaunchBatch {
+    pub(crate) fn locators(&self) -> &[PendingLaunchLocator] {
+        &self.locators
+    }
+}
+
+/// A checked, one-attempt claim. The launch itself remains in CeKernel.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingLaunchClaim {
+    locator: PendingLaunchLocator,
+    batch_generation: u64,
+    claim_generation: u64,
+}
+
 /// Proof returned only after the exact process birth's stopped exit has
 /// passed framebuffer preflight and canonical completion. A termination
 /// request or a reused numeric PID cannot mint this witness.
@@ -1458,6 +1508,9 @@ impl CeKernel {
             thread_priority_overrides: BTreeMap::new(),
             thread_suspend_counts: BTreeMap::new(),
             pending_process_launches: Vec::new(),
+            next_pending_launch_entry_generation: 1,
+            next_pending_launch_batch_generation: 1,
+            next_pending_launch_claim_generation: 1,
             next_process_id: 0x42,
             loaded_modules: BTreeMap::new(),
             next_loaded_module_order: 0,
@@ -3185,8 +3238,8 @@ impl CeKernel {
             let name = self
                 .pending_process_launches
                 .iter()
-                .find(|launch| launch.process_id == process.process_id)
-                .and_then(|launch| launch.application.as_deref())
+                .find(|entry| entry.launch.process_id == process.process_id)
+                .and_then(|entry| entry.launch.application.as_deref())
                 .map(toolhelp_process_basename)
                 .unwrap_or_else(|| format!("process-{}.exe", process.process_id));
             process_ids.push(process.process_id);
@@ -3374,7 +3427,15 @@ impl CeKernel {
             process_birth: Some(child_birth),
             primary_thread_birth: Some(primary_thread_birth),
         };
-        self.pending_process_launches.push(launch.clone());
+        let entry_generation = self.next_pending_launch_entry_generation;
+        self.next_pending_launch_entry_generation = entry_generation
+            .checked_add(1)
+            .expect("pending launch entry generation exhausted before publication");
+        self.pending_process_launches.push(PendingLaunchEntry {
+            launch: launch.clone(),
+            entry_generation,
+            phase: PendingLaunchPhase::Unreserved,
+        });
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessWQueued",
             application: launch.application.clone(),
@@ -3391,8 +3452,266 @@ impl CeKernel {
         launch
     }
 
+    /// Reserve an entry-time FIFO batch without taking ownership from Kernel.
+    /// A nested batch sees only launches published after an outer batch began.
+    pub(crate) fn reserve_pending_process_launch_batch(
+        &mut self,
+    ) -> Result<Option<PendingLaunchBatch>> {
+        let mut locators = Vec::new();
+        for entry in &self.pending_process_launches {
+            if entry.phase != PendingLaunchPhase::Unreserved {
+                continue;
+            }
+            let process_birth = entry.launch.process_birth.ok_or_else(|| {
+                Error::Backend("pending child launch has no original process birth".to_owned())
+            })?;
+            let primary_thread_birth = entry.launch.primary_thread_birth.ok_or_else(|| {
+                Error::Backend(
+                    "pending child launch has no original primary thread birth".to_owned(),
+                )
+            })?;
+            if process_birth.process_id() != entry.launch.process_id
+                || primary_thread_birth.thread_id() != entry.launch.thread_id
+                || locators
+                    .iter()
+                    .any(|locator: &PendingLaunchLocator| locator.process_birth == process_birth)
+            {
+                return Err(Error::Backend(
+                    "pending child launch has inconsistent or duplicate exact birth".to_owned(),
+                ));
+            }
+            locators.push(PendingLaunchLocator {
+                process_birth,
+                primary_thread_birth,
+                entry_generation: entry.entry_generation,
+            });
+        }
+        if locators.is_empty() {
+            return Ok(None);
+        }
+        let generation = self.next_pending_launch_batch_generation;
+        self.next_pending_launch_batch_generation = generation.checked_add(1).ok_or_else(|| {
+            Error::Backend("pending launch batch generation exhausted".to_owned())
+        })?;
+        for entry in &mut self.pending_process_launches {
+            if entry.phase == PendingLaunchPhase::Unreserved {
+                entry.phase = PendingLaunchPhase::Reserved {
+                    batch_generation: generation,
+                };
+            }
+        }
+        Ok(Some(PendingLaunchBatch {
+            generation,
+            locators,
+        }))
+    }
+
+    /// Read-only exact-birth visibility includes reserved and claimed entries.
+    pub(crate) fn pending_process_launch_for_birth(
+        &self,
+        birth: ProcessBirthKey,
+    ) -> Option<&PendingProcessLaunch> {
+        let mut matches = self
+            .pending_process_launches
+            .iter()
+            .filter(|entry| entry.launch.process_birth == Some(birth));
+        let entry = matches.next()?;
+        matches.next().is_none().then_some(&entry.launch)
+    }
+
+    /// Claim one original entry from this batch, validating both canonical
+    /// Task births before any loader or native child effects.
+    pub(crate) fn claim_pending_process_launch(
+        &mut self,
+        batch: &PendingLaunchBatch,
+        locator: PendingLaunchLocator,
+    ) -> Result<(PendingLaunchClaim, PendingProcessLaunch)> {
+        if !batch.locators.contains(&locator) {
+            return Err(Error::Backend(
+                "pending launch locator does not belong to this batch".to_owned(),
+            ));
+        }
+        let index = self
+            .pending_process_launches
+            .iter()
+            .position(|entry| entry.entry_generation == locator.entry_generation)
+            .ok_or_else(|| Error::Backend("pending launch locator is stale".to_owned()))?;
+        let entry = &self.pending_process_launches[index];
+        if entry.phase
+            != (PendingLaunchPhase::Reserved {
+                batch_generation: batch.generation,
+            })
+            || entry.launch.process_birth != Some(locator.process_birth)
+            || entry.launch.primary_thread_birth != Some(locator.primary_thread_birth)
+        {
+            return Err(Error::Backend(
+                "pending launch exact claim is stale or already claimed".to_owned(),
+            ));
+        }
+        let process = locator.process_birth;
+        let primary = locator.primary_thread_birth;
+        if self.handles.process_birth_key(process.process_id()) != Some(process)
+            || !self.handles.process_execution_live_by_birth(process)
+            || self.handles.process_signaled_by_id(process.process_id()) != Some(false)
+            || self.handles.process_primary_thread_birth(process) != Some(primary)
+            || self.handles.thread_birth_key_by_id(primary.thread_id()) != Some(primary)
+            || self
+                .handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                != Some(process)
+            || !self
+                .handles
+                .thread_execution_live_by_id(primary.thread_id())
+        {
+            return Err(Error::Backend(
+                "pending launch canonical process or primary thread birth is stale".to_owned(),
+            ));
+        }
+        let claim_generation = self.next_pending_launch_claim_generation;
+        self.next_pending_launch_claim_generation =
+            claim_generation.checked_add(1).ok_or_else(|| {
+                Error::Backend("pending launch claim generation exhausted".to_owned())
+            })?;
+        let launch = entry.launch.clone();
+        self.pending_process_launches[index].phase = PendingLaunchPhase::Claimed {
+            batch_generation: batch.generation,
+            claim_generation,
+        };
+        Ok((
+            PendingLaunchClaim {
+                locator,
+                batch_generation: batch.generation,
+                claim_generation,
+            },
+            launch,
+        ))
+    }
+
+    /// Return a pre-CPU failure to its original slot; the enclosing batch
+    /// keeps it reserved until that batch is explicitly released.
+    pub(crate) fn release_pending_process_launch_claim(
+        &mut self,
+        claim: PendingLaunchClaim,
+    ) -> Result<()> {
+        let entry = self
+            .pending_process_launches
+            .iter_mut()
+            .find(|entry| entry.entry_generation == claim.locator.entry_generation)
+            .ok_or_else(|| Error::Backend("pending launch claim entry is missing".to_owned()))?;
+        if entry.phase
+            != (PendingLaunchPhase::Claimed {
+                batch_generation: claim.batch_generation,
+                claim_generation: claim.claim_generation,
+            })
+            || entry.launch.process_birth != Some(claim.locator.process_birth)
+            || entry.launch.primary_thread_birth != Some(claim.locator.primary_thread_birth)
+        {
+            return Err(Error::Backend(
+                "pending launch claim release is stale".to_owned(),
+            ));
+        }
+        entry.phase = PendingLaunchPhase::Reserved {
+            batch_generation: claim.batch_generation,
+        };
+        Ok(())
+    }
+
+    /// Retire only the exact claimed queue entry after checked zero-slice
+    /// completion or child CPU admission. Accepted exit may already have
+    /// retired its canonical Task birth, so only the token is checked here.
+    pub(crate) fn consume_pending_process_launch_claim(
+        &mut self,
+        claim: PendingLaunchClaim,
+    ) -> Result<()> {
+        let index = self
+            .pending_process_launches
+            .iter()
+            .position(|entry| entry.entry_generation == claim.locator.entry_generation)
+            .ok_or_else(|| Error::Backend("pending launch claim entry is missing".to_owned()))?;
+        let entry = &self.pending_process_launches[index];
+        if entry.phase
+            != (PendingLaunchPhase::Claimed {
+                batch_generation: claim.batch_generation,
+                claim_generation: claim.claim_generation,
+            })
+            || entry.launch.process_birth != Some(claim.locator.process_birth)
+            || entry.launch.primary_thread_birth != Some(claim.locator.primary_thread_birth)
+        {
+            return Err(Error::Backend(
+                "pending launch claim consumption is stale".to_owned(),
+            ));
+        }
+        self.pending_process_launches.remove(index);
+        Ok(())
+    }
+
+    /// Return unattempted entries to the same queue slots. A still-claimed
+    /// entry is an ownership error and cannot be silently released.
+    pub(crate) fn release_pending_process_launch_batch(
+        &mut self,
+        batch: PendingLaunchBatch,
+    ) -> Result<()> {
+        for locator in &batch.locators {
+            let Some(entry) = self
+                .pending_process_launches
+                .iter()
+                .find(|entry| entry.entry_generation == locator.entry_generation)
+            else {
+                // This exact claim was consumed after CPU admission or exit.
+                continue;
+            };
+            if entry.launch.process_birth != Some(locator.process_birth)
+                || entry.launch.primary_thread_birth != Some(locator.primary_thread_birth)
+                || entry.phase
+                    != (PendingLaunchPhase::Reserved {
+                        batch_generation: batch.generation,
+                    })
+            {
+                return Err(Error::Backend(
+                    "pending launch batch has a stale or active claim".to_owned(),
+                ));
+            }
+        }
+        if self.pending_process_launches.iter().any(|entry| {
+            matches!(
+                entry.phase,
+                PendingLaunchPhase::Claimed { batch_generation, .. }
+                    | PendingLaunchPhase::Reserved { batch_generation }
+                    if batch_generation == batch.generation
+            ) && !batch
+                .locators
+                .iter()
+                .any(|locator| locator.entry_generation == entry.entry_generation)
+        }) {
+            return Err(Error::Backend(
+                "pending launch batch contains an unknown active entry".to_owned(),
+            ));
+        }
+        for entry in &mut self.pending_process_launches {
+            if entry.phase
+                == (PendingLaunchPhase::Reserved {
+                    batch_generation: batch.generation,
+                })
+            {
+                entry.phase = PendingLaunchPhase::Unreserved;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compatibility extraction for fixtures and legacy raw API inspections.
+    /// Production must use the in-place batch/claim methods instead.
     pub fn take_pending_process_launches(&mut self) -> Vec<PendingProcessLaunch> {
+        assert!(
+            self.pending_process_launches
+                .iter()
+                .all(|entry| entry.phase == PendingLaunchPhase::Unreserved),
+            "cannot extract a reserved or claimed pending launch"
+        );
         std::mem::take(&mut self.pending_process_launches)
+            .into_iter()
+            .map(|entry| entry.launch)
+            .collect()
     }
 
     /// A published child launch has an independent exact Task birth even
@@ -3405,8 +3724,26 @@ impl CeKernel {
     /// recoverable stopped-exit refusal. Their original birth witnesses stay
     /// intact and later launches retain their relative order.
     pub fn restore_pending_process_launches(&mut self, mut launches: Vec<PendingProcessLaunch>) {
-        launches.append(&mut self.pending_process_launches);
-        self.pending_process_launches = launches;
+        assert!(
+            self.pending_process_launches
+                .iter()
+                .all(|entry| entry.phase == PendingLaunchPhase::Unreserved),
+            "cannot restore across a reserved or claimed pending launch"
+        );
+        let mut restored = Vec::with_capacity(launches.len() + self.pending_process_launches.len());
+        for launch in launches.drain(..) {
+            let entry_generation = self.next_pending_launch_entry_generation;
+            self.next_pending_launch_entry_generation = entry_generation
+                .checked_add(1)
+                .expect("pending launch entry generation exhausted before restoration");
+            restored.push(PendingLaunchEntry {
+                launch,
+                entry_generation,
+                phase: PendingLaunchPhase::Unreserved,
+            });
+        }
+        restored.append(&mut self.pending_process_launches);
+        self.pending_process_launches = restored;
     }
 
     pub fn mark_process_launch_exited(
@@ -14725,7 +15062,7 @@ mod tests {
         // closing the last public process alias must not retire its birth.
         assert_eq!(kernel.pending_process_launches.len(), 1);
         assert_eq!(
-            kernel.pending_process_launches[0].process_id,
+            kernel.pending_process_launches[0].launch.process_id,
             launch.process_id
         );
         assert_eq!(
@@ -14737,6 +15074,151 @@ mod tests {
             "a pending child remains addressable by PID after its last process handle closes",
         );
         assert_eq!(kernel.process_id(reopened), Some(launch.process_id));
+        Ok(())
+    }
+
+    #[test]
+    fn pending_launch_claim_keeps_outer_siblings_visible_and_restores_original_order() -> Result<()>
+    {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let event = kernel.queue_process_launch(Some("event.exe".to_owned()), None);
+        let child = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let tail = kernel.queue_process_launch(Some("tail.exe".to_owned()), None);
+        let outer = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("three entry-time launches");
+        assert_eq!(outer.locators().len(), 3);
+        let (child_claim, claimed_child) =
+            kernel.claim_pending_process_launch(&outer, outer.locators()[1])?;
+        assert_eq!(claimed_child, child);
+        for launch in [&event, &child, &tail] {
+            let birth = launch.process_birth.expect("original process birth");
+            assert_eq!(kernel.pending_process_launch_for_birth(birth), Some(launch));
+        }
+        assert!(kernel.has_pending_process_launches());
+
+        // A nested batch sees only the new publication, never an outer
+        // batch's reserved or claimed siblings.
+        let later = kernel.queue_process_launch(Some("later.exe".to_owned()), None);
+        let nested = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("new nested publication");
+        assert_eq!(nested.locators().len(), 1);
+        let (later_claim, claimed_later) =
+            kernel.claim_pending_process_launch(&nested, nested.locators()[0])?;
+        assert_eq!(claimed_later, later);
+        kernel.release_pending_process_launch_claim(later_claim)?;
+        kernel.release_pending_process_launch_batch(nested)?;
+        kernel.release_pending_process_launch_claim(child_claim)?;
+        kernel.release_pending_process_launch_batch(outer)?;
+
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![event.clone(), child.clone(), tail.clone(), later.clone()],
+            "a retryable child failure releases the exact original slot ahead of later publications"
+        );
+        for launch in [&event, &child, &tail, &later] {
+            let birth = launch.process_birth.expect("original process birth");
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(
+                kernel.process_exit_code(launch.process_handle),
+                Some(STILL_ACTIVE)
+            );
+            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pending_launch_claim_replay_and_duplicate_refuse_without_consuming_siblings() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let event = kernel.queue_process_launch(Some("event.exe".to_owned()), None);
+        let child = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let tail = kernel.queue_process_launch(Some("tail.exe".to_owned()), None);
+        let batch = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("three entry-time launches");
+        let locator = batch.locators()[1];
+        let (old_claim, _) = kernel.claim_pending_process_launch(&batch, locator)?;
+        assert!(
+            kernel
+                .claim_pending_process_launch(&batch, locator)
+                .is_err()
+        );
+        assert!(
+            kernel
+                .release_pending_process_launch_batch(PendingLaunchBatch {
+                    generation: batch.generation,
+                    locators: batch.locators.clone(),
+                })
+                .is_err(),
+            "an active claim cannot be released with its batch"
+        );
+        kernel.release_pending_process_launch_claim(old_claim)?;
+        let (new_claim, _) = kernel.claim_pending_process_launch(&batch, locator)?;
+        assert!(
+            kernel
+                .consume_pending_process_launch_claim(old_claim)
+                .is_err()
+        );
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(child.process_birth.unwrap()),
+            Some(&child),
+            "stale claim replay cannot consume the new claim"
+        );
+        kernel.consume_pending_process_launch_claim(new_claim)?;
+        kernel.release_pending_process_launch_batch(batch)?;
+        assert_eq!(kernel.take_pending_process_launches(), vec![event, tail]);
+        Ok(())
+    }
+
+    #[test]
+    fn pending_launch_claim_rejects_old_birth_after_pid_reuse() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let old = kernel.queue_process_launch(Some("old.exe".to_owned()), None);
+        let old_birth = old.process_birth.expect("original process birth");
+        assert!(
+            kernel
+                .try_mark_process_launch_exited_with_witness(&old, 0x5a, None)?
+                .is_some()
+        );
+        assert!(kernel.close_handle(old.thread_handle)?);
+        assert!(kernel.close_handle(old.process_handle)?);
+        assert_eq!(kernel.handles.process_birth_key(old.process_id), None);
+
+        // Fixture-only PID reuse; the queued old descriptor must not acquire
+        // the replacement process's publication or admission authority.
+        kernel.next_process_id = old.process_id;
+        let replacement = kernel.queue_process_launch(Some("replacement.exe".to_owned()), None);
+        let replacement_birth = replacement
+            .process_birth
+            .expect("replacement process birth");
+        assert_eq!(replacement.process_id, old.process_id);
+        assert_ne!(replacement_birth, old_birth);
+        let batch = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("old and replacement entries");
+        assert_eq!(batch.locators().len(), 2);
+        assert!(
+            kernel
+                .claim_pending_process_launch(&batch, batch.locators()[0])
+                .is_err(),
+            "the stale old birth cannot claim the reused numeric PID"
+        );
+        let (claim, claimed) = kernel.claim_pending_process_launch(&batch, batch.locators()[1])?;
+        assert_eq!(claimed, replacement);
+        kernel.consume_pending_process_launch_claim(claim)?;
+        kernel.release_pending_process_launch_batch(batch)?;
+        assert_eq!(kernel.take_pending_process_launches(), vec![old]);
+        assert!(
+            kernel
+                .handles
+                .process_execution_live_by_birth(replacement_birth)
+        );
+        assert_eq!(
+            kernel.process_exit_code(replacement.process_handle),
+            Some(STILL_ACTIVE)
+        );
         Ok(())
     }
 
