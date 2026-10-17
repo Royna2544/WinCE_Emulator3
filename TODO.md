@@ -267,11 +267,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      queued B before the post-native caller-birth check. Next make an
      exact-birth pending claim/return plus an independent fair event/shell
      trigger, then update that mixed control to require only the claimed
-     launch to run. Also test and fix the separate
-     `CreateProcessW` partial-output path: `coredll.rs` queues before four
-     `PROCESS_INFORMATION` writes, so a failed write can return `FALSE` while
-     leaving a queued live child for a later trigger. This is distinct from
-     the already-successful `TRUE`-before-load gap.
+     launch to run. The raw `CreateProcessW` output-Boolean correction has
+     bounded [A03](evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
+     and [A04](evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
+     passes; release A05 remains pending. Audit lifetime/retirement of the
+     process/thread aliases created when optional output is null or unwritable,
+     and preserve the separate `TRUE`-before-loader gap. Output-copy failure
+     is not permission to roll back an already-published child. The shim's
+     success-path `LastError=0` remains a known CE6 mismatch outside this gate.
      The unconnected `MachineKernelPort` foundation passed historical
      [development tests](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
      but has been removed from active source; Git and evidence preserve it.

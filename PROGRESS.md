@@ -4,6 +4,21 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 raw CreateProcessW output Boolean gate (release pending)
+
+The raw `CreateProcessW` shim now treats a null `PROCESS_INFORMATION` pointer
+as optional and keeps a published exact-birth child when an output word cannot
+be copied. The bounded raw controls return `Bool(TRUE)` with one queued,
+Kernel-live, unsignaled child for null and unwritable output. Copying may have
+partial guest-byte effects; this change neither rolls them back nor treats an
+output-copy failure as a failed creation. [A03 raw-kernel](evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
+passed **135/0** and [A04 no-default](evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
+passed 19 blocks **1,550/0/2 ignored**; release A05 and the final source seal
+are pending. The shim's existing success-path `LastError=0` is a known CE6
+mismatch and was not validated by these new controls. Null-output handle-alias
+retirement, the `TRUE`-before-loader gap, and the deferred aggregate launch
+drain remain open. No app or writable mount was run.
+
 ## 2026-10-17 bounded selected-context pre-admission gate
 
 The current source captures a selected-context stamp immediately before A's

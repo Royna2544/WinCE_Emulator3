@@ -39,15 +39,19 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   or proof of its runtime frequency. Add a fair event/Shell drain trigger with an
   exact-birth claim; do not make those older launches A's child in the
   current aggregate tail.
-- **`CreateProcessW` can queue a child even when its output write fails:**
-  [the raw shim](src/ce/coredll.rs#L29141) calls
-  `queue_process_launch_with_options` before four fallible
-  `PROCESS_INFORMATION` writes. If any write fails, it returns `FALSE` with
-  an already queued live child; a later pending-launch trigger may admit that
-  child despite the failed call. This is a source-audited path, not yet an
-  executed failing-write control or observed iNavi behavior. Fix queue
-  publication/output failure as one checked transaction, without confusing
-  it with the separate successful `TRUE`-before-load gap.
+- **`CreateProcessW` output correction leaves alias lifetime and loader status
+  open:** [the raw shim](src/ce/coredll.rs#L29141) now returns `TRUE` for a
+  published child even when optional `PROCESS_INFORMATION` is null or cannot
+  receive all four words; the bounded raw/no-default controls pass while
+  release validation is pending. Process/thread handle aliases are allocated
+  before output copying. With null output the guest receives neither number,
+  while canonical completion retains aliases; their retirement in that shape
+  has no executed control and may retain completed records. The raw `TRUE`
+  still precedes PE load and CPU admission. The existing forced success-path
+  `LastError=0` is a known CE6 mismatch and is not validated by this gate.
+  Neither output-copy failure nor partial guest-byte writes imply launch
+  rollback. The separate aggregate-drain and event/Shell trigger issues above
+  remain open; none of these are attributed to a live iNavi failure.
 - **Process exit leaves general private VM and mapped-file views behind:**
   exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
   heap/stack ranges, writable-image runs and heap state, but not ordinary
