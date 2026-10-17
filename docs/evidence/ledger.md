@@ -2784,9 +2784,11 @@ admission into B-only: E keeps its exact pending birth. A direct original
 same B-only observation; `.lnk`/association routes publish no direct witness.
 Kernel B1/B2 claims preserve E/C, and an invalid-PE pre-CPU retry admits the
 same B birth after repair. Monitor `continue` offers E at a closed-native
-boundary, whereas `stop_pc` leaves it queued. A real-MIPS completed-root red
-exposed a monitor offer returning to a completed CPU and refusing native
-re-entry; the same-seal green takes a bounded handoff/break before CPU entry.
+boundary, whereas `stop_pc` leaves it queued until a later ordinary continue
+can clear the requested-PC-stop boundary with a selected-CPU attempt. A
+real-MIPS development run observed a completed-root native re-entry refusal,
+but its source changed during execution, so it is not a sealed red. Stable
+final-source controls pass with a bounded handoff/break before CPU entry.
 This defect arose in the monitor offer, not producer publication.
 
 Final counted source passed 19-block no-default **1,560/0/2 ignored** and

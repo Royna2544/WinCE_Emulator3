@@ -1014,11 +1014,14 @@ cover these bounded shapes:
 
 The monitor now offers one queued Event at a closed-native boundary on an
 ordinary `continue`, including when the selected CPU has completed. A bounded
-real-MIPS return fixture exposed completed-owner native re-entry; the monitor
-now switches to a parked process or stops cleanly before another CPU attempt.
-`stop_pc`/`until` deliberately suppresses the Event offer: E remains queued
-and checkpoint save refuses until a later ordinary `continue`. A completed
-parent plus runnable Event child, beyond the existing handoff controls, was
+real-MIPS development fixture observed completed-owner native re-entry, but
+its failing attempt changed source during execution and is not a stable-source
+red. Final-source controls pass: the monitor switches to a parked process or
+stops cleanly before another CPU attempt. `stop_pc`/`until` deliberately
+suppresses the Event offer: E remains queued, and checkpoint save refuses
+while its Task authority is pending. A later ordinary `continue` can first
+clear the requested-PC-stop boundary with a selected-CPU attempt, then offer
+E. A completed parent plus runnable Event child, beyond the existing handoff controls, was
 not separately executed as one monitor fixture.
 
 Raw `CeEventHasOccurred` had no independent service trigger at P0's seal; the
