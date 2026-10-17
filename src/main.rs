@@ -24,6 +24,8 @@ use std::{
 use wince_emulation_v3::ce::audio::HostAudioSink;
 #[allow(unused_imports)]
 use wince_emulation_v3::emulator::cpu::CpuBackend as _;
+#[cfg(feature = "unicorn")]
+use wince_emulation_v3::emulator::cpu::NativeSliceOutcome;
 use wince_emulation_v3::{
     Result,
     ce::{
@@ -2760,6 +2762,8 @@ fn monitor_run_once(
         println!("  drained {input_before} host input event(s)");
     }
     let mut continued = 0usize;
+    #[cfg(feature = "unicorn")]
+    let mut event_offers = 0usize;
     let run_started = Instant::now();
     loop {
         #[cfg(feature = "unicorn")]
@@ -2770,6 +2774,63 @@ fn monitor_run_once(
         )? != 0
         {
             publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
+        }
+        // Monitor `continue` is a sequence of closed native attempts, not a
+        // separate launch owner. Give it the same one-Event host opportunity
+        // as the normal run loop, including when the selected CPU is idle.
+        // A requested-PC stop keeps its diagnostic selected-CPU semantics:
+        // the Event stays queued and checkpoint refusal still sees it.
+        #[cfg(feature = "unicorn")]
+        if limits.stop_pc.is_none()
+            && !wall_clock_limit_expired(limits.wall_clock_limit_ms, run_started.elapsed())
+            && cpu.last_native_slice_outcome() != NativeSliceOutcome::RequestedPcStop
+            && kernel.has_unreserved_event_launch()
+        {
+            const MAX_MONITOR_EVENT_OFFERS: usize = 16;
+            if event_offers >= MAX_MONITOR_EVENT_OFFERS {
+                println!(
+                    "  monitor Event-service limit reached; continue again to service queued events"
+                );
+                break;
+            }
+            let service_limits = UnicornRunLimits {
+                wall_clock_limit_ms: remaining_wall_clock_limit_ms(
+                    limits.wall_clock_limit_ms,
+                    run_started.elapsed(),
+                ),
+                ..limits
+            };
+            let service = cpu.service_one_event_launch_with_custody(
+                kernel,
+                desktop.framebuffer_mut(),
+                service_limits,
+                cpu_custody,
+            );
+            publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
+            match service {
+                Ok(true) => event_offers += 1,
+                Ok(false) => {}
+                Err(err) => {
+                    if let Some(snapshot) = cpu.last_debug_snapshot() {
+                        eprintln!("  Unicorn debug: {}", snapshot.summary());
+                    }
+                    if let Some(path) = framebuffer_dump {
+                        desktop.framebuffer().write_ppm(path)?;
+                        eprintln!("  framebuffer dump: {}", path.display());
+                    }
+                    if let Err(status_err) =
+                        desktop.show_stopped_message("Emulator process stopped")
+                    {
+                        eprintln!("  presenter status update failed: {status_err}");
+                    }
+                    return Err(err);
+                }
+            }
+        }
+        // The Event child consumed this command's remaining wall-clock
+        // budget. Never turn an expired finite cap into another CPU attempt.
+        if wall_clock_limit_expired(limits.wall_clock_limit_ms, run_started.elapsed()) {
+            break;
         }
         let current_limits = UnicornRunLimits {
             wall_clock_limit_ms: remaining_wall_clock_limit_ms(
@@ -2811,6 +2872,17 @@ fn monitor_run_once(
             && !cpu.has_ready_parked_send_unblock(kernel)
         {
             break;
+        }
+        // An Event may have been published by the just-closed guest slice.
+        // Re-enter the bounded host boundary before deciding that this
+        // interactive command has no more process handoff work.
+        #[cfg(feature = "unicorn")]
+        if limits.stop_pc.is_none()
+            && !wall_expired
+            && cpu.last_native_slice_outcome() != NativeSliceOutcome::RequestedPcStop
+            && kernel.has_unreserved_event_launch()
+        {
+            continue;
         }
         if !monitor_continue_process_handoff(cpu, kernel, current_limits, &mut continued)? {
             break;
@@ -5850,6 +5922,299 @@ mod tests {
                 .count(),
             1,
             "host loop serviced exactly the original event birth"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn queued_missing_monitor_event_fixture() -> Result<(
+        UnicornMips,
+        CeKernel,
+        DesktopRuntime,
+        CpuCustody,
+        wince_emulation_v3::ce::kernel::PendingProcessLaunch,
+    )> {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        // No scratch directory is needed: the unique publisher path is only
+        // the frozen resolution base for a deliberately missing child image.
+        let publisher = std::env::temp_dir()
+            .join(format!(
+                "wince-monitor-event-{}-{unique}",
+                std::process::id()
+            ))
+            .join("publisher.exe");
+        let missing_app = format!("missing-monitor-event-{unique}.exe");
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        kernel.set_process_module_host_path(publisher);
+        kernel.set_process_current_directory(None);
+        kernel.schedule_app_at_event(missing_app.clone(), 2);
+        let publisher_birth = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("canonical publisher thread birth");
+        let launch = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher_birth,
+            Some(missing_app),
+            None,
+        )?;
+        assert!(kernel.has_unreserved_event_launch());
+        Ok((
+            UnicornMips::new()?, // Deliberately no PE; later selected run must fail.
+            kernel,
+            DesktopRuntime::Virtual(VirtualDesktop::default_primary()?),
+            CpuCustody::new().expect("test custody initializes"),
+            launch,
+        ))
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn monitor_continue_services_exact_event_before_uninitialized_cpu_attempt() -> Result<()> {
+        let (mut cpu, mut kernel, mut desktop, mut custody, event) =
+            queued_missing_monitor_event_fixture()?;
+        let event_birth = event.process_birth.expect("original event process birth");
+        let mut observed = Vec::new();
+        let mut observer = |execution: &AttemptExecution| {
+            observed.push(execution.result.as_ref().err().map(ToString::to_string));
+        };
+        let result = monitor_run_once(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &mut custody,
+            UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 250,
+                stop_pc: None,
+                live_pump: false,
+            },
+            None,
+            Some(&mut observer),
+        );
+        let error = result.expect_err("the later uninitialized selected CPU must stop");
+        assert!(
+            error
+                .to_string()
+                .contains("no PE entry point has been loaded"),
+            "monitor reached selected CPU after the Event offer: {error}"
+        );
+        assert_eq!(observed.len(), 1, "one later selected-CPU attempt");
+        assert!(
+            observed[0]
+                .as_deref()
+                .is_some_and(|reason| reason.contains("no PE entry point has been loaded"))
+        );
+        assert!(!kernel.has_pending_process_launches());
+        assert!(!kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event.process_handle),
+            Some(u32::MAX)
+        );
+        assert_eq!(kernel.is_wait_ready(event.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessResolveFailed"
+                        && record.process_id == Some(event.process_id)
+                })
+                .count(),
+            1,
+            "the monitor must service this exact Event once before CPU entry"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn monitor_until_keeps_event_queued_before_uninitialized_cpu_attempt() -> Result<()> {
+        let (mut cpu, mut kernel, mut desktop, mut custody, event) =
+            queued_missing_monitor_event_fixture()?;
+        let event_birth = event.process_birth.expect("original event process birth");
+        let result = monitor_run_once(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &mut custody,
+            UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 250,
+                stop_pc: Some(0x0040_1000),
+                live_pump: false,
+            },
+            None,
+            None,
+        );
+        let error = result.expect_err("the intentionally uninitialized CPU must stop");
+        assert!(
+            error
+                .to_string()
+                .contains("no PE entry point has been loaded")
+        );
+        assert!(kernel.has_unreserved_event_launch());
+        assert!(kernel.has_pending_process_launches());
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event.process_handle),
+            Some(wince_emulation_v3::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(event.process_handle, 1), Some(false));
+        assert!(!kernel.recent_process_ops().iter().any(|record| {
+            record.op == "CreateProcessResolveFailed" && record.process_id == Some(event.process_id)
+        }));
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![event],
+            "requested-PC monitor commands must leave this exact Event in its original slot"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn monitor_spinner_pe() -> Vec<u8> {
+        fn put_u16(bytes: &mut [u8], offset: usize, value: u16) {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+
+        let mut bytes = vec![0; 0x400];
+        bytes[0..2].copy_from_slice(b"MZ");
+        put_u32(&mut bytes, 0x3c, 0x80);
+        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
+        put_u16(&mut bytes, 0x84, 0x0166); // MIPS little-endian.
+        put_u16(&mut bytes, 0x84 + 2, 1);
+        put_u16(&mut bytes, 0x84 + 16, 0x00e0);
+        put_u16(&mut bytes, 0x84 + 18, 0x0102);
+        let optional = 0x98;
+        put_u16(&mut bytes, optional, 0x010b);
+        bytes[optional + 2] = 8;
+        put_u32(&mut bytes, optional + 4, 0x200);
+        put_u32(&mut bytes, optional + 16, 0x1000);
+        put_u32(&mut bytes, optional + 20, 0x1000);
+        put_u32(&mut bytes, optional + 24, 0x1000);
+        put_u32(&mut bytes, optional + 28, 0x0040_0000);
+        put_u32(&mut bytes, optional + 32, 0x1000);
+        put_u32(&mut bytes, optional + 36, 0x200);
+        put_u16(&mut bytes, optional + 40, 4);
+        put_u16(&mut bytes, optional + 48, 4);
+        put_u32(&mut bytes, optional + 56, 0x2000);
+        put_u32(&mut bytes, optional + 60, 0x200);
+        put_u16(&mut bytes, optional + 68, 9);
+        put_u32(&mut bytes, optional + 72, 0x10000);
+        put_u32(&mut bytes, optional + 76, 0x1000);
+        put_u32(&mut bytes, optional + 80, 0x10000);
+        put_u32(&mut bytes, optional + 84, 0x1000);
+        put_u32(&mut bytes, optional + 92, 16);
+        let section = 0x178;
+        bytes[section..section + 8].copy_from_slice(b".text\0\0\0");
+        put_u32(&mut bytes, section + 8, 0x100);
+        put_u32(&mut bytes, section + 12, 0x1000);
+        put_u32(&mut bytes, section + 16, 0x200);
+        put_u32(&mut bytes, section + 20, 0x200);
+        put_u32(&mut bytes, section + 36, 0x6000_0020);
+        put_u32(&mut bytes, 0x200, 0x1000_ffff); // beq zero,zero,-1.
+        put_u32(&mut bytes, 0x204, 0); // delay slot.
+        bytes
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn monitor_continue_services_event_after_prior_requested_pc_stop() -> Result<()> {
+        struct ScratchFile(PathBuf);
+        impl Drop for ScratchFile {
+            fn drop(&mut self) {
+                let _ = fs::remove_file(&self.0);
+            }
+        }
+
+        let (mut cpu, mut kernel, mut desktop, mut custody, event) =
+            queued_missing_monitor_event_fixture()?;
+        let event_birth = event.process_birth.expect("original event process birth");
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        let spinner_path = std::env::temp_dir().join(format!(
+            "wince-monitor-pc-stop-spinner-{}-{unique}.exe",
+            std::process::id()
+        ));
+        let _cleanup = ScratchFile(spinner_path.clone());
+        fs::write(&spinner_path, monitor_spinner_pe()).map_err(|error| {
+            wince_emulation_v3::Error::Backend(format!("write monitor spinner fixture: {error}"))
+        })?;
+        let image = PeImage::inspect(&spinner_path)?;
+        let stop_pc = image.entry_point_va();
+        cpu.load_pe_image(&image)?;
+        kernel.set_process_module_base(image.image_base());
+        kernel.set_process_module_path("\\Test\\monitor-spinner.exe".to_owned());
+        kernel.set_process_module_host_path(spinner_path);
+
+        let until = monitor_run_once(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &mut custody,
+            UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: Some(stop_pc),
+                live_pump: false,
+            },
+            None,
+            None,
+        );
+        until?;
+        assert_eq!(
+            cpu.last_native_slice_outcome(),
+            NativeSliceOutcome::RequestedPcStop
+        );
+        assert!(requested_pc_stop_reached(
+            Some(stop_pc),
+            cpu.last_debug_snapshot(),
+            cpu.saved_context_pc()
+        ));
+        assert!(kernel.has_unreserved_event_launch());
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+
+        monitor_run_once(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &mut custody,
+            UnicornRunLimits {
+                instruction_limit: 64,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            None,
+            None,
+        )?;
+        assert!(!kernel.has_pending_process_launches());
+        assert!(!kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event.process_handle),
+            Some(u32::MAX)
+        );
+        assert_eq!(kernel.is_wait_ready(event.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessResolveFailed"
+                        && record.process_id == Some(event.process_id)
+                })
+                .count(),
+            1,
+            "continue must service the original Event after a stopped-PC command"
         );
         Ok(())
     }
