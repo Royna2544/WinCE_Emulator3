@@ -4,6 +4,38 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 O-T7a process-permit foundation and boot-route red (unconnected)
+
+The [bounded process-permit receipt](evidence/ot7a-process-permit-20261017/validation.receipt.md)
+records a directory-issued process/birth/slot/attempt token independent of the
+older thread-bearing leaf. Its issue path checks the bound Kernel lineage,
+exact selected execution-live birth, admitted runnable slot, closed CPU loan
+and non-wrapping attempt generation; process and leaf permits share one active
+authority latch. Dropping an unresolved lease or unwinding a CPU loan revokes
+the permit and retains the original payload non-runnable. Parent suspension
+has no successful resume path yet. The test-only process classifier accepts
+only a canonical, still-blocked finite-Sleep parked frame. The earlier sealed
+a03 full-feature and a04 no-default focused controls each passed **28/0/0
+ignored**. After review, mutable CPU payload loans, process
+finish/classification and parked wake were restricted to `cfg(test)` because
+their interfaces do not establish a non-moving production run, an
+attempt-bound native report or a canonical completed-wait witness. The
+superseded a06 focused rerun on that
+gated source passed **28/0/0 ignored**. The final-source a08 full-feature
+debug suite passed **2,266/0/10 ignored** and a09 no-default passed
+**1,592/0/2 ignored**, each across 19 result blocks at stable HEAD
+`dc3e643b` and `cpu_custody.rs` SHA-256 `0600ecbc…84779`.
+
+A separate [real-MIPS boot host-loop expected red](evidence/ot7a-boot-host-selector-red-20261017/validation.receipt.md)
+at its earlier stable source seal executed two ordinary guest instructions as
+exact boot A and stopped at `0x00401008`, then found no admitted A slot. Its
+first compile attempt was invalid because source changed during the run; only
+the stable a02 red establishes the boot bypass. Production `UnicornMips`
+entry and `MachineKernelPort` still use the older leaf permit, and boot,
+ordinary/Event/monitor and rotation routing do not yet share a
+directory-owned selector. This is neither connected Cut 1, Cut 2 nor a live
+iNavi result. No app or writable-mount run was made.
+
 ## 2026-10-17 O-T7a host-turn contract and notification evidence (docs only)
 
 The [focused custody baseline](evidence/ot7a-host-turn-contract-20261017/validation.receipt.md)

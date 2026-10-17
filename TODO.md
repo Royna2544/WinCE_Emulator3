@@ -130,10 +130,20 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    keeps failed/unverified attempts and a bound Send refusal quarantined in
    their exact slots; it does not wire the production host turn. Both are
    preparatory: no production boot/ordinary/Event/monitor/rotation route uses
-   a shared directory-owned selector. Next, in order:
+   a shared directory-owned selector. The bounded
+   [process-permit foundation](evidence/ot7a-process-permit-20261017/validation.receipt.md)
+   issues a process/birth/slot/attempt token independently of the older
+   thread-bearing leaf, with one active latch and fail-closed loan/attempt
+   transitions. Mutable CPU loans, parked wake and attempt completion are
+   test-only until their production witnesses and restricted run facade exist.
+   The [boot host-selector red](evidence/ot7a-boot-host-selector-red-20261017/validation.receipt.md)
+   executes two guest MIPS instructions under boot A, then finds no admitted
+   A slot. Native entry and `MachineKernelPort` still accept only the leaf;
+   these are preparatory, not connected Cut 1. Next, in order:
    - Complete O-T7a Cut 1 as a connected host-turn route. Have the process
      switch return typed request variants; move A's still-open native tail
-     out of the local lease into its suspended slot with callback/finish
+     out of the local lease into its suspended slot with the
+     [native-tail capsule](docs/subsystems/native-tail-capsule.md) callback/finish
      lifetime proof. Keep the import's immutable child-publication witness
      distinct from Kernel reservation/claim and close the current
      claim-consumption-before-directory-admission gap. Make one shared selector

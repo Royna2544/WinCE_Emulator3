@@ -4,6 +4,16 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
+- **Production boot executes outside the CPU custody directory:** an
+  [explicit real-MIPS host-loop red](evidence/ot7a-boot-host-selector-red-20261017/validation.receipt.md)
+  entered native code as exact boot A and reached PC `0x00401008` after two
+  ordinary instructions, then found no admitted A slot. The new
+  [process-only permit API](evidence/ot7a-process-permit-20261017/validation.receipt.md)
+  is source-tested but not accepted by native entry or `MachineKernelPort`.
+  Normal, Event, monitor and rotation routes still use legacy selected CPU
+  wrappers, so this is an ownership bypass, not a CE6 timing result or an
+  attributed iNavi failure. The ignored red remains open until connected
+  boot/host selection makes it green under a directory-issued permit.
 - **Nested CPU ownership outside the witnessed two-node shape remains stopped:**
   the earlier [real-MIPS census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
   counted A/B/C physical payloads 1/1/1, then reached a typed pre-entry
