@@ -9,11 +9,14 @@
 //! require a leaf permit until both are migrated to the same process attempt.
 
 use std::{
-    cell::{Cell, RefCell, RefMut},
+    cell::{Cell, RefCell},
     fmt,
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
+
+#[cfg(test)]
+use std::cell::RefMut;
 
 use crate::{
     ce::{
@@ -529,20 +532,24 @@ impl AdmittedCpuCell {
         {
             return;
         }
-        if let Some(cpu) = payload.as_mut() {
+        if let Some(_cpu) = payload.as_mut() {
             #[cfg(feature = "unicorn")]
-            cpu.seal_for_quarantine();
+            _cpu.seal_for_quarantine();
             self.quarantine_sealed.set(true);
         }
     }
 }
 
-/// Ends a payload borrow with the terminal seal even if the caller unwinds.
+/// Test-only mutable loan for custody and unwind controls. Production must
+/// expose a restricted run facade: `&mut UnicornMips` allows `mem::replace`
+/// to move the admitted original out of its slot.
+#[cfg(test)]
 struct AdmittedCpuLoan<'a> {
     cell: &'a AdmittedCpuCell,
     payload: RefMut<'a, Option<UnicornMips>>,
 }
 
+#[cfg(test)]
 impl Drop for AdmittedCpuLoan<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() && self.cell.phase.get() == CpuAdmittedPhase::Leased {
@@ -576,6 +583,7 @@ impl CpuSlotHandle {
         self.cell.birth
     }
 
+    #[cfg(test)]
     pub fn with_cpu_mut<R>(
         &self,
         permit: CpuLeafPermit,
@@ -604,9 +612,9 @@ impl CpuSlotHandle {
         Ok(use_cpu(cpu))
     }
 
-    /// A Cut 1 scoped payload loan. This does not mint a leaf and the current
-    /// native backend still requires its separate process-permit integration
-    /// before this path can execute guest instructions.
+    /// Test-only Cut 1 loan probe. A production run must use a restricted,
+    /// permit-bound facade that cannot move the original payload out.
+    #[cfg(test)]
     pub fn with_process_cpu_mut<R>(
         &self,
         permit: CpuProcessPermit,
@@ -1333,11 +1341,16 @@ impl CpuCustody {
         }
     }
 
+    /// Test-only classifier pending a backend report bound to this issued
+    /// process permit. A diagnostic `AttemptExecution` alone is not authority
+    /// to resume a production CPU.
+    ///
     /// Cut 1 finish uses the actual result and native report, then checks the
     /// live Kernel/directory pair before any successful runnable/parked state.
     /// `Parked` currently accepts only a canonical, still-blocked finite-Sleep
     /// frame; other wait families have no general Task/frame verifier here and
     /// must remain unported. A malformed locator is quarantined, not Leased.
+    #[cfg(test)]
     pub fn finish_process_attempt(
         &mut self,
         lease: &mut CpuProcessLease,
@@ -1432,6 +1445,7 @@ impl CpuCustody {
         }
     }
 
+    #[cfg(test)]
     fn finish_process_classified(
         &mut self,
         lease: &mut CpuProcessLease,
@@ -1625,6 +1639,9 @@ impl CpuCustody {
         Ok(())
     }
 
+    /// Test-only cached-phase transition. Production wake requires a typed
+    /// canonical completed-wait witness, not only a matching cached locator.
+    #[cfg(test)]
     pub fn wake_parked(
         &mut self,
         key: CpuCustodyKey,
