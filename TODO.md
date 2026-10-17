@@ -271,14 +271,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      observers see unattempted siblings after claim and post-admission, just
      before the native slice, and a nested real-MIPS control preserves outer
      sibling order; none is a live run.
-     The focused [P1 Event-service source cut](evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log)
+     The bounded [P1 Event-service gate](evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
      now offers one exact Event birth per neutral host-loop opportunity without
      waiting for another `CreateProcessW`; a04/a05/a06/a07/a08/a10 controls
-     pass, but broad release/no-default and feature checks are pending. A09
-     was a corrected expected-error test-harness assertion, not a production
-     failure. Complete that broad source seal and preserve separate
-     debugger-stop/monitor/live-app limits. P0 nested E+B batch admission can
-     still consume siblings; then stage the attempt-local producer witness and
+     pass. Final-source 19-block a11 no-default **1,558/0/2 ignored** and a12
+     release-feature **2,210/0/9 ignored** suites passed; a13–a15 feature
+     checks exited 0. A09 was a corrected expected-error test-harness
+     assertion, not a production failure. Preserve separate debugger-stop,
+     monitor and live-app limits. P0 nested E+B batch admission can still
+     consume siblings; next stage the attempt-local producer witness and
      B-only handoff, deliberately updating the mixed control. Shell needs its
      own trigger. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
      passed A03 raw-kernel **135/0**, 19-block A04 no-default **1,550/0/2

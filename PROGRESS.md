@@ -4,7 +4,7 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 focused P1 independent Event-service source cut (broad pending)
+## 2026-10-17 bounded P1 independent Event-service source/test gate
 
 The current source records exact publisher thread/process births on each
 notification Event launch and offers the oldest unreserved Event once at a
@@ -19,9 +19,13 @@ passed [a04 Kernel **2/0**](evidence/stage3-event-trigger-p1-20261017/a04-pendin
 and [a10 host-loop wiring **1/0**](evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log).
 A09 propagated the fixture's expected uninitialized-CPU error instead of
 asserting it; a10 corrected that harness error, not a production defect.
-Complete release/no-default suites, feature checks and a final source seal
-remain pending. A nested P0 `CreateProcessW` batch can still admit older E,
-siblings and B together; there is no attempt-local B-only producer witness or
+The bounded [P1 receipt](evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
+records 19-block no-default a11 **1,558/0/2 ignored** and release-feature
+a12 **2,210/0/9 ignored** suites, plus a13–a15 feature checks, all exit 0
+with unchanged counted source. Source-seal commit `ce2a4e7d` matches those
+counted files; a12's HEAD moved only across docs/backup commits. A nested P0
+`CreateProcessW` batch can still admit older E, siblings and B together; there
+is no attempt-local B-only producer witness or
 independent Shell service. Requested debugger-stop, monitor and live iNavi
 behavior are unproved. The dumped `notify.dll` `NFY0:` binding is only a
 candidate, not evidence of CE notification timing. No app or writable mount
@@ -47,7 +51,7 @@ save a checkpoint during an active claim. Existing checkpoint refusal remains
 a separate source guard.
 
 P0 deliberately keeps the earlier aggregate *admission policy*: older event E
-and new B may both run under A's post-native handoff. The later focused P1 cut
+and new B may both run under A's post-native handoff. The later bounded P1 gate
 adds a neutral Event offer but no Shell trigger or producer-witnessed B-only
 isolation. This is not runnable CPU custody, the callback-scoped port, full
 Stage 3, or live-app acceptance. No app or writable mount was run.

@@ -20,7 +20,7 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   cloned Kernels to one machine lineage, or cover arbitrary mutation through
   public backing objects. The later bounded
   [P0 queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
-  adds in-place exact-birth claims. The focused P1 source adds a neutral Event
+  adds in-place exact-birth claims. The bounded P1 gate adds a neutral Event
   offer but no Shell trigger or checked parent restoration; raw
   `CreateProcessW` queues B before the post-native caller-birth check. In the
   tested canonical/private A path,
@@ -35,9 +35,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   [`ShellExecuteExW`](src/ce/coredll.rs#L34753) queue launches with exact
   process/primary-thread births in [`CeKernel`](src/ce/kernel.rs#L3371).
   P0's deferred `CreateProcessW` batch still claims its entry-time E+B set
-  in place. The focused P1 source now offers the oldest Event independently
-  at a neutral host turn, but broad validation is pending and a nested P0
-  batch may still drain E, siblings and B together. Direct Shell launches
+  in place. The bounded [P1 Event-service gate](evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
+  now offers the oldest Event independently at a neutral host turn; its
+  19-block no-default/release-feature suites and feature checks passed. A
+  nested P0 batch may still drain E, siblings and B together. Direct Shell launches
   still lack their own independent service trigger. Requested debugger-stop,
   monitor and live iNavi behavior are unproved; the `notify.dll` `NFY0:`
   binding candidate gives no CE before/after-return timing. This is not an
@@ -66,7 +67,7 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   `LastError=0` is a known CE6 mismatch and is not validated by this gate.
   Neither output-copy failure nor partial guest-byte writes imply launch
   rollback. P0 has replaced local queue draining, but the unchanged E+B
-  admission policy and absent independent Shell trigger remain open; focused
+  admission policy and absent independent Shell trigger remain open; bounded
   P1 Event service does not isolate B from nested E+B batches. None of these
   are attributed to a live iNavi failure.
 - **Process exit leaves general private VM and mapped-file views behind:**
