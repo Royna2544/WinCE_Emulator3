@@ -13,6 +13,20 @@ Conventions: "executed" means compiled and run with the result recorded here;
 never upgrades itself into acceptance: acceptance is defined only by the plan's
 stage gates.
 
+## 2026-10-17 O-T7a host-turn plan boundary (executed foundation test)
+
+The [attempt-local receipt](../../evidence/ot7a-host-turn-contract-20261017/validation.receipt.md)
+records `cargo test --features unicorn,trace,win32-desktop --lib
+emulator::cpu_custody::tests -j 1`: **20/0/0 ignored**, exit 0, unchanged
+source files and a SHA-256-closed raw log. This tests existing directory
+foundation only; no production host-turn selection, Cut 1 process permit,
+Cut 2 leaf, live app or writable-mount run was executed. The separate
+[NAND `NFY0:` finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+now connects a conditional due-notification `PostMessageW`/UI branch to a
+`CreateProcessW` call using saved REA evidence plus bounded original-binary
+disassembly. It does not measure event cadence or whether the child launches
+before or after the IOCTL returns.
+
 ## E-1 Installed baseline BED2
 
 - Executable `BED2F559…276E4F` completed a bounded 330.234 s GPS/tap run

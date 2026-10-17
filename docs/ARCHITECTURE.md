@@ -165,20 +165,24 @@ A's `emu_start` and callback have returned, but its native owner and
 post-native sync/finish tail can still be open while its staged return context
 is held. The connected host-turn cut must represent that tail as an exact
 A-owned suspended continuation, not as an untyped local CPU or runnable A.
-It records A's process/slot/attempt and native stop evidence, the checked
-launch-publication claim, and staged nonzero return PC before asking the host
-selector to run B. If A's native owner must stay open for post-child view
-sync, it stays pinned to A's custody slot; no native callback, mutable
-directory/topology, Kernel, Task/frame, queue or framebuffer loan spans B.
+It records A's process/slot/attempt and native stop evidence, the immutable
+launch-publication witness, and staged nonzero return PC before asking the
+host selector to claim and run B. Cut 1 retains the still-needed native owner
+in a typed tail pinned to A's custody slot for post-child view sync; an
+early-close reordering needs separate VM-coherence and error-order evidence.
+No active native callback invocation or mutable directory/topology, Kernel,
+Task/frame, queue or framebuffer loan spans B. Installed A callback boxes
+remain pinned by its typed tail until native close.
 After B and any witnessed C are classified into their own slots, the host
-resumes A's exact tail, performs required sync/close, and only then considers
+restores and revalidates A's selected-context projection under its checked
+token, resumes A's exact tail for required sync/close, and only then considers
 reissuing A's execution permit. A stale claim, parent death, child fault or
 tail failure stops with typed retained custody, never an ownerless interval.
 Under the proposed Cut 1, A's executable process permit is revoked before B
-receives a separate one. A's per-slot payload loan may remain on the outer
-post-native call stack, but no
-mutable custody directory or topology, Kernel, Task/frame or framebuffer
-loan may span B's run. The native-entry precondition refuses a second guest
+receives a separate one. A's sealed native tail and CPU remain owned by its
+typed suspended slot, not by an outer stack-local payload loan; no mutable
+custody directory or topology, Kernel, Task/frame or framebuffer loan may
+span B's run. The native-entry precondition refuses a second guest
 entry from A's live callback; any future in-callback child route requires a
 separate source/test gate. Hook access to machine state must be
 callback-scoped, fallible and tied to current directory-issued run authority;
@@ -394,7 +398,8 @@ no CPU or a retryable error with the exact pending launch retained; neither
 may orphan an admitted child. After admission, a refused exit, native error
 or publication conflict leaves the exact CPU tree in custody and reports a
 stopped/terminal outcome. The current deferred child handoff retains the
-parent's staged return after its native attempt has closed. Under the target
+parent's staged return after `emu_start` returns but before its native
+sync/finish tail necessarily closes. Under the target
 custody contract, B takes a distinct exclusive process permit and A can be
 reissued one only after B is
 classified and safely in custody, without a mutable frame/queue borrow
@@ -410,6 +415,22 @@ discard requires verification of the CPU's own exact birth. The machine
 sequencer must not allow host/framebuffer reentry to mutate a queue during
 this transition. Legacy first-slice terminal branches and non-runnable
 holding cells do not yet satisfy this complete contract.
+
+The connected host turn has an ordered ownership boundary: capture the
+stopped native result and authentic A context; seal the post-native tail and
+emit a typed request; suspend A's process permit; claim/reserve/admit B before
+its first instruction; issue B's distinct permit; run and classify B and any
+witnessed C into their original slots; restore/revalidate each parent
+selection under its checked token before completing that owner's suspended
+tail in reverse order; then consider A for a later slice.
+Selected PID/TID are compatibility projections, never authority to choose or
+retire a CPU. A child fault and A's later sync/close failure are different
+outcomes; either retains exact CPU custody and cannot be reported as a normal
+guest exit. A neutral Event offer uses the same host selector without
+inventing a CreateProcess caller or parent continuation. The
+[notification-service boundary](subsystems/notification-service.md) refines
+Event publication and UI handoff; static `NFY0:` evidence does not impose an
+IOCTL-return/child-start ordering on this machine contract.
 
 The bounded public no-custody admission fence now refuses a pending child
 with typed `Backend` after local CPU/image setup but before consuming its

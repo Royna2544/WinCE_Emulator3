@@ -43,6 +43,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | Audio | [audio](subsystems/audio.md) | audio/waveOut, host/WebSocket sinks |
 | Guest networking | [network](subsystems/network.md) | winsock, host sockets/readiness |
 | Resources/shell/COM | [resources](subsystems/resources-shell-com.md) | resource, shell, COM/OLE, helper libraries |
+| Notification service | [notifications](subsystems/notification-service.md) | CeEventHasOccurred, NFY0 evidence, pending Event launches and UI handoff |
 | Remote ingress/observation | [remote](subsystems/remote-observability.md) | remote_server, ce/remote, debug publication |
 | Mounted live-run control | [live run](subsystems/live-run-control.md) | approval, mount backups, watchdog and evidence capture |
 | Native-attempt diagnostics | [attempt observability](subsystems/native-attempt-observability.md) | CPU raw report, host trace writer, optional executed-event collector |

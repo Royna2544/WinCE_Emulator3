@@ -93,11 +93,14 @@ The [runtime-control port](runtime-control.md#callback-scoped-machine-state-port
 and [Task/custody design](tasks-scheduler.md#o-t7-slot-and-lease-contract-partial-foundation-connected-cuts-open)
 refine the anchor's one-leaf execution rule. A backend native-engine lease
 owns hooks and native mappings; it is not permission to execute a Task or
-borrow Kernel/framebuffer state. Backend entry requires the machine's exact
-active-leaf permit and checked task/frame/address-space owner. Hook callbacks
-receive only a fallible, short machine-state operation qualified by that
-permit. No mutable Kernel, custody-directory or framebuffer loan may span the
-enclosing `emu_start` call, a nested child run or a reentrant host callback;
+borrow Kernel/framebuffer state. The final Cut 2 backend entry requires the
+machine's exact active-leaf permit and checked task/frame/address-space owner;
+Cut 1 first checks a directory-issued process/slot/attempt permit alongside
+existing thread-birth guards, without claiming thread/frame authority. Hook
+callbacks receive only a fallible, short machine-state operation qualified by
+the applicable permit for that cut. No mutable Kernel, custody-directory or
+framebuffer loan may span the enclosing `emu_start` call, a nested child run
+or a reentrant host callback;
 a callback's own short loan ends before native execution resumes.
 
 The bounded connected-port cut removed the named raw Kernel/framebuffer

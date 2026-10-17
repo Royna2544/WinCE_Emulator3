@@ -245,7 +245,10 @@ its source cut in this order:
    seals 19-block no-default **1,558/0/2 ignored**, release-feature
    **2,210/0/9 ignored**, and three feature checks at exit 0. At that P1
    seal, nested P0 E+B batches could still drain siblings under A; it proved
-   neither `NFY0:` return timing nor monitor/live behavior. The later
+   neither `NFY0:` return timing nor monitor/live behavior. The
+   [notification-service boundary](subsystems/notification-service.md) keeps
+   the dumped driver's conditional posted-UI launch path separate from this
+   emulator liveness policy. The later
    [bounded combined monitor/P2 producer gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-bounded-source-test-gate)
    carries an attempt-local exact publication witness through the import
    boundary and claims only B after selected-context preflight. Its real-MIPS
@@ -336,7 +339,7 @@ its source cut in this order:
    own legacy-queue labels and executes later exact-owner A/B/C guest slices;
    a no-witness nested E→D return remains `UnverifiedStopped`. This is not
    the full O-T7 slot/leaf migration or general post-child recovery.
-   The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
+   The [full port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-bounded-foundation-full-leaf-open)
    specifies one borrowed Kernel/framebuffer port for the native attempt,
    fallible short loans tied to exact attempt/leaf authority, and a checked
    selected-process/parent-suspension token. The bounded connected cut now
@@ -420,11 +423,13 @@ its source cut in this order:
    permit exists. A private `Rc` clone is not that gate. A checked
    `ParentSuspension` revokes A's executable permit while its staged return
    context is pinned; the directory then issues a distinct birth-bound B
-   permit. B runs only after A's native attempt closes at the deferred
-   post-native handoff and is classified in custody before A may resume.
+   permit. B runs only after A's `emu_start` and active callback have ended;
+   A's native owner and view-sync/finish tail stay pinned in its suspended
+   slot across B. B is classified in custody before A's exact tail resumes,
+   closes and may become runnable again.
    The native-entry precondition refuses guest entry from A's live callback;
    any future in-callback route needs a separate source/test gate.
-   The **design-only O-T7a contract** specifies a directory key of
+   The **target O-T7a connected contract** specifies a directory key of
    machine lineage/index/checked generation and one exact process birth's
    process-local CPU payload per admitted slot, with its same-process thread
    contexts inside that payload. A cross-process parked child is a checked
@@ -498,8 +503,8 @@ its source cut in this order:
    general exit/prune/hoist, wait and recovery paths. With boot A in custody,
    the strict checkpoint guard refuses save/restore from boot; rewind remains
    unavailable until
-   whole-machine relineage. This is not an implemented slot API or live-app
-   acceptance.
+   whole-machine relineage. The existing partial slot API is not this
+   connected production route or live-app acceptance.
    Keep a claimed launch in Kernel's original queue until admission/checked
    completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive
@@ -510,20 +515,38 @@ its source cut in this order:
    `CreateProcessW` has no nested in-callback guest entry; any future such
    route requires a separate source/test gate. `Completed` and other
    unported paths must refuse before effects until migrated.
-   First source-gate a typed post-native host-turn request from A's stopped
-   attempt. It must freeze A's exact process/slot/attempt, native result and
-   staged nonzero return PC, plus the one eligible launch-publication claim.
-   Keep A's still-needed native owner/view-sync tail pinned as a suspended
-   continuation in A's slot, with no mutable machine-state or queue loan
-   across child execution. The shared host selector revokes A's process
+   First source-gate distinct pre-entry `RunSelected` and post-attempt
+   `Rotate` requests through one selector; the latter freezes the outgoing
+   process/slot/attempt and native report before choosing a new owner. A
+   deferred-launch variant additionally freezes A's exact
+   process/slot/attempt, native result and
+   staged nonzero return PC, plus the one eligible launch-publication witness.
+   The host then reserves/claims that exact pending entry; a witness alone is
+   not an owned claim. Current source consumes the claimed entry before B is
+   admitted to a directory slot. Cut 1 must close that gap: reserve capacity
+   before construction and make original-CPU admission plus exact claim
+   consumption one checked transfer before first guest entry, with a clean
+   pre-CPU claim return on failure. That return alone does not resume A's
+   staged CreateProcess continuation; its recovery policy needs a separate
+   source/test gate.
+   Cut 1 keeps A's still-needed native owner/view-sync tail pinned as a
+   suspended continuation in A's slot, with no mutable machine-state or queue
+   loan across child execution. Moving this tail out of the current local
+   `uc` lease is an implementation-blocking step: prove its callback/hook
+   lifetimes, finish ordering and slot retention before returning a host
+   request. Do not move native close before B without separate VM-coherence
+   and error-order evidence. The shared host selector revokes A's process
    permit, admits B (and any witnessed C) before guest entry, issues each
    distinct permit, and classifies each original CPU into its own slot before
-   resuming A's exact tail for required sync/close. Neutral Event has no
+   checked restoration of A's selected-context projection and resumption of
+   A's exact tail for required sync/close. Neutral Event has no
    fabricated CreateProcess parent; it uses the same selector with a checked
-   prior-selection restoration rule. A returned C-root/B-parked tree must
-   yield separate C/B locators, not a guessed B return identity. Stale
-   selection, failed admission, parent death, native fault and tail failure
-   must end with typed retained custody or exact pre-CPU claim return.
+   prior-selection restoration rule. New B→C handoff uses already-admitted
+   B/C slots, never a boxed returned tree. If an inherited C-root/B-parked
+   tree remains reachable, decompose it only under the existing exact witness
+   before further execution. Stale selection, failed admission, parent death,
+   native fault and tail failure must end with typed exact-owner custody or
+   an exact pre-CPU claim return.
    Red-to-green controls must cover ordinary and Event/monitor offers,
    pre/post rotation, A→B and witnessed A→B→C later slices, wrong-lineage
    bypasses, no ownerless interval and from-boot checkpoint refusal. No

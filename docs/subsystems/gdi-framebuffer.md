@@ -32,7 +32,7 @@ Keep ABI dispatch as a thin adapter. A drawing request resolves a legitimate DC/
 
 Guest caret/timer changes use machine-supplied guest time; host video pacing uses the host contract. Presenting more frequently must not advance guest timers or create extra guest execution. The future shared snapshot contract couples published frame/window provenance; a PNG encoding timestamp today is not that guarantee.
 
-The proposed [callback-scoped machine-state port](runtime-control.md#candidate-callback-scoped-machine-state-port-not-implemented)
+The partially implemented [callback-scoped machine-state port](runtime-control.md#callback-scoped-machine-state-port-bounded-foundation-full-lease-open)
 also governs hook-origin framebuffer work. A tick, draw or stopped-exit restore
 obtains a short, fallible loan under the checked active-leaf or exit authority;
 it cannot retain a mutable framebuffer pointer across nested guest execution

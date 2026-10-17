@@ -554,8 +554,11 @@ thread birth and optional frame; Cut 1 still needs an independently issued
 process-scoped permit instead of treating that existing leaf as proof of Cut 2.
 Existing thread-birth guards are not a directory-issued execution leaf.
 
-One implementable *candidate*, not a selected Rust API, is a private directory
-of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
+The source already uses private stable `Rc<AdmittedCpuCell>` cells and fallible
+scoped payload loans, with a checked lease/quarantine latch. Those pieces do
+not select a connected host-turn API or independent Cut 1 process permit.
+The full directory contract may refine that shape: a slot has immutable
+key/process-birth metadata,
 a separately inspectable checked state header, and a `RefCell<CpuPayload>`;
 only the directory publishes its copyable `CpuSlotKey`, while scoped internal
 loans may hold a temporary private `Rc`. A non-executing
@@ -564,11 +567,12 @@ a short, fallible directory borrow, releases that borrow, then uses
 `try_borrow_mut` on **that slot only** for the closure. It does not
 build a self-referential guard containing both an `Rc` and a `RefMut`, return an
 unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry.
-For the current deferred route, a future slot implementation may keep A's
-payload loan on the outer post-native handoff stack while admitting and
-running B in its own slot; A's native callback and `emu_start` have already
-returned. Metadata/readiness queries must use the separate header instead of
-reborrowing the held parent payload. Attempted same-slot reentry stops or
+For the connected deferred route, Cut 1 stores A's sealed native tail in a
+typed suspended A slot before returning a host-turn request; it does not keep
+an outer stack-local payload loan while B runs. A's native callback and
+`emu_start` have already returned, but native close and post-child view sync
+still need source-gated ownership transfer. Metadata/readiness queries use
+the separate header while A is suspended. Attempted same-slot reentry stops or
 defers with a typed conflict; it never creates a second executable loan.
 A separate slot-loan latch, checked with the key's generation, must make
 `retire_exact` refuse removal/reuse while any payload loan or run permit
@@ -674,9 +678,9 @@ The [runtime-control host-turn protocol](runtime-control.md#o-t7a-post-native-ho
 owns the missing transition from A's stopped native attempt to B/C admission,
 classification and A's exact tail. A's `emu_start` has returned at the current
 handoff, but its native owner and required post-child view sync have not
-necessarily closed. A held payload loan can pin that sealed tail while the
-directory and machine-state loans are released; it cannot license A's guest
-execution while B runs. The legacy `activate_parked_process` self-swap and
+necessarily closed. The typed A-slot suspension pins that sealed tail after
+all payload, directory and machine-state loans end; it cannot license A's
+guest execution while B runs. The legacy `activate_parked_process` self-swap and
 post-child boxed publication must be replaced or fenced together with all
 host selectors, not merely hidden behind a new slot type.
 
@@ -791,7 +795,7 @@ feature checks exited 0. The first sandboxed release attempt had 45 failures
 concentrated in socket/remote tests; multiple traces show Windows `10013`.
 Its identical-source loopback-enabled rerun passed.
 
-##### Callback-scoped machine-state port cut (proposed, not implemented)
+##### Callback-scoped machine-state port cut (bounded foundation; full leaf open)
 
 This heading names the **full target contract** below, not the status of
 every bounded component. The later
@@ -1159,10 +1163,12 @@ bounded P1 gate now offers one Event at a neutral host turn. The same
 [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing; the
 [dumped driver binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
-identifies `notify.dll` and a static IOCTL arm, but not its launch/return
-timing. These cuts must not assert before- or after-IOCTL-return parity without
-handler/runtime evidence. They do not implement O-T7, a connected
-callback-scoped Kernel/framebuffer port, checked post-B parent restoration,
+identifies `notify.dll`, a static IOCTL arm and a conditional posted-UI
+launch path, but not its launch/return timing; see the
+[notification-service boundary](notification-service.md). These P1/P2 cuts
+must not assert before- or after-IOCTL-return parity without runtime
+evidence. They did not implement O-T7, the later bounded connected
+Kernel/framebuffer port, checked post-B parent restoration,
 runnable/parked CPU custody, Stage 3/5 or
 live acceptance.
 
