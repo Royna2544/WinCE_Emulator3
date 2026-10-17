@@ -64,10 +64,10 @@ The following full-leaf and restoration responsibilities remain targets.
   resolves current authority, lends only the required state, and ends its loan
   before returning to native execution, a nested guest run or a reentrant host
   callback. A busy, stale or wrong-leaf request returns a typed failure; it
-  never uses a panicking borrow or an unchecked raw-pointer alias. Cut 1
-  first requires an independently issued process/slot/attempt permit, with
-  existing exact
-  thread-birth guards but no claim of directory-issued thread/frame proof.
+  never uses a panicking borrow or an unchecked raw-pointer alias. A bounded
+  process/slot/attempt permit now exists in `CpuCustody`, but Cut 1 still
+  must connect it to native entry and this port; existing exact thread-birth
+  guards do not supply directory-issued thread/frame proof.
 - Multi-step work carries an exact-birth claim and checked generation/version
   across short loans. Revalidate at commit; a previously selected numeric PID
   is compatibility state, not proof of the running CPU's ownership. A checked
@@ -82,8 +82,8 @@ The following full-leaf and restoration responsibilities remain targets.
 The outer `run_with_unicorn_attempt` still receives Kernel/framebuffer
 references, but the reviewed native and post-native path passes them through
 the connected port; its named raw aliases have been removed. That bounded
-gate does not connect boot to directory-owned runnable CPU slots or issue a
-full leaf permit. Reentry/error cases and remaining consumers still need
+gate does not connect boot to directory-owned runnable CPU slots or check the
+new process-only permit. Reentry/error cases and remaining consumers still need
 their own evidence before claiming a sound machine-owned execution lease.
 
 ### O-T7a post-native host-turn protocol (candidate; not connected)

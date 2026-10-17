@@ -29,6 +29,7 @@ evidence is in the [evidence ledger](evidence/ledger.md).
 | --- | --- | --- |
 | Runtime composition/control | [runtime control](subsystems/runtime-control.md) | main, desktop, monitor, CPU facade |
 | Native CPU engine | [CPU](subsystems/cpu-engine.md) | emulator/unicorn, native_engine, cpu_mips, arch |
+| Native post-stop tail custody | [tail capsule](subsystems/native-tail-capsule.md) | Deferred child handoff's still-open native owner, callbacks, pins and finish order (design only) |
 | Guest memory/VM/heaps | [memory](subsystems/guest-memory.md) | ce/memory, emulator/memory, native byte adapters |
 | PE/module loading | [loader](subsystems/pe-loader.md) | pe, pe_loader, dll_search, imports |
 | CE ABI / host shims | [API boundary](subsystems/api-boundary.md) | coredll/ordinals, CRT, typed guest memory |

@@ -226,10 +226,12 @@ frame/version leaf to that same directory permit. Every intra-slice
 `set_verified` must obtain a checked, fallible leaf update before further
 guest execution, register effects or wait consumption; `set_unverified`
 revokes or blocks the leaf at the same boundary. Neither may derive authority
-from a mutable selected-thread cell. The current `CpuCustody` and
-`MachineKernelPort` implement bounded pieces of this interface, but
-production boot/host-turn routing is not connected and neither Cut 1 nor
-Cut 2 has passed. The full staged contracts remain targets.
+from a mutable selected-thread cell. `CpuCustody` now has a separately issued,
+process-only `CpuProcessPermit`/lease/verifier with bounded source tests. This
+is an API foundation, not the connected first cut: `UnicornMips` native entry
+and `MachineKernelPort` still require the older thread-bearing leaf permit,
+and production boot/host-turn routing is not directory-owned. Neither Cut 1
+nor Cut 2 has passed; the full staged contracts remain targets.
 
 Custody phase is not canonical Task or wait state. For a verified slot, an
 attempt ends its `Leased` phase as derived runnable/parked eligibility, typed

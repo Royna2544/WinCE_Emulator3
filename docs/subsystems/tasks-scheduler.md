@@ -549,14 +549,16 @@ indexes remain authoritative; a CPU slot or parked locator is not a Task.
 That plan splits authority by level: Cut 1 connects process-birth CPU custody,
 selection and directory-issued process/slot/attempt permits; Cut 2 adds
 intra-slice exact thread/frame leaf updates. Neither connected cut is
-implemented by the partial API above. The current `CpuLeafPermit` includes a
-thread birth and optional frame; Cut 1 still needs an independently issued
-process-scoped permit instead of treating that existing leaf as proof of Cut 2.
-Existing thread-birth guards are not a directory-issued execution leaf.
+implemented by the partial API above. `CpuCustody` now issues a bounded
+process-only `CpuProcessPermit`/lease/verifier, sharing one active latch with
+the older `CpuLeafPermit`; that leaf still includes a thread birth and
+optional frame. The new process permit is not yet accepted by native entry
+or `MachineKernelPort`, and existing thread-birth guards are not Cut 2 proof.
 
 The source already uses private stable `Rc<AdmittedCpuCell>` cells and fallible
-scoped payload loans, with a checked lease/quarantine latch. Those pieces do
-not select a connected host-turn API or independent Cut 1 process permit.
+scoped payload loans, with a checked lease/quarantine latch. The bounded
+process-only API does not select a connected host-turn route or own a native
+tail.
 The full directory contract may refine that shape: a slot has immutable
 key/process-birth metadata,
 a separately inspectable checked state header, and a `RefCell<CpuPayload>`;

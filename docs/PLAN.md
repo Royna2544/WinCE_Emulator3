@@ -515,8 +515,8 @@ its source cut in this order:
    `CreateProcessW` has no nested in-callback guest entry; any future such
    route requires a separate source/test gate. `Completed` and other
    unported paths must refuse before effects until migrated.
-   First source-gate distinct pre-entry `RunSelected` and post-attempt
-   `Rotate` requests through one selector; the latter freezes the outgoing
+   The connected selector's first request gate distinguishes pre-entry
+   `RunSelected` from post-attempt `Rotate`; the latter freezes the outgoing
    process/slot/attempt and native report before choosing a new owner. A
    deferred-launch variant additionally freezes A's exact
    process/slot/attempt, native result and
@@ -529,7 +529,10 @@ its source cut in this order:
    pre-CPU claim return on failure. That return alone does not resume A's
    staged CreateProcess continuation; its recovery policy needs a separate
    source/test gate.
-   Cut 1 keeps A's still-needed native owner/view-sync tail pinned as a
+   A stopped-native-lease lifetime/capsule source gate is an enabling
+   prerequisite for returning that post-attempt request; it does not by
+   itself connect the selector or admit a child. Cut 1 keeps A's still-needed
+   native owner/view-sync tail pinned as a
    suspended continuation in A's slot, with no mutable machine-state or queue
    loan across child execution. Moving this tail out of the current local
    `uc` lease is an implementation-blocking step: prove its callback/hook
