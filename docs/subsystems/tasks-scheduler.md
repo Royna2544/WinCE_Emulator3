@@ -945,6 +945,41 @@ handoff to B would strand E. The [dumped `notify.dll`/hive binding](../../eviden
 identifies a concrete `NFY0:` driver candidate but does not settle
 before/after-IOCTL-return timing.
 
+##### P1 independent event-service trigger (proposed, not implemented)
+
+First preserve a real-MIPS expected red: A calls `CeEventHasOccurred` and
+continues without a later `CreateProcessW`; its exact-birth event E remains
+queued across bounded slices. The green gate needs an Event origin on **each**
+published descriptor, including the captured publishing thread and process
+births as provenance, not E's owner. A missing/stale native caller must refuse
+before any event launch is published. Raw compatibility without an exact birth
+must be explicit and must not be silently promoted to native authority. The
+origin must survive fixture take/restore and cannot be reconstructed from a
+mutable selected PID or the last queued entry.
+
+At a neutral host-loop turn after its wall-clock cap, offer one oldest
+unreserved Event entry for exact-birth service before the completed-active
+early break. The existing Kernel queue/claim token remains the sole owner;
+an Event-only reservation must leave ordinary B and all unselected siblings
+unreserved and queryable. Factor the current child runner so this neutral
+route uses the previous closed slice's persisted/synchronized state, never a
+dummy native owner or a callback-scoped Kernel/framebuffer loan. The current
+`CreateProcessW` tail still keeps its P0 E+B batch policy; if that tail has
+already consumed E, neutral service must not replay it. Do not service after
+a native error, requested debugger stop, invalid PC, active exit transaction,
+or exceeded cap. A retryable pre-CPU error returns E to the same queue slot
+without a tight same-turn retry; admitted CPU errors remain custody failures,
+not queue replay.
+
+The bounded acceptance needs standalone E eventual admission without B, two
+events in publication FIFO order, mixed E+B exactly once, stale publisher
+refusal, same-birth retry, completed-parent/idle-loop opportunity, and
+selected-context/parked-CPU ownership preserved on errors. The trigger's
+timing claim is only eventual host-loop service. The dumped `notify.dll`
+binding does not establish when the CE6 driver itself launches an app. P1
+does not confer witnessed B-only handoff, checked whole-machine selection
+relineage, the callback-scoped port, full Stage 3/O-T7, or live acceptance.
+
 ##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
 
 The owning state stays in `CeKernel`'s existing pending-launch queue: each
