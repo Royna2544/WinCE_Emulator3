@@ -281,6 +281,33 @@ not an implemented owner. Stage its connected source cut in this order:
    shared-flag import/block gate. This does not promote Step 2; audit reachable
    raw-alias and host-callback loans, then finish the connected whole-attempt
    port and modal partial-effects gates.
+
+   The current-source Step 2 inventory below is for `unicorn.rs` SHA-256
+   `FB855EEB177A42335A7EAC4BC9CDB56FE987E016EDFBA4E6D8149E837D92E381`.
+   Counting whole-identifier use-lines after declarations at `:10204–10205`
+   and before tests gives **112 `kernel_ptr`** and **9 `framebuffer_ptr`**
+   lines, not 123 independent loans or runtime calls. Global code hooks
+   (`:10321–10760`) account for 4/1, sparse code hooks (`:10803–10980`)
+   5/1, scheduler block (`:11375–11842`) 1/0, import
+   (`:11888–14327`) 101/7, and memory fault (`:14490–14533`) 1/0.
+   The scheduler line only passes the pointer into its guarded adapter;
+   that adapter still dereferences its raw Kernel/framebuffer fields at
+   `:251–268`. Auxiliary trampoline/trace hooks have no named-alias uses.
+
+   | Reentry boundary | Current state lifetime and scope |
+   | --- | --- |
+   | Native callbacks | The public/private wrapper `unicorn.rs:9346–9692` retains mutable Kernel/framebuffer references through `emu_start` at `:15051–15057`; code, import and memory callbacks still use raw aliases. The scheduler-block adapter is callback-local only. |
+   | Post-native child and Event service | The ordinary child helper `unicorn.rs:20925–21424` holds real mutable state through B's guest run at `:21147–21160`, after A's native return but before its owner finishes. The neutral host-loop and monitor Event paths (`main.rs:393–441`, `:2783–2825`) enter that helper from closed native turns and also pass mutable state through the child run. |
+   | Live host loop and monitor | Ordinary slice entry `main.rs:918–930` and monitor slice entry `:2852` reach the same long-lived native boundary. Rotation, input, status, monitor handoff and checkpoint calls are separate host-turn operations, not loans spanning `emu_start`. |
+   | Exit/finalizer | Host-turn quarantine exit (`main.rs:377–384`; `unicorn.rs:6284–6389`) and stopped pseudo-exit after native finish (`unicorn.rs:6973–7042`) do not enter a guest engine, but Kernel/window cleanup and partial-effect ordering still need the exit fence. |
+   | Framebuffer present | `main.rs:3704–3719` ordinary present is a separate closed-turn call. Live remote/Win32 framebuffer wrappers (`:3738–3815`, `:3861–4019`) retain framebuffer/presenter state for the guest attempt; `mark_dirty`/`emulator_tick` may publish, pump or blit during it. No guest reentry from Win32 pump is source-proven. |
+
+   This inventory distinguishes short closed-turn accesses from state held
+   across guest execution; it is not a port, alias-safety proof or runtime
+   frequency measurement. The real-MIPS A→B→C census shows that the
+   post-native child path is reachable, while a synthetic busy-flag test
+   alone cannot prove natural cross-hook overlap.
+
    The later [native-entry precondition](../evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
    refuses a second same-host-thread guest-native entry at the start of the
    private attempt, before saved-CPU setup. Its preseeded-busy real-MIPS
