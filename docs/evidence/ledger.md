@@ -2644,10 +2644,31 @@ exact-birth pending claim, a connected `MachineKernelPort` or post-B
 restoration token, Step 2/Stage 3 acceptance or live iNavi evidence. No app
 or writable mount was run. The next queue gate needs an exact-birth
 claim/return and a fair trigger, intentionally changing that mixed control.
-Separately, source review found that the raw
+Separately, source review at that earlier seal found that the raw
 `CreateProcessW` shim queues before four fallible `PROCESS_INFORMATION`
 writes; a failed write can return `FALSE` with a queued live child. No
 failing-write execution control is claimed yet.
+
+## CE6-directed CreateProcessW output Boolean cut (2026-10-17, validation in progress)
+
+The raw shim now accepts null `PROCESS_INFORMATION` and does not turn a failed
+output copy into `FALSE` after an exact child birth has been published. New raw
+controls check `Bool(TRUE)`, one queued exact-birth Kernel-live/unsignaled child
+and its process/thread handles for null and unwritable output. No guest-byte
+rollback is promised for earlier copied words. The
+[A03 raw-kernel log](../../evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
+records **135/0** and the
+[A04 no-default log](../../evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
+records 19 blocks **1,550/0/2 ignored**. Release A05 and the final receipt/
+source seal are pending; do not count this as a completed broad gate yet.
+
+The existing success-path `LastError=0` is a known CE6 mismatch and was not
+validated by the new controls. A null or unwritable output can leave allocated
+process/thread aliases undisclosed to the guest; their eventual retirement is
+unproved. Raw `TRUE` still precedes loader/CPU admission. The post-native
+aggregate queue drain still admits older event/Shell launches without creator
+attribution and has no independent trigger for them. This cut is not a
+callback-scoped port, exact-birth launch claim, live-app or writable-mount run.
 
 ## Chat-project validation notes (not in this repository)
 
