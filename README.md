@@ -55,7 +55,7 @@ remote-control HTTP/WebSocket surface.
   found A/B/C payloads intact but the next selected slice refused before
   guest execution because B selection was paired with C's CPU. The later
   connected gate below stopped earlier and retained the mismatched tree at its
-  seal; a later focused witnessed two-node cut progresses B/C. The
+  seal; a later bounded witnessed two-node cut progresses B/C. The
   NAND `notify.dll` trace has not established CE launch timing.
 - The bounded [connected port and child-custody cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
   passes final-source release-feature **2,228/0/9 ignored** and no-default
@@ -74,7 +74,8 @@ remote-control HTTP/WebSocket surface.
   stays pending for machine-owned recovery; the public parent's attempt is
   poisoned, not an established same-session retry. This closes the tested
   admission bypass, not runnable custody or a leaf permit.
-- A newer focused real-MIPS witnessed two-node A→B→C handoff publishes the
+- A newer [bounded witnessed two-node A→B→C handoff](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+  publishes the
   original B and C CPUs under their own legacy-queue labels after checking
   A's exact live caller restoration. The [a01 expected red](evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)
   and later [a11 focused 3/0](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
@@ -83,8 +84,12 @@ remote-control HTTP/WebSocket surface.
   keeps an unwitnessed nested E→D tree stopped. At B's return C is still
   selected; [a09](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
   shows ordinary outer rotation ends with B selected after A restoration,
-  not with A finally selected. This is not a broad seal, full machine-owned
-  runnable custody, an exact leaf permit, general recovery or live iNavi proof.
+  not with A finally selected. Final-source inherited-directory nested
+  controls passed **3/0**, no-witness **1/0**; 19-block release-feature and
+  no-default suites passed **2,231/0/9 ignored** and **1,564/0/2 ignored**, and two
+  feature checks exited 0. A later guest mutation of B's directory may fail
+  closed. This is legacy-queue handoff, not full machine-owned runnable
+  custody, an exact leaf permit, general recovery or live iNavi proof.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,

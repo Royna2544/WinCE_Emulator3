@@ -109,15 +109,19 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    retained at its earlier seal. The later
    [connected cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
    retained the mismatched C-root/B-parked tree as stopped at its seal. A
-   newer focused real-MIPS witnessed two-node gate now publishes B and C
-   under their own legacy-queue labels and executes later A/B/C slices.
+   newer [bounded witnessed two-node gate](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+   publishes B and C under their own legacy-queue labels and executes later
+   A/B/C slices. Its final-source release/no-default 19-block suites passed
+   **2,231/0/9 ignored** and **1,564/0/2 ignored**; both feature checks exited 0.
    Its [a09 selection observation](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
    ends with ordinary outer rotation selecting B after exact A restoration;
    it does not leave A finally selected. The
-   [a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+   [a21 final-source no-witness control](evidence/stage3-rotated-handoff-20261017/a21-final-no-witness.raw.log)
    still retains the whole nested E→D tree as `UnverifiedStopped`, with
-   untouched outer siblings queued. This is focused legacy-queue progress,
-   not a broad seal, runnable machine slot or in-session recovery. Next, in
+   untouched outer siblings queued. This is bounded legacy-queue progress,
+   not a runnable machine slot or in-session recovery. An inherited B
+   directory is checked against the saved A directory; later guest mutation
+   can fail closed and remains a general handoff limit. Next, in
    order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
@@ -333,8 +337,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      is not permission to roll back an already-published child. The shim's
      success-path `LastError=0` remains a known CE6 mismatch outside this gate.
      The [connected port and custody gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
-     passes its bounded historical source/test seal. The focused witnessed
-     two-node rotated handoff checks A restoration before publishing exact
+     passes its bounded historical source/test seal. The later
+     [witnessed two-node seal](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+     checks A restoration before publishing exact
      B/C payloads, but other post-child routes remain unproved. Next
      authenticate the final executing thread and exact leaf permit (including
      handoff), generalize checked restoration and add exit-event fencing. The bounded

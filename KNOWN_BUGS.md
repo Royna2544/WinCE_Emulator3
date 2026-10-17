@@ -11,16 +11,17 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   later [connected source seal](evidence/stage3-connected-port-20261017/validation.receipt.md),
   the B-origin return instead retained the C-root/B-parked tree as
   `UnverifiedStopped`, with A's private continuation poisoned. The newer
-  focused [witnessed handoff controls](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+  [bounded witnessed handoff](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
   execute later A/B/C guest slices for exactly one verified C-root/parked-B
   pair and preserve both original payload labels. A
-  [no-witness nested E→D control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+  [final-source no-witness nested E→D control](evidence/stage3-rotated-handoff-20261017/a21-final-no-witness.raw.log)
   still stops with its whole tree retained and untouched siblings queued;
   malformed selected C metadata also fails closed. A B-only restore guard,
   relabeling C as B, or putting C in B's reserved slot remains unsound.
   Deeper trees, general exact-slot/leaf selection, recoverable machine-owned
-  custody and in-session recovery remain open. No iNavi or mount run is
-  attributed here.
+  custody and in-session recovery remain open. A later guest mutation of
+  B's inherited directory can fail closed instead of progressing. No iNavi
+  or mount run is attributed here.
 - **Other post-native child handoffs still restore mutable process selection
   without general checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
   identifies blind save/set/restore of selected module fields and
@@ -56,8 +57,9 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   [parked-process activation](src/emulator/unicorn.rs#L8229) can swap the
   active CPU payload during B's slice. A B-only restoration check or transfer
   of that returned payload into B's reservation would reject or mislabel this
-  reached nested shape; it is not a safe preparatory fix. A newer focused
-  witnessed two-node branch checks A's exact caller/selection before
+  reached nested shape; it is not a safe preparatory fix. The later
+  [bounded witnessed two-node branch](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+  checks A's exact caller/selection before
   publishing B and C, but other child-return paths still use the legacy
   restoration path. The [a09 control](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
   ends with an ordinary outer rotation selecting B/B after A was restored;

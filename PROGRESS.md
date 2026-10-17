@@ -4,13 +4,14 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 witnessed two-node rotated child handoff (focused tests)
+## 2026-10-17 witnessed two-node rotated child handoff (bounded source/test gate)
 
 An enabled real-MIPS A→B→C control first failed at the B-origin return:
 the C-root/B-parked tree was retained `UnverifiedStopped` before A, B and C
 could make their required later slices
 ([a01 expected red](evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)).
-The bounded witnessed path now checks that exact two-node tree, its distinct
+The [final bounded receipt](evidence/stage3-rotated-handoff-20261017/validation.receipt.md)
+seals the witnessed path. It checks that exact two-node tree, its distinct
 live process/primary-thread births and original CPU payloads, and C's own
 selected image metadata. It checks restoration of A's exact live caller before
 one fallible parent-queue borrow and capacity reservation, then publishes the
@@ -27,7 +28,18 @@ not A selected. The
 [a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
 passed **1/0**: a nested Event E→D return without that parent witness remains
 stopped as one whole `UnverifiedStopped` tree while untouched outer siblings
-stay queued in order. These are focused source tests, not a broad-suite seal.
+stay queued in order. On the sealed source,
+[a20 inherited-directory controls](evidence/stage3-rotated-handoff-20261017/a20-inherited-directory.raw.log)
+passed **3/0**, and
+[a21 no-witness](evidence/stage3-rotated-handoff-20261017/a21-final-no-witness.raw.log)
+passed **1/0**. B's effective directory must match its explicit launch
+directory or the exact saved A directory inherited during setup; C's must
+match its own launch or that bound B directory. A later guest mutation of
+B's directory may fail closed instead of progressing. The 19-block
+release-feature suite passed **2,231/0/9 ignored**, the 19-block no-default
+suite **1,564/0/2 ignored**, and Unicorn-only/CI desktop feature checks
+exited 0, with unchanged tested source hashes. The interrupted a19 partial
+release log is not validation.
 This is a bounded legacy-queue handoff, not machine-owned runnable CPU slots,
 an independently issued executing-leaf permit, general post-child restoration,
 in-session recovery, full O-T7/Stage 3 or live iNavi acceptance. No app or
@@ -98,7 +110,7 @@ and the B-key reservation at that seal could not own the returned C
 payload. No restore guard or production behavior changed at that seal. The failing a01
 development run had an overstrict *later* selector assertion; its same
 pre-restore observation is retained but not a production red. The later
-focused two-node handoff above checks A restoration and separate B/C
+bounded two-node handoff above checks A restoration and separate B/C
 publication; general restoration and machine-owned rotated-subtree custody
 remain O-T7 work. No broad
 suite, iNavi or writable-mount run was made for this observation.
@@ -114,7 +126,7 @@ active CPU payload owned C, and exact-owner preflight returned typed
 second slice; enabled a03 instead asserted this precise then-current fail-closed
 behavior. This is reproduced selection/lease non-progress, not observed CPU
 loss. It did not make the nested route acceptable at that seal; the later
-focused two-node handoff above witnesses guest progress without completing
+bounded two-node handoff above witnesses guest progress without completing
 O-T7's machine-owned exact slot ownership.
 On the same a03 test-source hash, later 19-block broad runs passed
 no-default **1,560/0/2 ignored** and release-feature **2,220/0/9 ignored**;
