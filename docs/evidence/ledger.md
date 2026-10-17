@@ -2839,7 +2839,11 @@ a03 passed **1/0**, exit 0, and the closed log SHA-256 is
 The retained a02 red expected execution and documented the same typed
 refusal; a03 is an enabled current-behavior regression, not acceptance.
 This is reproducible selection/lease non-progress but not observed CPU loss.
-No production behavior, broad suite, app or writable mount was changed.
+The same source hash then passed [a04 no-default broad](../../evidence/stage3-nested-cpu-census-20261017/a04-no-default-broad.raw.log)
+at **1,560/0/2 ignored** and [a05 release-feature broad](../../evidence/stage3-nested-cpu-census-20261017/a05-release-broad.raw.log)
+at **2,220/0/9 ignored**, each across 19 blocks with unchanged source stamps
+and closed-log hashes in the receipt. No production behavior, app or writable
+mount was changed.
 
 ## Chat-project validation notes (not in this repository)
 
