@@ -9885,7 +9885,6 @@ impl UnicornMips {
         let native_owner_birth = kernel.current_process_birth_key();
         let port_authority = AttemptAuthority {
             process_birth: native_owner_birth,
-            thread_birth: slice_entry_thread_birth,
             slice_generation: self.run_slice_generation,
         };
         let native_owned_launch_birth = self
@@ -83440,7 +83439,6 @@ mod unicorn_tests {
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
         let authority = super::AttemptAuthority {
             process_birth: kernel.current_process_birth_key(),
-            thread_birth: kernel.live_thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID),
             slice_generation: 7,
         };
 

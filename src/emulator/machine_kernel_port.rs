@@ -6,16 +6,11 @@
 
 use std::cell::{Cell, OnceCell, RefCell, RefMut};
 
-use crate::ce::{
-    framebuffer::Framebuffer,
-    kernel::CeKernel,
-    object::{ProcessBirthKey, ThreadBirthKey},
-};
+use crate::ce::{framebuffer::Framebuffer, kernel::CeKernel, object::ProcessBirthKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AttemptAuthority {
     pub(crate) process_birth: Option<ProcessBirthKey>,
-    pub(crate) thread_birth: Option<ThreadBirthKey>,
     pub(crate) slice_generation: u64,
 }
 
