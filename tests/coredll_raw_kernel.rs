@@ -13517,7 +13517,121 @@ fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
         Some(r"\SDMMC Disk\INavi\bin")
     );
     assert_eq!(memory.read_u32(process_info)?, launches[0].process_handle);
+    assert_eq!(
+        memory.read_u32(process_info + 4)?,
+        launches[0].thread_handle
+    );
+    assert_eq!(memory.read_u32(process_info + 8)?, launches[0].process_id);
+    assert_eq!(memory.read_u32(process_info + 12)?, launches[0].thread_id);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_process_null_output_still_queues_live_child() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let app_ptr = 0x2_4000;
+    memory.write_wide_z(app_ptr, "child.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PROCESS_W,
+            [app_ptr, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1, "one child was queued by this call");
+    let launch = &launches[0];
+    assert_eq!(launch.application.as_deref(), Some("child.exe"));
+    let birth = launch.process_birth.expect("exact queued process birth");
+    let primary_thread_birth = launch
+        .primary_thread_birth
+        .expect("exact queued primary thread birth");
+    assert_eq!(
+        kernel
+            .handles
+            .process_birth_key_for_handle(launch.process_handle),
+        Some(birth)
+    );
+    assert_eq!(
+        kernel
+            .handles
+            .thread_birth_key_for_handle(launch.thread_handle),
+        Some(primary_thread_birth)
+    );
+    assert!(kernel.handles.process_execution_live_by_birth(birth));
+    assert_eq!(
+        kernel.process_exit_code(launch.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_process_unwritable_output_still_queues_live_child() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let app_ptr = 0x2_4000;
+    let process_info = 0x2_4800;
+    memory.write_wide_z(app_ptr, "child.exe");
+    // The fourth word is unmapped. CE6 may leave earlier words copied or
+    // untouched; only the creation result and child ownership are asserted.
+    memory.map_words(process_info, 3);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PROCESS_W,
+            [app_ptr, 0, 0, 0, 0, 0, 0, 0, 0, process_info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1, "one child was queued by this call");
+    let launch = &launches[0];
+    assert_eq!(launch.application.as_deref(), Some("child.exe"));
+    let birth = launch.process_birth.expect("exact queued process birth");
+    let primary_thread_birth = launch
+        .primary_thread_birth
+        .expect("exact queued primary thread birth");
+    assert_eq!(
+        kernel
+            .handles
+            .process_birth_key_for_handle(launch.process_handle),
+        Some(birth)
+    );
+    assert_eq!(
+        kernel
+            .handles
+            .thread_birth_key_for_handle(launch.thread_handle),
+        Some(primary_thread_birth)
+    );
+    assert!(kernel.handles.process_execution_live_by_birth(birth));
+    assert_eq!(
+        kernel.process_exit_code(launch.process_handle),
+        Some(STILL_ACTIVE)
+    );
+    assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
     Ok(())
 }
 

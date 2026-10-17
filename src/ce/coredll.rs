@@ -29163,13 +29163,6 @@ fn create_process_w_raw<M: CoredllGuestMemory>(
         }
     };
     let process_information = raw_arg(args, 9);
-    if process_information == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-
     let current_directory = read_optional_guest_wide_arg(memory, raw_arg(args, 7))
         .map(|directory| directory.and_then(|value| normalize_shell_directory(&value)))
         .unwrap_or(None);
@@ -29180,20 +29173,22 @@ fn create_process_w_raw<M: CoredllGuestMemory>(
         current_directory,
         None,
     );
-    for (offset, value) in [
-        (0, launch.process_handle),
-        (4, launch.thread_handle),
-        (8, launch.process_id),
-        (12, launch.thread_id),
-    ] {
-        if !write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            process_information + offset,
-            value,
-        ) {
-            return false;
+    // CE6 NKCreateProcess treats PROCESS_INFORMATION as optional and ignores
+    // CeSafeCopyMemory failure after a successful child creation. Preserve
+    // the published birth even when the guest cannot receive all four words.
+    if process_information != 0 {
+        for (offset, value) in [
+            (0, launch.process_handle),
+            (4, launch.thread_handle),
+            (8, launch.process_id),
+            (12, launch.thread_id),
+        ] {
+            let Some(address) = process_information.checked_add(offset) else {
+                break;
+            };
+            if !write_guest_u32(kernel, memory, thread_id, address, value) {
+                break;
+            }
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
