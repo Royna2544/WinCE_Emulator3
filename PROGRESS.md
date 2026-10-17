@@ -4,6 +4,32 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 combined monitor Event + P2 witnessed B-only launch gate
+
+Native `CreateProcessW` and original non-shortcut direct `.exe`
+`ShellExecuteExW` now carry an exact attempt-local publication/caller witness
+to post-native child admission. Their real-MIPS E-before-B controls admit only
+the creator's B and leave older notification E at its original Kernel queue
+birth. A raw Shell route test excludes `.lnk` and association resolution from
+that witness. Kernel B1/B2 claims preserve E/C order; a bad-PE pre-CPU refusal
+and repaired retry retain the original B birth. Monitor `continue` offers E at
+a closed-native boundary; `stop_pc` leaves it queued until an ordinary
+continue. A real-MIPS completed-root regression first reproduced a monitor
+attempt to re-enter a completed CPU, then passed after a bounded handoff/break
+before native entry. The defect belonged to the new monitor offer, not P2
+producer publication.
+
+The single [combined receipt](evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+and [five-file SHA seal](evidence/stage3-launch-handoff-p2-combined-20261017/source-seal.md)
+record final-source focused controls, 19-block no-default **1,560/0/2
+ignored** and release-feature **2,218/0/9 ignored**, plus three feature
+checks at exit 0. Every counted raw log has a stable five-file source hash and
+a verified closed-log SHA-256. Claude's `f96f31d9` backup commit contains the
+same source; later docs commits moved `HEAD` without changing counted files.
+No live iNavi or writable mount run was made. `.lnk`/association/URL Shell
+service, CE `NFY0:` launch timing, post-B parent restoration, runnable CPU
+custody and full Stage 3/O-T7 remain open.
+
 ## 2026-10-17 bounded P1 independent Event-service source/test gate
 
 The current source records exact publisher thread/process births on each
