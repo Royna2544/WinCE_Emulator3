@@ -120,7 +120,8 @@ use wince_emulation_v3::{
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
-            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions, STILL_ACTIVE,
+            CurrentProcessState, LoadedModuleMetadata, MessageQueueOptions, PendingLaunchOrigin,
+            STILL_ACTIVE,
         },
         memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
@@ -29485,7 +29486,15 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
     let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
-    let thread_id = 18;
+    let thread_id = 1;
+    let caller_birth = kernel
+        .live_thread_birth_key_by_id(thread_id)
+        .expect("boot event publisher birth");
+    let event_context = CoredllRawContext {
+        thread_id,
+        caller_birth: Some(caller_birth),
+        ..Default::default()
+    };
     let app_path = 0x7000;
     let app_path_same_case_key = 0x7200;
     let suffix = 0x7400;
@@ -29560,6 +29569,26 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
             [NOTIFICATION_EVENT_SYNC_END, 0],
         ),
         CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(!kernel.has_pending_process_launches());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            event_context.clone(),
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [NOTIFICATION_EVENT_SYNC_END, 0],
+        ),
+        CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
         }
@@ -29571,6 +29600,16 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
         Some(r"\Windows\nfyApp.exe")
     );
     assert_eq!(launches[0].command_line.as_deref(), Some("AppRunAfterSync"));
+    assert_eq!(
+        launches[0].origin,
+        PendingLaunchOrigin::Event {
+            event_id: NOTIFICATION_EVENT_SYNC_END,
+            publisher_thread_birth: caller_birth,
+            publisher_process_birth: kernel
+                .current_process_birth_key()
+                .expect("boot publisher process birth"),
+        }
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -29586,10 +29625,11 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
         }
     ));
     assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
             &mut kernel,
             &mut memory,
-            thread_id,
+            None,
+            event_context,
             ORD_CE_EVENT_HAS_OCCURRED,
             [NOTIFICATION_EVENT_DEVICE_CHANGE, suffix],
         ),
@@ -29628,6 +29668,20 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
             .scheduled_app_at_event(r"\Windows\nfyApp.exe", NOTIFICATION_EVENT_DEVICE_CHANGE)
             .is_none()
     );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [NOTIFICATION_EVENT_SYNC_END, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!kernel.has_pending_process_launches());
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -29661,6 +29715,77 @@ fn coredll_raw_ce_run_app_at_event_tracks_and_triggers_launches() -> Result<()> 
     ));
     assert!(kernel.handled_app_notifications(r"\windows\nfyapp.exe"));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_event_preflights_caller_before_multi_app_publication() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+    let mut memory = TestGuestMemory::default();
+    let event_id = 2;
+    kernel.schedule_app_at_event("alpha.exe".to_owned(), event_id);
+    kernel.schedule_app_at_event("beta.exe".to_owned(), event_id);
+    let publisher_thread_birth = kernel
+        .live_thread_birth_key_by_id(1)
+        .expect("boot publisher birth");
+    let publisher_process_birth = kernel
+        .current_process_birth_key()
+        .expect("boot publisher process birth");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            CoredllRawContext {
+                thread_id: 19,
+                caller_birth: Some(publisher_thread_birth),
+                ..Default::default()
+            },
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [event_id, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(19), ERROR_INVALID_HANDLE);
+    assert!(!kernel.has_pending_process_launches());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer_and_context(
+            &mut kernel,
+            &mut memory,
+            None,
+            CoredllRawContext {
+                thread_id: 1,
+                caller_birth: Some(publisher_thread_birth),
+                ..Default::default()
+            },
+            ORD_CE_EVENT_HAS_OCCURRED,
+            [event_id, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 2);
+    assert_eq!(launches[0].application.as_deref(), Some("alpha.exe"));
+    assert_eq!(launches[1].application.as_deref(), Some("beta.exe"));
+    for launch in launches {
+        assert_eq!(
+            launch.origin,
+            PendingLaunchOrigin::Event {
+                event_id,
+                publisher_thread_birth,
+                publisher_process_birth,
+            }
+        );
+    }
     Ok(())
 }
 

@@ -1006,11 +1006,26 @@ pub enum FreeLibraryResult {
     UnloadPending,
 }
 
+/// Publication provenance, captured before a child is given a Task birth.
+/// The publisher is not the owner of the launched child's CPU or process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingLaunchOrigin {
+    Ordinary,
+    Event {
+        event_id: u32,
+        publisher_thread_birth: ThreadBirthKey,
+        publisher_process_birth: ProcessBirthKey,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingProcessLaunch {
     pub application: Option<String>,
     pub command_line: Option<String>,
     pub current_directory: Option<String>,
+    /// Exact host image path selected at event publication, before a later
+    /// process rotation can change the path-resolution base.
+    pub resolution_base_host_path: Option<PathBuf>,
     pub show_cmd: Option<u32>,
     pub process_handle: u32,
     pub thread_handle: u32,
@@ -1020,6 +1035,7 @@ pub struct PendingProcessLaunch {
     /// not be able to recover these immutable identities after alias closure.
     pub process_birth: Option<ProcessBirthKey>,
     pub primary_thread_birth: Option<ThreadBirthKey>,
+    pub origin: PendingLaunchOrigin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3093,8 +3109,14 @@ impl CeKernel {
     }
 
     pub fn set_process_module_host_path(&mut self, path: impl Into<PathBuf>) {
+        self.set_process_module_host_path_option(Some(path.into()));
+    }
+
+    /// Restore a selected process's optional image path, including the
+    /// original absence of a path after a nested child attempt.
+    pub fn set_process_module_host_path_option(&mut self, path: Option<PathBuf>) {
         self.invalidate_selected_process_context();
-        self.process_module_host_path = Some(path.into());
+        self.process_module_host_path = path;
     }
 
     pub fn process_module_host_path(&self) -> Option<&PathBuf> {
@@ -3392,6 +3414,80 @@ impl CeKernel {
         current_directory: Option<String>,
         show_cmd: Option<u32>,
     ) -> PendingProcessLaunch {
+        self.queue_process_launch_with_options_and_origin(
+            application,
+            command_line,
+            current_directory,
+            show_cmd,
+            PendingLaunchOrigin::Ordinary,
+            None,
+        )
+    }
+
+    /// Validate the exact register-supplying caller before an event publishes
+    /// any of its registered launches. A numeric TID or selected PID alone is
+    /// insufficient provenance.
+    pub fn checked_notification_event_publisher(
+        &self,
+        thread_id: u32,
+        caller_birth: ThreadBirthKey,
+    ) -> Option<ProcessBirthKey> {
+        if caller_birth.thread_id() != thread_id
+            || self.live_thread_birth_key_by_id(thread_id) != Some(caller_birth)
+        {
+            return None;
+        }
+        self.checked_guest_process_caller_for_birth(caller_birth)
+    }
+
+    /// Publish one registered event launch with its original publisher birth.
+    /// The raw API preflights once before an N-app publication, then this
+    /// boundary independently checks every entry before allocating a child.
+    pub fn queue_notification_event_launch(
+        &mut self,
+        event_id: u32,
+        thread_id: u32,
+        caller_birth: ThreadBirthKey,
+        application: Option<String>,
+        command_line: Option<String>,
+    ) -> Result<PendingProcessLaunch> {
+        if !(1..=15).contains(&event_id) {
+            return Err(Error::Backend(
+                "notification event launch has invalid event ID".to_owned(),
+            ));
+        }
+        let publisher_process_birth = self
+            .checked_notification_event_publisher(thread_id, caller_birth)
+            .ok_or_else(|| {
+                Error::Backend(
+                    "notification event publisher has no exact live caller birth".to_owned(),
+                )
+            })?;
+        let current_directory = self.process_current_directory.clone();
+        let resolution_base_host_path = self.process_module_host_path.clone();
+        Ok(self.queue_process_launch_with_options_and_origin(
+            application,
+            command_line,
+            current_directory,
+            None,
+            PendingLaunchOrigin::Event {
+                event_id,
+                publisher_thread_birth: caller_birth,
+                publisher_process_birth,
+            },
+            resolution_base_host_path,
+        ))
+    }
+
+    fn queue_process_launch_with_options_and_origin(
+        &mut self,
+        application: Option<String>,
+        command_line: Option<String>,
+        current_directory: Option<String>,
+        show_cmd: Option<u32>,
+        origin: PendingLaunchOrigin,
+        resolution_base_host_path: Option<PathBuf>,
+    ) -> PendingProcessLaunch {
         let process_id = self.next_process_id;
         self.next_process_id = self
             .next_process_id
@@ -3419,6 +3515,7 @@ impl CeKernel {
             application,
             command_line,
             current_directory,
+            resolution_base_host_path,
             show_cmd,
             process_handle,
             thread_handle,
@@ -3426,6 +3523,7 @@ impl CeKernel {
             thread_id,
             process_birth: Some(child_birth),
             primary_thread_birth: Some(primary_thread_birth),
+            origin,
         };
         let entry_generation = self.next_pending_launch_entry_generation;
         self.next_pending_launch_entry_generation = entry_generation
@@ -3504,6 +3602,61 @@ impl CeKernel {
             generation,
             locators,
         }))
+    }
+
+    /// Neutral post-native service may select only the oldest unreserved
+    /// event publication. Ordinary children and later event siblings retain
+    /// their original queue slots for the enclosing launch flow.
+    pub(crate) fn reserve_oldest_unreserved_event_launch_batch(
+        &mut self,
+    ) -> Result<Option<PendingLaunchBatch>> {
+        let Some(index) = self.pending_process_launches.iter().position(|entry| {
+            entry.phase == PendingLaunchPhase::Unreserved
+                && matches!(entry.launch.origin, PendingLaunchOrigin::Event { .. })
+        }) else {
+            return Ok(None);
+        };
+        let entry = &self.pending_process_launches[index];
+        let process_birth = entry.launch.process_birth.ok_or_else(|| {
+            Error::Backend("pending event launch has no original process birth".to_owned())
+        })?;
+        let primary_thread_birth = entry.launch.primary_thread_birth.ok_or_else(|| {
+            Error::Backend("pending event launch has no original primary thread birth".to_owned())
+        })?;
+        if process_birth.process_id() != entry.launch.process_id
+            || primary_thread_birth.thread_id() != entry.launch.thread_id
+            || self.pending_process_launches.iter().any(|other| {
+                other.entry_generation != entry.entry_generation
+                    && other.launch.process_birth == Some(process_birth)
+            })
+        {
+            return Err(Error::Backend(
+                "pending event launch has inconsistent or duplicate exact birth".to_owned(),
+            ));
+        }
+        let locator = PendingLaunchLocator {
+            process_birth,
+            primary_thread_birth,
+            entry_generation: entry.entry_generation,
+        };
+        let generation = self.next_pending_launch_batch_generation;
+        self.next_pending_launch_batch_generation = generation.checked_add(1).ok_or_else(|| {
+            Error::Backend("pending launch batch generation exhausted".to_owned())
+        })?;
+        self.pending_process_launches[index].phase = PendingLaunchPhase::Reserved {
+            batch_generation: generation,
+        };
+        Ok(Some(PendingLaunchBatch {
+            generation,
+            locators: vec![locator],
+        }))
+    }
+
+    pub fn has_unreserved_event_launch(&self) -> bool {
+        self.pending_process_launches.iter().any(|entry| {
+            entry.phase == PendingLaunchPhase::Unreserved
+                && matches!(entry.launch.origin, PendingLaunchOrigin::Event { .. })
+        })
     }
 
     /// Read-only exact-birth visibility includes reserved and claimed entries.
@@ -15126,6 +15279,172 @@ mod tests {
             );
             assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn pending_event_launch_captures_exact_publisher_and_survives_take_restore() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let publisher_thread_birth = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("boot publisher thread birth");
+        let publisher_process_birth = kernel
+            .checked_notification_event_publisher(1, publisher_thread_birth)
+            .expect("boot publisher process birth");
+        let before_pid = kernel.next_process_id;
+        assert!(
+            kernel
+                .queue_notification_event_launch(
+                    2,
+                    0xdead,
+                    publisher_thread_birth,
+                    Some("invalid.exe".to_owned()),
+                    None,
+                )
+                .is_err()
+        );
+        assert_eq!(kernel.next_process_id, before_pid);
+        assert!(!kernel.has_pending_process_launches());
+
+        let publisher_host_path = PathBuf::from("C:\\images\\publisher.exe");
+        let publisher_directory = "\\Windows".to_owned();
+        kernel.set_process_module_host_path(publisher_host_path.clone());
+        kernel.set_process_current_directory(Some(publisher_directory.clone()));
+        let event = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher_thread_birth,
+            Some("event.exe".to_owned()),
+            Some("AppRunAfterSync".to_owned()),
+        )?;
+        assert_eq!(
+            event.origin,
+            PendingLaunchOrigin::Event {
+                event_id: 2,
+                publisher_thread_birth,
+                publisher_process_birth,
+            }
+        );
+        assert_ne!(event.process_birth, Some(publisher_process_birth));
+        assert_eq!(
+            event.resolution_base_host_path.as_ref(),
+            Some(&publisher_host_path)
+        );
+        assert_eq!(event.current_directory.as_ref(), Some(&publisher_directory));
+        kernel.set_process_module_host_path("C:\\images\\other.exe");
+        kernel.set_process_current_directory(Some("\\Other".to_owned()));
+        let taken = kernel.take_pending_process_launches();
+        assert_eq!(taken, vec![event.clone()]);
+        kernel.restore_pending_process_launches(taken);
+        assert_eq!(kernel.take_pending_process_launches(), vec![event]);
+
+        let (old_handle, reused_tid) = kernel.create_guest_thread(0x401000, 0, false);
+        let old_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(old_handle)
+            .expect("old publisher birth");
+        assert!(kernel.mark_guest_thread_exited(old_handle, 0));
+        assert!(kernel.close_handle(old_handle)?);
+        let new_handle = kernel.handles.try_create_thread_in_birth(
+            publisher_process_birth,
+            reused_tid,
+            0x402000,
+            0,
+            false,
+        )?;
+        let new_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(new_handle)
+            .expect("new publisher birth");
+        assert_ne!(old_birth, new_birth);
+        let before_stale_attempt = kernel.next_process_id;
+        assert!(
+            kernel
+                .queue_notification_event_launch(
+                    2,
+                    reused_tid,
+                    old_birth,
+                    Some("stale.exe".to_owned()),
+                    None,
+                )
+                .is_err()
+        );
+        assert_eq!(kernel.next_process_id, before_stale_attempt);
+        assert!(!kernel.has_pending_process_launches());
+        Ok(())
+    }
+
+    #[test]
+    fn pending_event_reservation_selects_only_oldest_unreserved_event() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let publisher = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("boot publisher birth");
+        let child_b = kernel.queue_process_launch(Some("child-b.exe".to_owned()), None);
+        assert_eq!(child_b.origin, PendingLaunchOrigin::Ordinary);
+        assert_eq!(child_b.resolution_base_host_path, None);
+        let event_e = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher,
+            Some("event-e.exe".to_owned()),
+            None,
+        )?;
+        let child_c = kernel.queue_process_launch(Some("child-c.exe".to_owned()), None);
+        let event_f = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher,
+            Some("event-f.exe".to_owned()),
+            None,
+        )?;
+
+        assert!(kernel.has_unreserved_event_launch());
+        let first = kernel
+            .reserve_oldest_unreserved_event_launch_batch()?
+            .expect("oldest event E only");
+        assert_eq!(first.locators().len(), 1);
+        assert_eq!(
+            first.locators()[0].process_birth,
+            event_e.process_birth.expect("E birth")
+        );
+        assert_eq!(
+            kernel.pending_process_launches[0].phase,
+            PendingLaunchPhase::Unreserved
+        );
+        assert_eq!(
+            kernel.pending_process_launches[2].phase,
+            PendingLaunchPhase::Unreserved
+        );
+        assert_eq!(
+            kernel.pending_process_launches[3].phase,
+            PendingLaunchPhase::Unreserved
+        );
+
+        let second = kernel
+            .reserve_oldest_unreserved_event_launch_batch()?
+            .expect("later event F only");
+        assert_eq!(second.locators().len(), 1);
+        assert_eq!(
+            second.locators()[0].process_birth,
+            event_f.process_birth.expect("F birth")
+        );
+        assert!(!kernel.has_unreserved_event_launch());
+        assert!(
+            kernel
+                .reserve_oldest_unreserved_event_launch_batch()?
+                .is_none()
+        );
+        let (claim, claimed_e) =
+            kernel.claim_pending_process_launch(&first, first.locators()[0])?;
+        assert_eq!(claimed_e, event_e);
+        kernel.release_pending_process_launch_claim(claim)?;
+        kernel.release_pending_process_launch_batch(first)?;
+        kernel.release_pending_process_launch_batch(second)?;
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![child_b, event_e, child_c, event_f]
+        );
         Ok(())
     }
 

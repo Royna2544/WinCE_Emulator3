@@ -1093,7 +1093,11 @@ impl CoredllExportTable {
         I: IntoIterator<Item = u32>,
     {
         let args = args.into_iter().collect::<Vec<_>>();
-        let caller_birth = kernel.live_thread_birth_key_by_id(thread_id);
+        // This compatibility entry has no register-supplying birth witness.
+        // Event launch publication requires the explicit native context.
+        let caller_birth = (ordinal != ORD_CE_EVENT_HAS_OCCURRED)
+            .then(|| kernel.live_thread_birth_key_by_id(thread_id))
+            .flatten();
         self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
             kernel,
             memory,
@@ -1147,7 +1151,9 @@ impl CoredllExportTable {
     where
         M: CoredllGuestMemory,
     {
-        let caller_birth = kernel.live_thread_birth_key_by_id(thread_id);
+        let caller_birth = (ordinal != ORD_CE_EVENT_HAS_OCCURRED)
+            .then(|| kernel.live_thread_birth_key_by_id(thread_id))
+            .flatten();
         self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
             kernel,
             memory,
@@ -4214,7 +4220,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             ))
         }
         ORD_CE_EVENT_HAS_OCCURRED => Some(CoredllValue::Bool(ce_event_has_occurred_raw(
-            kernel, memory, thread_id, args,
+            kernel, memory, context, args,
         ))),
         ORD_CE_GET_USER_NOTIFICATION_HANDLES => Some(CoredllValue::Bool(
             ce_get_user_notification_handles_raw(kernel, memory, thread_id, args),
@@ -23491,9 +23497,10 @@ fn ce_get_user_notification_preferences_raw<M: CoredllGuestMemory>(
 fn ce_event_has_occurred_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
-    thread_id: u32,
+    context: &CoredllRawContext,
     args: &[u32],
 ) -> bool {
+    let thread_id = context.thread_id;
     let event = raw_arg(args, 0);
     let suffix_ptr = raw_arg(args, 1);
     if !is_valid_notification_event(event) {
@@ -23516,13 +23523,47 @@ fn ce_event_has_occurred_raw<M: CoredllGuestMemory>(
         }
     };
     if let Some(prefix) = notification_event_command_prefix(event) {
-        for record in kernel.scheduled_apps_for_event(event) {
-            let command_line = if suffix.is_empty() {
-                prefix.to_owned()
-            } else {
-                format!("{prefix} {suffix}")
+        let registered = kernel.scheduled_apps_for_event(event);
+        if !registered.is_empty() {
+            let Some(caller_birth) = context.caller_birth else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
             };
-            kernel.queue_process_launch(Some(record.app_name), Some(command_line));
+            // Preflight the publisher before the first of N children receives
+            // an independent Task birth; no launch may use a mutable selector.
+            if kernel
+                .checked_notification_event_publisher(thread_id, caller_birth)
+                .is_none()
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+            for record in registered {
+                let command_line = if suffix.is_empty() {
+                    prefix.to_owned()
+                } else {
+                    format!("{prefix} {suffix}")
+                };
+                if kernel
+                    .queue_notification_event_launch(
+                        event,
+                        thread_id,
+                        caller_birth,
+                        Some(record.app_name),
+                        Some(command_line),
+                    )
+                    .is_err()
+                {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    return false;
+                }
+            }
         }
     }
     kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
