@@ -86,7 +86,10 @@ impl<'machine> MachineKernelPort<'machine> {
         framebuffer: &'machine mut (dyn Framebuffer + 'machine),
     ) -> Self {
         Self {
-            state: RefCell::new(MachineState { kernel, framebuffer }),
+            state: RefCell::new(MachineState {
+                kernel,
+                framebuffer,
+            }),
             active: Cell::new(None),
             first_terminal: OnceCell::new(),
         }

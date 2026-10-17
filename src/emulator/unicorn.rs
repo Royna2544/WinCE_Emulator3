@@ -18,11 +18,11 @@ use super::cpu_mips::{
     is_mips_control_transfer_instruction, jal_stub_words, mips_byte_jump_table_ranges,
     mips_halfword_jump_table_ranges, mips_patch_rva_overlaps_data_ranges, normal_branch_stub_words,
 };
-#[cfg(feature = "unicorn")]
-use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
 use super::machine_kernel_port::MachineKernelPort;
 #[cfg(feature = "unicorn")]
 use super::machine_kernel_port::{AttemptAuthority, MachineStateLoan};
+#[cfg(feature = "unicorn")]
+use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
 #[cfg(feature = "unicorn")]
 use crate::ce::memory::{
     PreparedPrivateVm, PreparedPrivateVmChange, PrivatePageIdentity, PrivateVmNativePageChange,
@@ -8899,6 +8899,22 @@ impl UnicornMips {
             .collect()
     }
 
+    /// Counts retained bytes across the entire CPU payload tree, including
+    /// descendants parked inside a returned nested-launch wrapper. This is a
+    /// mapped-blob metric, not physical RSS or CE private-page accounting.
+    pub(crate) fn retained_tree_blob_bytes(&self) -> usize {
+        self.mapped_blobs
+            .iter()
+            .fold(0usize, |total, blob| total.saturating_add(blob.bytes.len()))
+            .saturating_add(
+                self.parked_child_processes
+                    .iter()
+                    .fold(0usize, |total, parked| {
+                        total.saturating_add(parked.cpu.retained_tree_blob_bytes())
+                    }),
+            )
+    }
+
     /// A CPU-only native snapshot cannot restore pointer-backed image memory
     /// into a cloned machine checkpoint with a new owner lineage.
     pub fn has_sealed_image_runs(&self) -> bool {
@@ -15092,9 +15108,10 @@ impl UnicornMips {
         // stamp later, so capture it once at the primary native boundary.
         let pre_native_selected_context = kernel.selected_process_context_stamp();
         drop(setup_state);
-        let port_attempt_guard = pre_entry_try!(port
-            .enter_attempt(port_authority, "enter native guest attempt")
-            .map_err(|failure| Error::Backend(failure.to_string())));
+        let port_attempt_guard = pre_entry_try!(
+            port.enter_attempt(port_authority, "enter native guest attempt")
+                .map_err(|failure| Error::Backend(failure.to_string()))
+        );
         let result = uc.emu_start(
             u64::from(start_pc),
             0,
@@ -15185,7 +15202,10 @@ impl UnicornMips {
                     .take()
                     .map(Error::Backend)
             })
-            .or_else(|| port.terminal_failure().map(|failure| Error::Backend(failure.to_string())));
+            .or_else(|| {
+                port.terminal_failure()
+                    .map(|failure| Error::Backend(failure.to_string()))
+            });
         let scheduler_block_access_failure = scheduler_block_access_fault
             .take()
             .map(|reason| Error::Backend(reason.to_owned()));
@@ -15302,7 +15322,8 @@ impl UnicornMips {
                     state.kernel_mut(),
                     native_owner_pid,
                     &sealed_host_write_guard,
-                ).err();
+                )
+                .err();
             }
         }
         let mut tail_state = post_native_loan!("complete native attempt tail");
@@ -20816,7 +20837,8 @@ impl UnicornMips {
             #[cfg(test)]
             None,
         );
-        let restored_state = port.try_loan("verify event launch selection")
+        let restored_state = port
+            .try_loan("verify event launch selection")
             .map_err(|failure| Error::Backend(failure.to_string()))?;
         let kernel = restored_state.kernel();
         if kernel.current_process_birth_key() != original_birth
@@ -21051,260 +21073,273 @@ where
                 mut child_admitted,
                 child_prepare_result,
             ) = {
-            let mut pre_state = port
-                .try_loan("prepare exact child CPU")
-                .map_err(|failure| Error::Backend(failure.to_string()))?;
-            let (kernel, framebuffer) = pre_state.split_mut();
-            let (claim, launch) = kernel.claim_pending_process_launch(&batch, locator)?;
-            active_claim = Some(claim);
-            #[cfg(test)]
-            if let Some(observer) = launch_observer {
-                observer(kernel, &launch);
-            }
-            let Some(launch_birth) = launch.process_birth else {
-                return Err(Error::Backend(
-                    "pending child launch has no original process birth".to_owned(),
-                ));
-            };
-            if kernel.handles.process_birth_key(launch.process_id) != Some(launch_birth) {
-                return Err(Error::Backend(format!(
-                    "pending child launch pid {} has a stale process birth",
-                    launch.process_id
-                )));
-            }
-            if let Some(requested_code) = kernel
-                .handles
-                .process_termination_requested_exit_code_by_birth(launch_birth)
-            {
-                // A request may arrive after CreateProcess published the launch
-                // but before the first child instruction. Do not resolve/load or
-                // reset its exit state: its original birth is sufficient for the
-                // checked zero-slice completion.
-                let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
-                    &launch,
-                    requested_code,
-                    Some(&mut *framebuffer),
-                ) {
-                    Ok(completed) => completed,
-                    Err(error) => return Err(error),
-                };
-                if !completed {
-                    return Err(Error::Backend(format!(
-                        "pending child launch pid {} rejected requested completion",
-                        launch.process_id
-                    )));
-                }
-                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                    op: "CreateProcessTerminationCompleted",
-                    application: launch.application.clone(),
-                    command_line: launch.command_line.clone(),
-                    path: None,
-                    process_handle: Some(launch.process_handle),
-                    thread_handle: Some(launch.thread_handle),
-                    process_id: Some(launch.process_id),
-                    thread_id: Some(launch.thread_id),
-                    result: Some(requested_code),
-                    error: None,
-                    detail: Some("before_first_child_slice".to_owned()),
-                });
-                let claim = active_claim.ok_or_else(|| {
-                    Error::Backend("requested child completion lost its pending claim".to_owned())
-                })?;
-                kernel.consume_pending_process_launch_claim(claim)?;
-                active_claim = None;
-                continue;
-            }
-            let resolved = match resolve_process_launch_path(kernel, &launch) {
-                Ok(resolved) => resolved,
-                Err(error) => return Err(error),
-            };
-            let Some(path) = resolved else {
-                let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
-                    &launch,
-                    u32::MAX,
-                    Some(&mut *framebuffer),
-                ) {
-                    Ok(completed) => completed,
-                    Err(error) => return Err(error),
-                };
-                if !completed {
-                    return Err(Error::Backend(format!(
-                        "pending child launch pid {} rejected path-resolution completion",
-                        launch.process_id
-                    )));
-                }
-                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                    op: "CreateProcessResolveFailed",
-                    application: launch.application.clone(),
-                    command_line: launch.command_line.clone(),
-                    path: None,
-                    process_handle: Some(launch.process_handle),
-                    thread_handle: Some(launch.thread_handle),
-                    process_id: Some(launch.process_id),
-                    thread_id: Some(launch.thread_id),
-                    result: Some(0),
-                    error: Some("path not found".to_owned()),
-                    detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
-                });
-                let claim = active_claim.ok_or_else(|| {
-                    Error::Backend("path-failed child completion lost its pending claim".to_owned())
-                })?;
-                kernel.consume_pending_process_launch_claim(claim)?;
-                active_claim = None;
-                continue;
-            };
-            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-                op: "CreateProcessResolved",
-                application: launch.application.clone(),
-                command_line: launch.command_line.clone(),
-                path: Some(path.display().to_string()),
-                process_handle: Some(launch.process_handle),
-                thread_handle: Some(launch.thread_handle),
-                process_id: Some(launch.process_id),
-                thread_id: Some(launch.thread_id),
-                result: Some(1),
-                error: None,
-                detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
-            });
-            let image = match PeImage::inspect(&path) {
-                Ok(image) => image,
-                Err(error) => return Err(error),
-            };
-            // Hold a no-allocation terminal slot before the original child CPU
-            // exists. A loader/setup error cancels it and retries the launch;
-            // once the CPU is admitted, a native error cannot drop that owner.
-            let custody_key = if let Some(directory) = custody.as_deref_mut() {
-                match directory.reserve(launch_birth) {
-                    Ok(key) => Some(key),
-                    Err(error) => {
-                        return Err(Error::Backend(format!(
-                            "reserve child CPU custody: {error}"
-                        )));
-                    }
-                }
-            } else {
-                None
-            };
-            // The returned CPU can be a different selected birth after nested
-            // rotation. Reserve an unbound, no-allocation terminal destination
-            // before any guest instruction runs.
-            let deposit_ticket = if let Some(directory) = custody.as_deref_mut() {
-                match directory.reserve_unbound(launch_birth) {
-                    Ok(ticket) => Some(ticket),
-                    Err(error) => {
-                        if let Some(key) = custody_key {
-                            let _ = directory.cancel_reservation(key, launch_birth);
-                        }
-                        return Err(Error::Backend(format!(
-                            "reserve returned child tree custody: {error}"
-                        )));
-                    }
-                }
-            } else {
-                None
-            };
-            let mut child = match UnicornMips::new() {
-                Ok(child) => child,
-                Err(error) => {
-                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                        directory
-                            .cancel_reservation(key, launch_birth)
-                            .map_err(|cancel| {
-                                Error::Backend(format!(
-                                    "cancel unbuilt child CPU custody: {cancel}"
-                                ))
-                            })?;
-                    }
-                    if let Some(ticket) = deposit_ticket {
-                        ticket.cancel();
-                    }
-                    return Err(error);
-                }
-            };
-            let saved_base = kernel.process_module_base();
-            let saved_path = kernel.process_module_path().to_owned();
-            let saved_host_path = kernel.process_module_host_path().cloned();
-            let saved_command_line = kernel.process_command_line().to_owned();
-            let saved_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
-            let saved_show_cmd = kernel.process_show_cmd();
-            let saved_process_state = kernel.current_process_state();
-
-            kernel.set_process_module_base(image.image_base());
-            let child_module_path = kernel
-                .host_path_to_guest_mount(&path)
-                .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
-            kernel.set_process_module_path(child_module_path.clone());
-            kernel.set_process_module_host_path(path.clone());
-            kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
-            kernel.set_process_current_directory(
-                launch
-                    .current_directory
-                    .clone()
-                    .or(saved_current_directory.clone()),
-            );
-            kernel
-                .set_process_show_cmd(launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL));
-            kernel.set_current_process_id(launch.process_id);
-            kernel.reset_current_process_exit_state();
-
-            let mut child_admitted = false;
-            let child_prepare_result = (|| -> Result<()> {
-                child.owned_process_launch = Some(launch.clone());
-                child.set_dll_search_dirs(dll_search_dirs.to_vec());
-                child.set_initial_thread_id(launch.thread_id);
-                let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
-                child.load_pe_image_with_dlls(&image, &dll_images)?;
-                // CPU admission ends the retryable pending-launch lifetime. The
-                // child now owns its exact launch descriptor; an execution error
-                // must quarantine that CPU, never publish this launch again.
-                let claim = active_claim.ok_or_else(|| {
-                    Error::Backend("child CPU admission lost its pending claim".to_owned())
-                })?;
-                kernel.consume_pending_process_launch_claim(claim)?;
-                active_claim = None;
-                child_admitted = true;
+                let mut pre_state = port
+                    .try_loan("prepare exact child CPU")
+                    .map_err(|failure| Error::Backend(failure.to_string()))?;
+                let (kernel, framebuffer) = pre_state.split_mut();
+                let (claim, launch) = kernel.claim_pending_process_launch(&batch, locator)?;
+                active_claim = Some(claim);
                 #[cfg(test)]
-                if let Some(observer) = post_admission_observer {
-                    // A test may corrupt the canonical primary only after a
-                    // valid exact-birth claim and CPU admission. Production
-                    // has no hook at this boundary.
+                if let Some(observer) = launch_observer {
                     observer(kernel, &launch);
                 }
-                Ok(())
-            })();
-            (
-                launch,
-                launch_birth,
-                path,
-                image,
-                custody_key,
-                deposit_ticket,
-                child,
-                saved_base,
-                saved_path,
-                saved_host_path,
-                saved_command_line,
-                saved_current_directory,
-                saved_show_cmd,
-                saved_process_state,
-                child_module_path,
-                child_admitted,
-                child_prepare_result,
-            )
+                let Some(launch_birth) = launch.process_birth else {
+                    return Err(Error::Backend(
+                        "pending child launch has no original process birth".to_owned(),
+                    ));
+                };
+                if kernel.handles.process_birth_key(launch.process_id) != Some(launch_birth) {
+                    return Err(Error::Backend(format!(
+                        "pending child launch pid {} has a stale process birth",
+                        launch.process_id
+                    )));
+                }
+                if let Some(requested_code) = kernel
+                    .handles
+                    .process_termination_requested_exit_code_by_birth(launch_birth)
+                {
+                    // A request may arrive after CreateProcess published the launch
+                    // but before the first child instruction. Do not resolve/load or
+                    // reset its exit state: its original birth is sufficient for the
+                    // checked zero-slice completion.
+                    let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
+                        &launch,
+                        requested_code,
+                        Some(&mut *framebuffer),
+                    ) {
+                        Ok(completed) => completed,
+                        Err(error) => return Err(error),
+                    };
+                    if !completed {
+                        return Err(Error::Backend(format!(
+                            "pending child launch pid {} rejected requested completion",
+                            launch.process_id
+                        )));
+                    }
+                    kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                        op: "CreateProcessTerminationCompleted",
+                        application: launch.application.clone(),
+                        command_line: launch.command_line.clone(),
+                        path: None,
+                        process_handle: Some(launch.process_handle),
+                        thread_handle: Some(launch.thread_handle),
+                        process_id: Some(launch.process_id),
+                        thread_id: Some(launch.thread_id),
+                        result: Some(requested_code),
+                        error: None,
+                        detail: Some("before_first_child_slice".to_owned()),
+                    });
+                    let claim = active_claim.ok_or_else(|| {
+                        Error::Backend(
+                            "requested child completion lost its pending claim".to_owned(),
+                        )
+                    })?;
+                    kernel.consume_pending_process_launch_claim(claim)?;
+                    active_claim = None;
+                    continue;
+                }
+                let resolved = match resolve_process_launch_path(kernel, &launch) {
+                    Ok(resolved) => resolved,
+                    Err(error) => return Err(error),
+                };
+                let Some(path) = resolved else {
+                    let completed = match kernel.try_mark_process_launch_exited_with_framebuffer(
+                        &launch,
+                        u32::MAX,
+                        Some(&mut *framebuffer),
+                    ) {
+                        Ok(completed) => completed,
+                        Err(error) => return Err(error),
+                    };
+                    if !completed {
+                        return Err(Error::Backend(format!(
+                            "pending child launch pid {} rejected path-resolution completion",
+                            launch.process_id
+                        )));
+                    }
+                    kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                        op: "CreateProcessResolveFailed",
+                        application: launch.application.clone(),
+                        command_line: launch.command_line.clone(),
+                        path: None,
+                        process_handle: Some(launch.process_handle),
+                        thread_handle: Some(launch.thread_handle),
+                        process_id: Some(launch.process_id),
+                        thread_id: Some(launch.thread_id),
+                        result: Some(0),
+                        error: Some("path not found".to_owned()),
+                        detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
+                    });
+                    let claim = active_claim.ok_or_else(|| {
+                        Error::Backend(
+                            "path-failed child completion lost its pending claim".to_owned(),
+                        )
+                    })?;
+                    kernel.consume_pending_process_launch_claim(claim)?;
+                    active_claim = None;
+                    continue;
+                };
+                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessResolved",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: Some(path.display().to_string()),
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: Some(1),
+                    error: None,
+                    detail: Some(format!("show_cmd={:?}", launch.show_cmd)),
+                });
+                let image = match PeImage::inspect(&path) {
+                    Ok(image) => image,
+                    Err(error) => return Err(error),
+                };
+                // Hold a no-allocation terminal slot before the original child CPU
+                // exists. A loader/setup error cancels it and retries the launch;
+                // once the CPU is admitted, a native error cannot drop that owner.
+                let custody_key = if let Some(directory) = custody.as_deref_mut() {
+                    match directory.reserve(launch_birth) {
+                        Ok(key) => Some(key),
+                        Err(error) => {
+                            return Err(Error::Backend(format!(
+                                "reserve child CPU custody: {error}"
+                            )));
+                        }
+                    }
+                } else {
+                    None
+                };
+                // The returned CPU can be a different selected birth after nested
+                // rotation. Reserve an unbound, no-allocation terminal destination
+                // before any guest instruction runs.
+                let deposit_ticket = if let Some(directory) = custody.as_deref_mut() {
+                    match directory.reserve_unbound(launch_birth) {
+                        Ok(ticket) => Some(ticket),
+                        Err(error) => {
+                            if let Some(key) = custody_key {
+                                let _ = directory.cancel_reservation(key, launch_birth);
+                            }
+                            return Err(Error::Backend(format!(
+                                "reserve returned child tree custody: {error}"
+                            )));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let mut child = match UnicornMips::new() {
+                    Ok(child) => child,
+                    Err(error) => {
+                        if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key)
+                        {
+                            directory
+                                .cancel_reservation(key, launch_birth)
+                                .map_err(|cancel| {
+                                    Error::Backend(format!(
+                                        "cancel unbuilt child CPU custody: {cancel}"
+                                    ))
+                                })?;
+                        }
+                        if let Some(ticket) = deposit_ticket {
+                            ticket.cancel();
+                        }
+                        return Err(error);
+                    }
+                };
+                let saved_base = kernel.process_module_base();
+                let saved_path = kernel.process_module_path().to_owned();
+                let saved_host_path = kernel.process_module_host_path().cloned();
+                let saved_command_line = kernel.process_command_line().to_owned();
+                let saved_current_directory =
+                    kernel.process_current_directory().map(ToOwned::to_owned);
+                let saved_show_cmd = kernel.process_show_cmd();
+                let saved_process_state = kernel.current_process_state();
+
+                kernel.set_process_module_base(image.image_base());
+                let child_module_path = kernel
+                    .host_path_to_guest_mount(&path)
+                    .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
+                kernel.set_process_module_path(child_module_path.clone());
+                kernel.set_process_module_host_path(path.clone());
+                kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+                kernel.set_process_current_directory(
+                    launch
+                        .current_directory
+                        .clone()
+                        .or(saved_current_directory.clone()),
+                );
+                kernel.set_process_show_cmd(
+                    launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL),
+                );
+                kernel.set_current_process_id(launch.process_id);
+                kernel.reset_current_process_exit_state();
+
+                let mut child_admitted = false;
+                let child_prepare_result = (|| -> Result<()> {
+                    child.owned_process_launch = Some(launch.clone());
+                    child.set_dll_search_dirs(dll_search_dirs.to_vec());
+                    child.set_initial_thread_id(launch.thread_id);
+                    let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
+                    child.load_pe_image_with_dlls(&image, &dll_images)?;
+                    // CPU admission ends the retryable pending-launch lifetime. The
+                    // child now owns its exact launch descriptor; an execution error
+                    // must quarantine that CPU, never publish this launch again.
+                    let claim = active_claim.ok_or_else(|| {
+                        Error::Backend("child CPU admission lost its pending claim".to_owned())
+                    })?;
+                    kernel.consume_pending_process_launch_claim(claim)?;
+                    active_claim = None;
+                    child_admitted = true;
+                    #[cfg(test)]
+                    if let Some(observer) = post_admission_observer {
+                        // A test may corrupt the canonical primary only after a
+                        // valid exact-birth claim and CPU admission. Production
+                        // has no hook at this boundary.
+                        observer(kernel, &launch);
+                    }
+                    Ok(())
+                })();
+                (
+                    launch,
+                    launch_birth,
+                    path,
+                    image,
+                    custody_key,
+                    deposit_ticket,
+                    child,
+                    saved_base,
+                    saved_path,
+                    saved_host_path,
+                    saved_command_line,
+                    saved_current_directory,
+                    saved_show_cmd,
+                    saved_process_state,
+                    child_module_path,
+                    child_admitted,
+                    child_prepare_result,
+                )
             };
             // No Kernel/framebuffer loan survives the recursive guest run.
             let execution = if child_prepare_result.is_ok() {
-                Some(child.run_until_import_trap_with_framebuffer_limits_report_on_port(
-                    port,
-                    limits,
-                    custody.as_deref_mut(),
-                ))
+                Some(
+                    child.run_until_import_trap_with_framebuffer_limits_report_on_port(
+                        port,
+                        limits,
+                        custody.as_deref_mut(),
+                    ),
+                )
             } else {
                 None
             };
             let child_result = (|| -> Result<ChildProcessRunOutcome> {
                 child_prepare_result?;
-                let execution = execution.expect("successful child preparation has an execution");
+                let execution = execution.ok_or_else(|| {
+                    Error::Backend(
+                        "successful child preparation has no execution observation".to_owned(),
+                    )
+                })?;
                 if let Err(error) = execution.result {
                     if error.is_host_exit_recovery_required() {
                         return Ok(ChildProcessRunOutcome::RecoveryRequired(error));
@@ -21329,7 +21364,7 @@ where
             };
             let (kernel, framebuffer) = post_state.split_mut();
             let mut deposit_ticket = deposit_ticket;
-            if child_admitted {
+            if child_admitted && deposit_ticket.is_some() {
                 let verified = verified_returned_child_tree_births(&child, launch_birth, kernel);
                 let ownership_conflict = if let Some(ref births) = verified {
                     if births.is_empty()
@@ -21412,13 +21447,14 @@ where
             let outcome = match child_result {
                 Ok(outcome) => {
                     if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
-                        directory
-                            .cancel_reservation(key, launch_birth)
-                            .map_err(|cancel| {
-                                Error::Backend(format!(
-                                    "cancel runnable child CPU custody: {cancel}"
-                                ))
-                            })?;
+                        if let Err(cancel) = directory.cancel_reservation(key, launch_birth) {
+                            if let Some(ticket) = deposit_ticket.take() {
+                                ticket.deposit_unverified(child);
+                            }
+                            return Err(Error::Backend(format!(
+                                "cancel runnable child CPU custody: {cancel}; returned tree retained unverified"
+                            )));
+                        }
                     }
                     outcome
                 }
@@ -21434,21 +21470,33 @@ where
                             if let Err((failure, original_cpu)) =
                                 directory.quarantine_reserved(key, launch_birth, child)
                             {
-                                drop(original_cpu);
+                                if let Some(ticket) = deposit_ticket.take() {
+                                    ticket.deposit_unverified(original_cpu);
+                                }
                                 return Err(Error::Backend(format!(
-                                    "reserved child CPU custody transfer refused: {failure}; terminal CPU ownership loss"
+                                    "reserved child CPU custody transfer refused: {failure}; returned tree retained unverified"
                                 )));
                             }
+                            if let Some(ticket) = deposit_ticket.take() {
+                                ticket.cancel();
+                            }
                             *quarantined_child_fault = true;
+                        } else if let Some(ticket) = deposit_ticket.take() {
+                            ticket.deposit_unverified(child);
                         }
                     } else if let (Some(directory), Some(key)) =
                         (custody.as_deref_mut(), custody_key)
                     {
+                        if let Some(ticket) = deposit_ticket.take() {
+                            ticket.cancel();
+                        }
                         if let Err(cancel) = directory.cancel_reservation(key, launch_birth) {
                             return Err(Error::Backend(format!(
                                 "cancel unadmitted child CPU custody reservation: {cancel}"
                             )));
                         }
+                    } else if let Some(ticket) = deposit_ticket.take() {
+                        ticket.cancel();
                     }
                     kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildError",
@@ -21487,7 +21535,7 @@ where
                         // Exit and window restoration already committed inside the
                         // child lease. A publication failure here is terminal for
                         // its descendants, not a recoverable stopped-exit refusal.
-                        parent_queue.with_queue(
+                        let publication = parent_queue.with_queue(
                             Error::Backend(
                                 "completed child descendant CPU queue borrow conflict after committed exit; terminal descendant CPU ownership loss".to_owned(),
                             ),
@@ -21500,7 +21548,16 @@ where
                                 queue.append(&mut child.parked_child_processes);
                                 Ok(())
                             },
-                        )?;
+                        );
+                        if let Err(error) = publication {
+                            if let Some(ticket) = deposit_ticket.take() {
+                                ticket.deposit_unverified(child);
+                            }
+                            return Err(error);
+                        }
+                    }
+                    if let Some(ticket) = deposit_ticket.take() {
+                        ticket.cancel();
                     }
                     continue;
                 }
@@ -21521,6 +21578,9 @@ where
                         }
                     };
                     if completed {
+                        if let Some(ticket) = deposit_ticket.take() {
+                            ticket.cancel();
+                        }
                         kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                             op: "CreateProcessChildReturned",
                             application: launch.application.clone(),
@@ -21555,6 +21615,18 @@ where
             };
             if !completion_rejected {
                 if let Some(exit_code) = child_launch_handle_exit_code(kernel, &launch) {
+                    if !child.parked_child_processes.is_empty() {
+                        if let Some(ticket) = deposit_ticket.take() {
+                            ticket.deposit_unverified(child);
+                        }
+                        return Err(Error::Backend(
+                            "already-exited child still owns descendants; tree retained unverified"
+                                .to_owned(),
+                        ));
+                    }
+                    if let Some(ticket) = deposit_ticket.take() {
+                        ticket.cancel();
+                    }
                     kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                         op: "CreateProcessChildParkSkipped",
                         application: launch.application.clone(),
@@ -21592,8 +21664,30 @@ where
                 command_line: launch.command_line.clone().unwrap_or_default(),
                 current_directory: child_current_directory.clone(),
             };
-            if let Err(error) = try_publish_parked_child(parent_queue, parked) {
+            let mut parked = Some(parked);
+            let publication = parent_queue.with_queue(
+                Error::Backend(
+                    "child CPU queue borrow conflict; returned tree retained unverified".to_owned(),
+                ),
+                |queue| {
+                    queue.try_reserve(1).map_err(|_| {
+                        Error::Backend(
+                            "child CPU queue reservation failed; returned tree retained unverified"
+                                .to_owned(),
+                        )
+                    })?;
+                    queue.push_back(parked.take().expect("one child publication payload"));
+                    Ok(())
+                },
+            );
+            if let Err(error) = publication {
+                if let Some(ticket) = deposit_ticket.take() {
+                    ticket.deposit_unverified(*parked.take().expect("unpublished child").cpu);
+                }
                 return Err(error);
+            }
+            if let Some(ticket) = deposit_ticket.take() {
+                ticket.cancel();
             }
             if let Some(error) = completion_recovery_error {
                 return Err(error);
@@ -21620,6 +21714,15 @@ where
     // No mutable queue borrow or owner vector spans the child run. Resolve
     // every still-active pre-CPU claim and release the untouched batch even
     // when an inner `?` exits through a custody-cancellation error.
+    let mut cleanup_state = match port.try_loan("release child launch claim and batch") {
+        Ok(state) => state,
+        Err(failure) => {
+            return Err(Error::Backend(format!(
+                "pending launch cleanup lost machine-state port after {result:?}: {failure}"
+            )));
+        }
+    };
+    let kernel = cleanup_state.kernel_mut();
     let claim_release = if let Some(claim) = active_claim.take() {
         kernel.release_pending_process_launch_claim(claim)
     } else {
@@ -21632,6 +21735,83 @@ where
             "pending launch claim/batch cleanup failed after {result:?}: claim={claim:?}; batch={batch:?}"
         ))),
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn verified_returned_child_tree_births(
+    child: &UnicornMips,
+    origin: crate::ce::object::ProcessBirthKey,
+    kernel: &CeKernel,
+) -> Option<std::collections::BTreeSet<crate::ce::object::ProcessBirthKey>> {
+    fn visit(
+        cpu: &UnicornMips,
+        expected: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+        births: &mut std::collections::BTreeSet<crate::ce::object::ProcessBirthKey>,
+        is_root: bool,
+    ) -> Option<()> {
+        let launch = cpu.owned_process_launch.as_ref()?;
+        if launch.process_birth != Some(expected)
+            || launch.process_id != expected.process_id()
+            || kernel
+                .handles
+                .process_birth_key_for_handle(launch.process_handle)
+                != Some(expected)
+            || launch.primary_thread_birth != kernel.handles.process_primary_thread_birth(expected)
+            || cpu.initial_thread_id != launch.thread_id
+            || !births.insert(expected)
+        {
+            return None;
+        }
+        // Accepted exact completion can retire only the root being returned.
+        // Every parked descendant still needs its own live canonical birth.
+        if !(is_root && cpu.completed_active_process_exit)
+            && !kernel.handles.process_execution_live_by_birth(expected)
+        {
+            return None;
+        }
+        for parked in &cpu.parked_child_processes {
+            let parked_birth = parked.cpu.owned_process_launch.as_ref()?.process_birth?;
+            if parked.process_state.process_id != parked_birth.process_id()
+                || parked.process_handle
+                    != parked
+                        .cpu
+                        .owned_process_launch
+                        .as_ref()
+                        .map(|l| l.process_handle)
+                || parked.thread_id != parked.cpu.initial_thread_id
+            {
+                return None;
+            }
+            visit(&parked.cpu, parked_birth, kernel, births, false)?;
+        }
+        Some(())
+    }
+
+    let mut births = std::collections::BTreeSet::new();
+    visit(child, origin, kernel, &mut births, true)?;
+    Some(births)
+}
+
+#[cfg(feature = "unicorn")]
+fn queue_contains_cpu_birth(
+    queue: &VecDeque<ParkedProcess>,
+    births: &std::collections::BTreeSet<crate::ce::object::ProcessBirthKey>,
+) -> bool {
+    fn contains(
+        cpu: &UnicornMips,
+        births: &std::collections::BTreeSet<crate::ce::object::ProcessBirthKey>,
+    ) -> bool {
+        cpu.owned_process_launch
+            .as_ref()
+            .and_then(|launch| launch.process_birth)
+            .is_some_and(|birth| births.contains(&birth))
+            || cpu
+                .parked_child_processes
+                .iter()
+                .any(|parked| contains(&parked.cpu, births))
+    }
+    queue.iter().any(|parked| contains(&parked.cpu, births))
 }
 
 #[cfg(feature = "unicorn")]
@@ -82840,7 +83020,15 @@ mod unicorn_tests {
         );
         let observations = super::POST_CHILD_SELECTION_PROBE
             .with(|probe| probe.borrow_mut().take().expect("active selection probe"));
-        attempt.result?;
+        let error = attempt
+            .result
+            .expect_err("C returned through B's recursive child slot");
+        assert!(
+            matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
+            "nested returned tree must be retained before classification: {error}"
+        );
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
         assert_eq!(attempt.report.start_process_birth(), Some(parent_birth));
         assert_eq!(
             attempt.report.raw_stop_pc(),
@@ -82903,73 +83091,107 @@ mod unicorn_tests {
             child_birth: crate::ce::object::ProcessBirthKey,
             leaf_birth: crate::ce::object::ProcessBirthKey,
         ) {
-            let mut payloads = Vec::new();
-            collect_cpu_payloads(cpu, &mut payloads);
             let boot_primary = kernel
                 .handles
                 .process_primary_thread_birth(boot_birth)
                 .expect("canonical boot primary birth");
             let mut owners = std::collections::BTreeMap::new();
-            for payload in payloads {
-                let owner = if let Some(launch) = payload.owned_process_launch.as_ref() {
-                    let birth = launch
-                        .process_birth
-                        .expect("child CPU has original launch birth");
-                    let primary = kernel
-                        .handles
-                        .process_primary_thread_birth(birth)
-                        .expect("canonical child primary birth");
-                    assert_eq!(launch.process_id, birth.process_id(), "{phase}: launch PID");
-                    assert_eq!(
-                        launch.primary_thread_birth,
-                        Some(primary),
-                        "{phase}: launch primary"
-                    );
-                    assert_eq!(
-                        payload.initial_thread_id,
-                        primary.thread_id(),
-                        "{phase}: CPU primary TID"
-                    );
-                    assert_eq!(
-                        kernel
+            let mut inspect_tree = |tree: &super::UnicornMips| {
+                let mut payloads = Vec::new();
+                collect_cpu_payloads(tree, &mut payloads);
+                for payload in payloads {
+                    let owner = if let Some(launch) = payload.owned_process_launch.as_ref() {
+                        let birth = launch
+                            .process_birth
+                            .expect("child CPU has original launch birth");
+                        let primary = kernel
                             .handles
-                            .process_birth_key_for_handle(launch.process_handle),
-                        Some(birth),
-                        "{phase}: process handle must retain original birth"
-                    );
-                    assert_eq!(
-                        kernel.process_exit_code(launch.process_handle),
-                        Some(crate::ce::kernel::STILL_ACTIVE),
-                        "{phase}: child must remain unsignaled"
-                    );
-                    assert_eq!(
-                        kernel.is_wait_ready(launch.process_handle, 1),
-                        Some(false),
-                        "{phase}: child process wait must not complete"
-                    );
+                            .process_primary_thread_birth(birth)
+                            .expect("canonical child primary birth");
+                        assert_eq!(launch.process_id, birth.process_id(), "{phase}: launch PID");
+                        assert_eq!(
+                            launch.primary_thread_birth,
+                            Some(primary),
+                            "{phase}: launch primary"
+                        );
+                        assert_eq!(
+                            payload.initial_thread_id,
+                            primary.thread_id(),
+                            "{phase}: CPU primary TID"
+                        );
+                        assert_eq!(
+                            kernel
+                                .handles
+                                .process_birth_key_for_handle(launch.process_handle),
+                            Some(birth),
+                            "{phase}: process handle must retain original birth"
+                        );
+                        assert_eq!(
+                            kernel.process_exit_code(launch.process_handle),
+                            Some(crate::ce::kernel::STILL_ACTIVE),
+                            "{phase}: child must remain unsignaled"
+                        );
+                        assert_eq!(
+                            kernel.is_wait_ready(launch.process_handle, 1),
+                            Some(false),
+                            "{phase}: child process wait must not complete"
+                        );
+                        assert!(
+                            kernel.pending_process_launch_for_birth(birth).is_none(),
+                            "{phase}: admitted CPU birth must not also remain pending"
+                        );
+                        birth
+                    } else {
+                        assert_eq!(
+                            payload.initial_thread_id,
+                            boot_primary.thread_id(),
+                            "{phase}: only the boot CPU may lack a launch"
+                        );
+                        assert_eq!(
+                            payload.saved_context_thread_birth,
+                            Some(boot_primary),
+                            "{phase}: boot CPU needs its stopped exact-primary witness"
+                        );
+                        boot_birth
+                    };
                     assert!(
-                        kernel.pending_process_launch_for_birth(birth).is_none(),
-                        "{phase}: admitted CPU birth must not also remain pending"
+                        kernel.handles.process_execution_live_by_birth(owner),
+                        "{phase}: each CPU owner must still be canonically execution-live: {owner:?}"
                     );
-                    birth
-                } else {
-                    assert_eq!(
-                        payload.initial_thread_id,
-                        boot_primary.thread_id(),
-                        "{phase}: only the boot CPU may lack a launch"
-                    );
-                    assert_eq!(
-                        payload.saved_context_thread_birth,
-                        Some(boot_primary),
-                        "{phase}: boot CPU needs its stopped exact-primary witness"
-                    );
-                    boot_birth
-                };
-                assert!(
-                    kernel.handles.process_execution_live_by_birth(owner),
-                    "{phase}: each CPU owner must still be canonically execution-live: {owner:?}"
+                    *owners.entry(owner).or_insert(0usize) += 1;
+                }
+            };
+            inspect_tree(cpu);
+            for retained in custody.retained_tree_snapshots() {
+                assert_eq!(
+                    retained.state,
+                    crate::emulator::cpu_custody::RetainedTreeState::UnverifiedStopped,
+                    "{phase}: no unbound or abandoned ticket may remain"
                 );
-                *owners.entry(owner).or_insert(0usize) += 1;
+                let (expected_bytes, root_bytes) = custody
+                    .with_retained_tree(retained.key, |tree| {
+                        inspect_tree(tree);
+                        let mut payloads = Vec::new();
+                        collect_cpu_payloads(tree, &mut payloads);
+                        let total = payloads.iter().fold(0usize, |total, payload| {
+                            total.saturating_add(
+                                payload.mapped_blobs.iter().fold(0usize, |bytes, blob| {
+                                    bytes.saturating_add(blob.bytes.len())
+                                }),
+                            )
+                        });
+                        let root = tree
+                            .mapped_blobs
+                            .iter()
+                            .fold(0usize, |bytes, blob| bytes.saturating_add(blob.bytes.len()));
+                        (total, root)
+                    })
+                    .expect("read retained tree census");
+                assert_eq!(retained.mapped_blob_bytes, expected_bytes as u64);
+                assert!(
+                    expected_bytes > root_bytes,
+                    "{phase}: nested parked B bytes are included beyond C root"
+                );
             }
             eprintln!(
                 "NESTED_CPU_CENSUS phase={phase} selected={:?} active_cpu_owner={:?} owners={owners:?} custody={:?}",
@@ -82990,7 +83212,7 @@ mod unicorn_tests {
             );
             assert!(
                 custody.snapshots().is_empty(),
-                "{phase}: clean runnable spinners should not leave Cut 3a reservations or quarantine"
+                "{phase}: no old B slot remains"
             );
         }
 
@@ -83034,7 +83256,13 @@ mod unicorn_tests {
             limits,
             &mut custody,
         );
-        first.result?;
+        let error = first
+            .result
+            .expect_err("nested C-with-B tree must stop before B classification");
+        assert!(
+            matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
+            "first return is typed and retains the tree: {error}"
+        );
         assert_eq!(first.report.start_process_birth(), Some(boot_birth));
         assert_eq!(
             first.report.raw_stop_pc(),
@@ -83065,53 +83293,263 @@ mod unicorn_tests {
             child_birth,
             leaf_birth,
         );
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        Ok(())
+    }
 
-        // Keep the scheduler's selection untouched. A selected-context or
-        // lease failure on this next ordinary attempt is distinct from loss
-        // of an original CPU payload; inspect the latter before reporting it.
-        let next = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+    #[test]
+    fn ordinary_real_mips_child_runs_a_second_slice_through_shared_port() -> crate::Result<()> {
+        fn generation_for_birth(
+            cpu: &super::UnicornMips,
+            birth: crate::ce::object::ProcessBirthKey,
+        ) -> Option<u64> {
+            if cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|launch| launch.process_birth)
+                == Some(birth)
+            {
+                return Some(cpu.run_slice_generation);
+            }
+            cpu.parked_child_processes
+                .iter()
+                .find_map(|parked| generation_for_birth(&parked.cpu, birth))
+        }
+
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
             &mut kernel,
             &mut framebuffer,
             limits,
             &mut custody,
-        );
-        assert_exact_cpu_census(
-            "after-next-attempt",
-            &cpu,
-            &kernel,
-            &custody,
-            boot_birth,
-            child_birth,
-            leaf_birth,
-        );
-        eprintln!(
-            "NESTED_CPU_NEXT_ATTEMPT report={:?} result={:?}",
-            next.report, next.result
-        );
-        let error = next
-            .result
-            .expect_err("selected B cannot execute the active C CPU on the next call");
+        )
+        .result?;
+        let launch = kernel
+            .recent_process_ops()
+            .iter()
+            .find(|record| {
+                record.op == "CreateProcessWQueued"
+                    && record.application.as_deref() == Some("survivor.exe")
+            })
+            .expect("guest CreateProcessW queued B");
+        let birth = kernel
+            .handles
+            .process_birth_key_for_handle(launch.process_handle.expect("B handle"))
+            .expect("B birth");
         assert!(
-            matches!(&error, Error::Backend(reason) if reason == "child CPU does not own the selected live process birth"),
-            "the refusal must be a typed selected-owner preflight, not CPU loss: {error}"
+            generation_for_birth(&cpu, birth).is_some_and(|generation| generation >= 1),
+            "B first slice executed guest MIPS before A's handoff completed"
+        );
+
+        let mut second_slice = None;
+        for _ in 0..16 {
+            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+                &mut custody,
+            );
+            attempt.result?;
+            if attempt.report.start_process_birth() == Some(birth) {
+                second_slice = Some(attempt.report);
+                break;
+            }
+        }
+        let second = second_slice.expect("ordinary B must be selected for a second native slice");
+        assert!(second.attempt_id().is_some(), "B entered Unicorn again");
+        assert_eq!(
+            second.native_result(),
+            &super::AttemptObservation::Value(())
         );
         assert_eq!(
-            next.report.attempt_id(),
+            second.count_stop_query(),
+            &super::AttemptObservation::Value(true)
+        );
+        assert!(generation_for_birth(&cpu, birth).is_some_and(|generation| generation >= 2));
+        assert!(
+            !custody.has_any_custody(),
+            "ordinary B stays runnable, not retained"
+        );
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn machine_port_conflicts_are_typed_and_sticky_before_callback_effects() -> crate::Result<()> {
+        use crate::emulator::machine_kernel_port::MachinePortFailure;
+
+        let mut kernel = phase1_kernel("port-conflict.exe")?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let authority = super::AttemptAuthority {
+            process_birth: kernel.current_process_birth_key(),
+            thread_birth: kernel.live_thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID),
+            slice_generation: 7,
+        };
+
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            let attempt = port
+                .enter_attempt(authority, "first entry")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            assert_eq!(
+                port.try_with_attempt_state(authority, "first callback", |kernel, _| {
+                    kernel.current_process_birth_key()
+                })
+                .map_err(|error| Error::Backend(error.to_string()))?,
+                authority.process_birth
+            );
+            drop(attempt);
+            let retry = port
+                .enter_attempt(authority, "retry after guard teardown")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            drop(retry);
+            assert_eq!(port.terminal_failure(), None);
+        }
+
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            let _attempt = port
+                .enter_attempt(authority, "loan-busy entry")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let held = port
+                .try_loan_for_attempt(authority, "held callback")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let effects = std::cell::Cell::new(0usize);
+            let conflict = port.try_with_attempt_state(authority, "reentrant callback", |_, _| {
+                effects.set(effects.get() + 1);
+            });
+            assert_eq!(
+                conflict,
+                Err(MachinePortFailure::LoanBusy {
+                    operation: "reentrant callback"
+                })
+            );
+            assert_eq!(effects.get(), 0, "reentrant callback made no state changes");
+            drop(held);
+            assert_eq!(port.terminal_failure(), conflict.err());
+            assert!(matches!(
+                port.try_with_attempt_state(authority, "later callback", |_, _| {
+                    effects.set(1);
+                }),
+                Err(MachinePortFailure::LoanBusy {
+                    operation: "reentrant callback"
+                })
+            ));
+            assert_eq!(effects.get(), 0, "first terminal reason remains sticky");
+        }
+
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            let _attempt = port
+                .enter_attempt(authority, "authority entry")
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let stale = super::AttemptAuthority {
+                slice_generation: authority.slice_generation + 1,
+                ..authority
+            };
+            let effects = std::cell::Cell::new(false);
+            assert_eq!(
+                port.try_with_attempt_state(stale, "stale authority", |_, _| {
+                    effects.set(true);
+                }),
+                Err(MachinePortFailure::WrongAttempt {
+                    operation: "stale authority"
+                })
+            );
+            assert!(!effects.get());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn real_mips_child_queue_conflict_retains_original_cpu_tree() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let root_pid = kernel.current_process_id();
+        let launch = kernel.queue_process_launch(Some("survivor.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("original B birth");
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut quarantined_child_fault = false;
+        let queue_read = parked.borrow();
+        let error = super::run_pending_process_launches_with_custody(
+            &mut parent_uc,
+            &mut kernel,
+            root_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+            Some(&mut custody),
+            &mut quarantined_child_fault,
             None,
-            "no next native entry occurred"
+            None,
+        )
+        .expect_err("held parent queue must refuse publication after B executes");
+        assert!(
+            matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
+            "queue conflict is typed before classification or publication: {error}"
         );
-        assert_eq!(
-            next.report.failure_operation(),
-            Some("stale owned process birth preflight")
-        );
-        assert_eq!(
-            next.report.final_outcome(),
-            super::NativeSliceOutcome::NoAttempt
-        );
-        assert_eq!(
-            next.report.native_result(),
-            &super::AttemptObservation::Uncollected
-        );
+        drop(queue_read);
+        assert!(parked.borrow().is_empty());
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        assert_eq!(custody.counts().reserved, 0);
+        let retained = custody.retained_tree_snapshots();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].origin_birth, birth);
+        custody
+            .with_retained_tree(retained[0].key, |tree| {
+                assert_eq!(
+                    tree.owned_process_launch
+                        .as_ref()
+                        .and_then(|owned| owned.process_birth),
+                    Some(birth)
+                );
+                assert!(tree.run_slice_generation > 0, "B executed real guest MIPS");
+            })
+            .expect("B remains in its unverified holding cell");
+        assert!(!quarantined_child_fault);
         Ok(())
     }
 
@@ -83259,20 +83697,22 @@ mod unicorn_tests {
         };
         let mut quarantined_child_fault = false;
 
-        super::run_witnessed_pending_process_launch_with_custody(
-            &mut parent_uc,
-            &mut kernel,
-            parent_pid,
-            &guard,
-            &mut framebuffer,
-            limits,
-            &[],
-            &parked,
-            Some(&mut custody),
-            &mut quarantined_child_fault,
-            publication,
-        )
-        .expect_err("invalid B image must refuse before CPU admission");
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            super::run_witnessed_pending_process_launch_with_custody(
+                &mut parent_uc,
+                &port,
+                parent_pid,
+                &guard,
+                limits,
+                &[],
+                &parked,
+                Some(&mut custody),
+                &mut quarantined_child_fault,
+                publication,
+            )
+            .expect_err("invalid B image must refuse before CPU admission");
+        }
         assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
         assert!(parked.borrow().is_empty());
         assert_eq!(custody.counts().reserved, 0);
@@ -83299,19 +83739,21 @@ mod unicorn_tests {
         kernel.release_pending_process_launch_batch(queued)?;
 
         std::fs::write(&child_path, tiny_mips_spinner_pe()).unwrap();
-        super::run_witnessed_pending_process_launch_with_custody(
-            &mut parent_uc,
-            &mut kernel,
-            parent_pid,
-            &guard,
-            &mut framebuffer,
-            limits,
-            &[],
-            &parked,
-            Some(&mut custody),
-            &mut quarantined_child_fault,
-            publication,
-        )?;
+        {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            super::run_witnessed_pending_process_launch_with_custody(
+                &mut parent_uc,
+                &port,
+                parent_pid,
+                &guard,
+                limits,
+                &[],
+                &parked,
+                Some(&mut custody),
+                &mut quarantined_child_fault,
+                publication,
+            )?;
+        }
         assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
         assert_eq!(parked.borrow().len(), 1);
         assert_eq!(
@@ -89007,6 +89449,7 @@ mod unicorn_tests {
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert_eq!(custody.counts().reserved, 0);
         assert_eq!(custody.counts().quarantined, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
         assert!(parked.borrow().is_empty(), "B has no legacy parked CPU");
         let snapshot = custody.snapshots().pop().expect("sole original B CPU");
         assert_eq!(snapshot.birth, child_birth);
@@ -89189,6 +89632,7 @@ mod unicorn_tests {
         assert_eq!(kernel.is_wait_ready(child_handle, 1), Some(false));
         assert_eq!(custody.counts().reserved, 0);
         assert_eq!(custody.counts().quarantined, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
         assert!(
             cpu.parked_child_processes.is_empty(),
             "B is not a legacy parked CPU"

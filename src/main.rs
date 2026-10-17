@@ -2115,12 +2115,13 @@ fn publish_remote_debug_after_scheduler_change(
 fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
     let counts = cpu_custody.counts();
     let mut out = format!(
-        "  cpu_custody: lineage={} reserved={} quarantined={} reserved_unbound_trees={} unverified_stopped_trees={} retained_cpu_blob_bytes={}\n",
+        "  cpu_custody: lineage={} reserved={} quarantined={} reserved_unbound_trees={} unverified_stopped_trees={} abandoned_unbound_trees={} retained_cpu_blob_bytes={}\n",
         cpu_custody.machine_lineage(),
         counts.reserved,
         counts.quarantined,
         counts.reserved_unbound_trees,
         counts.unverified_stopped_trees,
+        counts.abandoned_unbound_trees,
         cpu_custody.retained_cpu_blob_bytes(),
     );
     for snapshot in cpu_custody.snapshots() {
@@ -2142,7 +2143,7 @@ fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
     for snapshot in cpu_custody.retained_tree_snapshots() {
         let _ = writeln!(
             out,
-            "    retained_tree={}:{}:{} origin={}:{} state={:?} metrics_available={} mapped_blob_bytes={} virtual_region_bytes={}",
+            "    retained_tree={}:{}:{} origin={}:{} state={:?} metrics_available={} mapped_blob_bytes={} root_virtual_region_bytes={}",
             snapshot.key.machine_lineage(),
             snapshot.key.index(),
             snapshot.key.generation(),
@@ -2151,7 +2152,7 @@ fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
             snapshot.state,
             snapshot.metrics_available,
             snapshot.mapped_blob_bytes,
-            snapshot.virtual_region_bytes,
+            snapshot.root_virtual_region_bytes,
         );
     }
     out
@@ -2174,7 +2175,7 @@ fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &
                 "processIncarnation": snapshot.birth.incarnation(),
                 "state": format!("{:?}", snapshot.state),
                 "mappedBlobBytes": snapshot.mapped_blob_bytes,
-                "virtualRegionBytes": snapshot.virtual_region_bytes,
+                "rootVirtualRegionBytes": snapshot.root_virtual_region_bytes,
             })
         })
         .collect::<Vec<_>>();
@@ -2201,6 +2202,7 @@ fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &
         "quarantined": counts.quarantined,
         "reservedUnboundTrees": counts.reserved_unbound_trees,
         "unverifiedStoppedTrees": counts.unverified_stopped_trees,
+        "abandonedUnboundTrees": counts.abandoned_unbound_trees,
         "retainedCpuBlobBytes": cpu_custody.retained_cpu_blob_bytes(),
         "slots": slots,
         "retainedTrees": retained_trees,
@@ -5025,6 +5027,35 @@ mod tests {
                     .deposit_unverified(UnicornMips::new().expect("retained tree CPU initializes"));
             }
         }
+
+        let mut abandoned_tree = CpuCustody::new().expect("fault custody initializes");
+        drop(
+            abandoned_tree
+                .reserve_unbound(birth)
+                .expect("reserve before deliberate ticket loss"),
+        );
+        assert_eq!(abandoned_tree.counts().abandoned_unbound_trees, 1);
+        assert!(matches!(
+            try_monitor_checkpoint_save_with_custody(
+                "abandoned tree".to_owned(),
+                &cpu,
+                &kernel,
+                &framebuffer,
+                &abandoned_tree,
+            ),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("CPU custody needs machine-level checkpoint relineage")
+        ));
+        assert!(matches!(
+            try_monitor_checkpoint_restore_with_custody(
+                &checkpoint,
+                &cpu,
+                &kernel,
+                &abandoned_tree,
+            ),
+            Err(wince_emulation_v3::Error::Unsupported(message))
+                if message.contains("CPU custody needs machine-level checkpoint relineage")
+        ));
     }
 
     #[test]
