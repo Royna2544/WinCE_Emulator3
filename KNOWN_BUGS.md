@@ -23,7 +23,7 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   B's inherited directory can fail closed instead of progressing. No iNavi
   or mount run is attributed here.
 - **Other post-native child handoffs still restore mutable process selection
-  without general checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
+  without general checked lineage:** the [bounded-port/full-leaf boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-bounded-foundation-full-leaf-open)
   identifies blind save/set/restore of selected module fields and
   `CurrentProcessState` across B's run. The selected-context stamp passed its
   [bounded preparatory gate](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md).

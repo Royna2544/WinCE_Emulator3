@@ -4,6 +4,21 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 O-T7a host-turn contract and notification evidence (docs only)
+
+The [focused custody baseline](evidence/ot7a-host-turn-contract-20261017/validation.receipt.md)
+passed **20/0/0 ignored** on unchanged source at HEAD `5a425c47`; it exercises
+the existing directory foundation, not production host-turn selection. The
+common anchor, plan and subsystem pages now distinguish the bounded port/API
+pieces from the unconnected boot, ordinary/Event/monitor and rotation routes.
+The target Cut 1 keeps A's post-native owner/tail in a typed suspended slot,
+then admits B/C through a shared selector; moving that local native lease is
+still implementation work, not a source-tested result. The NAND
+[`NFY0:` follow-up](evidence/ce6-rea-nfy0-20261017/findings.md) identifies a
+conditional posted-UI-message route to `CreateProcessW`, not a measured
+IOCTL-return ordering or runtime cadence. No iNavi or writable-mount run was
+made.
+
 ## 2026-10-17 O-T7a outcome-coupled custody review fix (development-only)
 
 The [review-fix receipt](evidence/stage3-machine-directory-20261017/validation.review-fix.receipt.md)

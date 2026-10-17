@@ -132,7 +132,11 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    preparatory: no production boot/ordinary/Event/monitor/rotation route uses
    a shared directory-owned selector. Next, in order:
    - Complete O-T7a Cut 1 as a connected host-turn route. Have the process
-     switch return a typed selection request; make one shared main selector
+     switch return typed request variants; move A's still-open native tail
+     out of the local lease into its suspended slot with callback/finish
+     lifetime proof. Keep the import's immutable child-publication witness
+     distinct from Kernel reservation/claim and close the current
+     claim-consumption-before-directory-admission gap. Make one shared selector
      validate and lease exact process/birth/slot/attempt authority for boot,
      ordinary A→B, witnessed A→B→C, Event, monitor and pre/post rotation.
      Remove executable boxed-CPU paths and post-child re-boxing only with
