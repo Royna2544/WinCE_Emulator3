@@ -82096,6 +82096,198 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn event_launch_relative_path_uses_original_publisher_after_selected_process_switch()
+    -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        let publisher_dir = test_root.join("publisher");
+        let selected_dir = test_root.join("selected");
+        std::fs::create_dir_all(&publisher_dir).unwrap();
+        std::fs::create_dir_all(&selected_dir).unwrap();
+        let publisher_path = publisher_dir.join("publisher.exe");
+        let publisher_event_path = publisher_dir.join("event.exe");
+        let selected_path = selected_dir.join("selected.exe");
+        let selected_event_path = selected_dir.join("event.exe");
+        for path in [
+            &publisher_path,
+            &publisher_event_path,
+            &selected_path,
+            &selected_event_path,
+        ] {
+            std::fs::write(path, tiny_mips_spinner_pe()).unwrap();
+        }
+
+        let mut kernel = phase1_kernel("publisher.exe")?;
+        kernel.set_process_module_host_path(publisher_path);
+        kernel.set_process_current_directory(None);
+        let publisher_birth = kernel.current_process_birth_key().expect("publisher birth");
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let event_birth = event.process_birth.expect("original event birth");
+        assert!(matches!(
+            event.origin,
+            crate::ce::kernel::PendingLaunchOrigin::Event {
+                publisher_process_birth,
+                ..
+            } if publisher_process_birth == publisher_birth
+        ));
+
+        // B has its own same-named file. The selected Kernel context now
+        // points at B, while E retains A's original publication identity.
+        let selected = kernel.queue_process_launch(Some("selected.exe".to_owned()), None);
+        let selected_birth = selected.process_birth.expect("selected process birth");
+        kernel.set_current_process_id(selected.process_id);
+        kernel.set_process_module_path("\\Test\\selected.exe");
+        kernel.set_process_module_host_path(selected_path.clone());
+        kernel.set_process_current_directory(None);
+        let selected_stamp = kernel
+            .selected_process_context_stamp()
+            .expect("selected B context stamp");
+        assert_eq!(kernel.current_process_birth_key(), Some(selected_birth));
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event)
+        );
+
+        let resolved = super::resolve_process_launch_path(&kernel, &event)?;
+        assert_eq!(
+            resolved.as_deref(),
+            Some(publisher_event_path.as_path()),
+            "relative event path must use A's captured host directory, not B's"
+        );
+        assert_ne!(resolved.as_deref(), Some(selected_event_path.as_path()));
+        assert_eq!(kernel.current_process_birth_key(), Some(selected_birth));
+        assert_eq!(kernel.process_module_host_path(), Some(&selected_path));
+        assert!(kernel.selected_process_context_matches(selected_stamp));
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn neutral_event_pre_cpu_pe_failure_retries_one_original_birth() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        let event_path = test_root.join("event.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(&event_path, b"MZ-invalid-event-fixture").unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let parent_slice = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        );
+        parent_slice.result?;
+        assert_eq!(
+            parent_slice.report.start_process_birth(),
+            Some(parent_birth)
+        );
+        assert!(cpu.native_engine_identity_for_test().is_none());
+
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let event_birth = event.process_birth.expect("original event process birth");
+        let event_primary = event
+            .primary_thread_birth
+            .expect("original event primary thread birth");
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event)
+        );
+        let first = cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        );
+        assert!(
+            first.is_err(),
+            "the malformed PE must refuse before CPU admission"
+        );
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event),
+            "the exact original event launch must stay in its queue slot"
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert!(cpu.parked_child_processes.is_empty());
+        assert_eq!(custody.counts().reserved, 0);
+        assert!(!custody.has_any_custody());
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1
+        );
+
+        std::fs::write(&event_path, tiny_mips_spinner_pe()).unwrap();
+        assert!(cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        )?);
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(kernel.pending_process_launch_for_birth(event_birth), None);
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        let admitted: Vec<_> = cpu
+            .parked_child_processes
+            .iter()
+            .filter_map(|parked| parked.cpu.owned_process_launch.as_ref())
+            .filter(|launch| launch.process_birth == Some(event_birth))
+            .collect();
+        assert_eq!(admitted.len(), 1, "one CPU owns the original event birth");
+        assert_eq!(admitted[0].primary_thread_birth, Some(event_primary));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1,
+            "retry must not publish a replacement birth"
+        );
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessChildParked"
+                        && record.process_id == Some(event.process_id)
+                })
+                .count(),
+            1,
+            "only the repaired attempt may admit a child CPU"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn deferred_launch_preflight_requires_live_birth_and_nonzero_stop_pc() -> crate::Result<()> {
         let mut kernel = phase1_kernel("parent.exe")?;
         let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);

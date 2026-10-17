@@ -422,7 +422,20 @@ fn run_cpu_loop(
                 cpu_custody,
             );
             publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
-            service?;
+            if let Err(err) = service {
+                if let Some(snapshot) = cpu.last_debug_snapshot() {
+                    eprintln!("  Unicorn debug: {}", snapshot.summary());
+                }
+                write_requested_tracefiles(cpu, &args.tracefiles)?;
+                if let Some(path) = args.framebuffer_dump.as_ref() {
+                    desktop.framebuffer().write_ppm(path)?;
+                    eprintln!("  framebuffer dump: {}", path.display());
+                }
+                if let Err(status_err) = desktop.show_stopped_message("Emulator process stopped") {
+                    eprintln!("  presenter status update failed: {status_err}");
+                }
+                return Err(err);
+            }
         }
         if cpu.active_process_execution_completed() {
             // The child CPU is gone, but a parked parent may still be blocked
@@ -5723,6 +5736,122 @@ mod tests {
         assert_eq!(report.final_outcome(), NativeSliceOutcome::NoAttempt);
         assert_eq!(report.failure_operation(), Some("unsupported_cpu_backend"));
         assert_eq!(report.attempt_id(), None);
+    }
+
+    #[cfg(feature = "unicorn")]
+    #[test]
+    fn live_virtual_loop_services_exact_event_before_uninitialized_cpu_attempt() -> Result<()> {
+        struct ScratchRoot(PathBuf);
+        impl Drop for ScratchRoot {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        let test_root = std::env::temp_dir().join(format!(
+            "wince-event-host-loop-{}-{unique}",
+            std::process::id()
+        ));
+        let _cleanup = ScratchRoot(test_root.clone());
+        let publisher_dir = test_root.join("publisher");
+        fs::create_dir_all(&publisher_dir).expect("create isolated event test directory");
+        let missing_app = format!("missing-event-{unique}.exe");
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
+        kernel.set_process_module_host_path(publisher_dir.join("publisher.exe"));
+        kernel.set_process_current_directory(None);
+        kernel.schedule_app_at_event(missing_app.clone(), 2);
+        assert!(kernel.scheduled_app_at_event(&missing_app, 2).is_some());
+        let publisher_birth = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("canonical publisher thread birth");
+        let launch = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher_birth,
+            Some(missing_app),
+            None,
+        )?;
+        let event_birth = launch.process_birth.expect("original event process birth");
+        assert!(kernel.has_pending_process_launches());
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+
+        let args = Args {
+            registry: PathBuf::from(DEFAULT_REGISTRY_PATH),
+            devices: PathBuf::from(DEFAULT_DEVICES_PATH),
+            image: None,
+            companion_images: Vec::new(),
+            dll_search_dirs: Vec::new(),
+            mount_config: None,
+            framebuffer_dump: None,
+            tracefiles: Vec::new(),
+            desktop: DesktopMode::Virtual,
+            cpu_instruction_limit: 64,
+            cpu_wall_clock_limit_ms: 250,
+            cpu_stop_pc: None,
+            startup_taps: Vec::new(),
+            remote_server: None,
+            run_cpu: true,
+            monitor: false,
+            verbose: false,
+        };
+        let mut cpu = UnicornMips::new()?; // Intentionally no PE or guest binary.
+        let mut desktop = DesktopRuntime::Virtual(VirtualDesktop::default_primary()?);
+        let mut custody = CpuCustody::new().expect("test custody initializes");
+        let mut saw_uninitialized_attempt = false;
+        let mut observe = |execution: &AttemptExecution| {
+            if execution.result.as_ref().err().is_some_and(|error| {
+                error
+                    .to_string()
+                    .contains("no PE entry point has been loaded")
+            }) {
+                saw_uninitialized_attempt = true;
+            }
+        };
+        let result = run_cpu_loop(
+            &mut cpu,
+            &mut kernel,
+            &mut desktop,
+            &args,
+            &mut custody,
+            Some(&mut observe),
+        );
+        let error = result.expect_err("the intentionally uninitialized CPU must stop");
+        assert!(
+            error
+                .to_string()
+                .contains("no PE entry point has been loaded")
+        );
+
+        assert!(
+            saw_uninitialized_attempt,
+            "bounded loop reached its later uninitialized-CPU attempt"
+        );
+        assert!(!kernel.has_pending_process_launches());
+        assert!(!kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(launch.process_handle),
+            Some(u32::MAX)
+        );
+        assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(true));
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessResolveFailed"
+                        && record.process_id == Some(launch.process_id)
+                })
+                .count(),
+            1,
+            "host loop serviced exactly the original event birth"
+        );
+        Ok(())
     }
 
     #[test]
