@@ -21282,6 +21282,16 @@ where
                     child.set_initial_thread_id(launch.thread_id);
                     let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
                     child.load_pe_image_with_dlls(&image, &dll_images)?;
+                    // A direct CPU caller without the machine directory has
+                    // nowhere to retain an admitted child after a native
+                    // fault or an ownership conflict. Keep the exact launch
+                    // pending for machine recovery; setup errors above retain
+                    // their own result.
+                    if custody.is_none() {
+                        return Err(Error::Backend(
+                            "child CPU admission requires machine custody".to_owned(),
+                        ));
+                    }
                     // CPU admission ends the retryable pending-launch lifetime. The
                     // child now owns its exact launch descriptor; an execution error
                     // must quarantine that CPU, never publish this launch again.
