@@ -347,6 +347,7 @@ pub struct CeKernel {
     time_zone_daylight_bias: i32,
     time_zone_in_daylight: bool,
     current_process_id: u32,
+    selected_process_context_generation: Option<u64>,
     current_process_exit_code: u32,
     current_process_signaled: bool,
     lowest_scheduled_win32_priority: u32,
@@ -1072,6 +1073,24 @@ pub struct CurrentProcessState {
     pub signaled: bool,
 }
 
+/// Provenance for the Kernel's mutable selected-process context. This is not
+/// a restoration token or a machine/checkpoint-lineage identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SelectedProcessContextStamp {
+    birth: ProcessBirthKey,
+    generation: u64,
+}
+
+impl SelectedProcessContextStamp {
+    pub(crate) fn birth(self) -> ProcessBirthKey {
+        self.birth
+    }
+
+    pub(crate) fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
 fn toolhelp_process_basename(path: &str) -> String {
     let name = path
         .rsplit(|ch| ch == '\\' || ch == '/')
@@ -1432,6 +1451,7 @@ impl CeKernel {
             time_zone_daylight_bias: 420,
             time_zone_in_daylight: false,
             current_process_id: 1,
+            selected_process_context_generation: Some(1),
             current_process_exit_code: STILL_ACTIVE,
             current_process_signaled: false,
             lowest_scheduled_win32_priority: MAX_WIN32_PRIORITY_LEVELS - 1,
@@ -2694,6 +2714,7 @@ impl CeKernel {
     }
 
     pub fn set_process_module_base(&mut self, base: u32) {
+        self.invalidate_selected_process_context();
         self.process_module_base = base;
     }
 
@@ -2989,6 +3010,7 @@ impl CeKernel {
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {
+        self.invalidate_selected_process_context();
         let path = path.into();
         self.files.set_root_relative_guest_path(&path);
         self.process_module_path = path;
@@ -3018,6 +3040,7 @@ impl CeKernel {
     }
 
     pub fn set_process_module_host_path(&mut self, path: impl Into<PathBuf>) {
+        self.invalidate_selected_process_context();
         self.process_module_host_path = Some(path.into());
     }
 
@@ -3026,6 +3049,7 @@ impl CeKernel {
     }
 
     pub fn set_process_command_line(&mut self, command_line: impl Into<String>) {
+        self.invalidate_selected_process_context();
         self.process_command_line = command_line.into();
     }
 
@@ -3048,6 +3072,7 @@ impl CeKernel {
     }
 
     pub fn set_process_current_directory(&mut self, directory: Option<String>) {
+        self.invalidate_selected_process_context();
         self.process_current_directory = directory;
     }
 
@@ -3056,6 +3081,7 @@ impl CeKernel {
     }
 
     pub fn set_process_show_cmd(&mut self, show_cmd: u32) {
+        self.invalidate_selected_process_context();
         self.process_show_cmd = show_cmd;
     }
 
@@ -3064,6 +3090,7 @@ impl CeKernel {
     }
 
     pub fn set_current_process_id(&mut self, process_id: u32) {
+        self.invalidate_selected_process_context();
         self.current_process_id = process_id;
     }
 
@@ -3075,6 +3102,32 @@ impl CeKernel {
     /// VM callers must not infer ownership from a bare PID or fall back to PID 1.
     pub fn current_process_birth_key(&self) -> Option<ProcessBirthKey> {
         self.handles.process_birth_key(self.current_process_id)
+    }
+
+    /// Capture only a canonical birth, never an unregistered numeric PID.
+    pub(crate) fn selected_process_context_stamp(&self) -> Option<SelectedProcessContextStamp> {
+        Some(SelectedProcessContextStamp {
+            birth: self.current_process_birth_key()?,
+            generation: self.selected_process_context_generation?,
+        })
+    }
+
+    /// Re-resolve the birth on every check: HandleTable is currently public,
+    /// so a PID may acquire a new birth without calling a selector setter.
+    pub(crate) fn selected_process_context_matches(
+        &self,
+        stamp: SelectedProcessContextStamp,
+    ) -> bool {
+        self.selected_process_context_generation == Some(stamp.generation)
+            && self.current_process_birth_key() == Some(stamp.birth)
+    }
+
+    fn invalidate_selected_process_context(&mut self) {
+        // Existing setters are infallible. Preserve their behavior on overflow,
+        // but permanently poison provenance rather than wrap or saturate it.
+        self.selected_process_context_generation = self
+            .selected_process_context_generation
+            .and_then(|generation| generation.checked_add(1));
     }
 
     pub fn stdio_path(&self, id: u32) -> Option<&str> {
@@ -3242,12 +3295,14 @@ impl CeKernel {
     }
 
     pub fn set_current_process_state(&mut self, state: CurrentProcessState) {
+        self.invalidate_selected_process_context();
         self.current_process_id = state.process_id;
         self.current_process_exit_code = state.exit_code;
         self.current_process_signaled = state.signaled;
     }
 
     pub fn reset_current_process_exit_state(&mut self) {
+        self.invalidate_selected_process_context();
         self.current_process_exit_code = STILL_ACTIVE;
         self.current_process_signaled = false;
     }
@@ -3507,6 +3562,7 @@ impl CeKernel {
                 "preflighted stopped process birth failed canonical Task/VM completion".to_owned(),
             ));
         }
+        self.invalidate_selected_process_context();
         self.current_process_exit_code = effective_exit_code;
         self.current_process_signaled = true;
         Ok(true)
@@ -7403,6 +7459,7 @@ impl CeKernel {
             // never report a completed exit if that invariant is broken.
             return false;
         }
+        self.invalidate_selected_process_context();
         self.current_process_exit_code = exit_code;
         self.current_process_signaled = true;
         self.queue_object_wake_candidates_for_key(WaitObjectKey::Process(process));
@@ -14707,6 +14764,183 @@ mod tests {
         kernel.mark_process_launch_exited(&launch, 0);
         assert_eq!(kernel.current_process_birth_key(), None);
         assert!(!kernel.handles.contains_process_birth(child));
+        Ok(())
+    }
+
+    #[test]
+    fn selected_process_context_stamp_invalidates_on_every_context_writer() {
+        fn check_write(kernel: &mut CeKernel, write: impl FnOnce(&mut CeKernel)) {
+            let before = kernel
+                .selected_process_context_stamp()
+                .expect("selected boot birth");
+            assert!(kernel.selected_process_context_matches(before));
+            write(kernel);
+            assert!(!kernel.selected_process_context_matches(before));
+            let after = kernel
+                .selected_process_context_stamp()
+                .expect("same boot birth after context write");
+            assert_eq!(after.birth(), before.birth());
+            assert_eq!(after.generation(), before.generation() + 1);
+            assert!(kernel.selected_process_context_matches(after));
+        }
+
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        check_write(&mut kernel, |k| k.set_process_module_base(0x1000));
+        check_write(&mut kernel, |k| {
+            k.set_process_module_path("\\Windows\\boot.exe")
+        });
+        check_write(&mut kernel, |k| {
+            k.set_process_module_host_path("C:\\Windows\\boot.exe")
+        });
+        check_write(&mut kernel, |k| k.set_process_command_line("boot arg"));
+        check_write(&mut kernel, |k| {
+            k.set_process_current_directory(Some("\\Windows".to_owned()))
+        });
+        check_write(&mut kernel, |k| k.set_process_show_cmd(1));
+        // Even a same-PID or same-value restore is a distinct selection write.
+        check_write(&mut kernel, |k| k.set_current_process_id(1));
+        check_write(&mut kernel, |k| {
+            let state = k.current_process_state();
+            k.set_current_process_state(state);
+        });
+        check_write(&mut kernel, CeKernel::reset_current_process_exit_state);
+    }
+
+    #[test]
+    fn selected_process_context_stamp_rejects_aba_and_missing_birth() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let boot = kernel
+            .selected_process_context_stamp()
+            .expect("boot selection");
+        let child = kernel.handles.create_process(77);
+        kernel.set_current_process_id(77);
+        let selected_child = kernel
+            .selected_process_context_stamp()
+            .expect("child selection");
+        assert_ne!(selected_child.birth(), boot.birth());
+        kernel.set_current_process_id(1);
+        assert_eq!(kernel.current_process_birth_key(), Some(boot.birth()));
+        assert!(!kernel.selected_process_context_matches(boot));
+        assert!(!kernel.selected_process_context_matches(selected_child));
+
+        kernel.set_current_process_id(0xdead);
+        assert_eq!(kernel.selected_process_context_stamp(), None);
+        assert!(!kernel.selected_process_context_matches(boot));
+        assert_eq!(kernel.current_process_id(), 0xdead);
+        assert!(kernel.close_handle(child).expect("close child alias"));
+    }
+
+    #[test]
+    fn selected_process_context_stamp_rechecks_reused_pid_without_selector_write() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let handle_a = kernel.handles.create_process(77);
+        kernel.set_current_process_id(77);
+        let old = kernel
+            .selected_process_context_stamp()
+            .expect("first PID 77 birth");
+        assert!(kernel.selected_process_context_matches(old));
+
+        assert!(
+            kernel
+                .handles
+                .finish_process_execution_by_birth(old.birth(), 0)
+                .is_some()
+        );
+        assert!(kernel.close_handle(handle_a)?);
+        assert_eq!(kernel.selected_process_context_stamp(), None);
+        let handle_b = kernel.handles.create_process(77);
+        let new_birth = kernel
+            .current_process_birth_key()
+            .expect("reused PID birth");
+        assert_ne!(new_birth, old.birth());
+        // HandleTable is public: its replacement did not advance the selector
+        // generation. The birth check must still reject the stale stamp.
+        assert_eq!(
+            kernel.selected_process_context_generation,
+            Some(old.generation())
+        );
+        assert!(!kernel.selected_process_context_matches(old));
+        assert_eq!(
+            kernel
+                .selected_process_context_stamp()
+                .map(|stamp| stamp.birth()),
+            Some(new_birth)
+        );
+        assert!(kernel.close_handle(handle_b)?);
+        Ok(())
+    }
+
+    #[test]
+    fn selected_process_context_stamp_poisoned_on_generation_overflow() {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        kernel.selected_process_context_generation = Some(u64::MAX - 1);
+        let penultimate = kernel
+            .selected_process_context_stamp()
+            .expect("penultimate generation");
+        kernel.set_current_process_id(1);
+        let last = kernel
+            .selected_process_context_stamp()
+            .expect("last valid generation");
+        assert_eq!(last.generation(), u64::MAX);
+        assert!(!kernel.selected_process_context_matches(penultimate));
+
+        kernel.set_current_process_id(1);
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(kernel.selected_process_context_generation, None);
+        assert_eq!(kernel.selected_process_context_stamp(), None);
+        assert!(!kernel.selected_process_context_matches(last));
+        kernel.reset_current_process_exit_state();
+        assert_eq!(kernel.selected_process_context_stamp(), None);
+    }
+
+    #[test]
+    fn selected_process_context_stamp_invalidates_on_both_accepted_exit_writes() -> Result<()> {
+        let mut pseudo = CeKernel::boot(runtime_config_with_com7());
+        let pseudo_stamp = pseudo
+            .selected_process_context_stamp()
+            .expect("boot pseudo selection");
+        let wrong_handle = pseudo.handles.create_process(77);
+        let wrong_birth = pseudo.handles.process_birth_key(77).expect("foreign birth");
+        assert!(!pseudo.terminate_current_process_for_birth(wrong_birth, 0x40));
+        assert!(pseudo.selected_process_context_matches(pseudo_stamp));
+        assert!(pseudo.close_handle(wrong_handle)?);
+        assert!(pseudo.terminate_current_process_for_birth(pseudo_stamp.birth(), 0x41));
+        assert!(!pseudo.selected_process_context_matches(pseudo_stamp));
+        assert_eq!(
+            pseudo.selected_process_context_generation,
+            Some(pseudo_stamp.generation() + 1)
+        );
+
+        let mut stopped = CeKernel::boot(runtime_config_with_com7());
+        let stopped_stamp = stopped
+            .selected_process_context_stamp()
+            .expect("boot stopped selection");
+        let wrong_handle = stopped.handles.create_process(77);
+        let wrong_birth = stopped
+            .handles
+            .process_birth_key(77)
+            .expect("foreign birth");
+        assert!(
+            !stopped.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                wrong_birth,
+                0x40,
+                None
+            )?
+        );
+        assert!(stopped.selected_process_context_matches(stopped_stamp));
+        assert!(stopped.close_handle(wrong_handle)?);
+        assert!(
+            stopped.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                stopped_stamp.birth(),
+                0x42,
+                None
+            )?
+        );
+        assert!(!stopped.selected_process_context_matches(stopped_stamp));
+        assert_eq!(
+            stopped.selected_process_context_generation,
+            Some(stopped_stamp.generation() + 1)
+        );
         Ok(())
     }
 
