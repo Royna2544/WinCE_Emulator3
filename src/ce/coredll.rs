@@ -28,8 +28,9 @@ use crate::{
         kernel::{
             CeKernel, FSDMGR_INTERNAL_PROCESS_ID, FreeLibraryResult, MessagePumpResult,
             MessageQueueOptions, MessageQueueReadStatus, MessageQueueWriteStatus,
-            PendingOverlappedSerialRead, ToolhelpModuleSnapshot, ToolhelpProcessSnapshot,
-            ToolhelpThreadSnapshot, UserNotificationAction, UserNotificationTrigger,
+            PendingLaunchLocator, PendingOverlappedSerialRead, ToolhelpModuleSnapshot,
+            ToolhelpProcessSnapshot, ToolhelpThreadSnapshot, UserNotificationAction,
+            UserNotificationTrigger,
         },
         keybd::{
             KBDI_AUTOREPEAT_INFO_ID, KBDI_AUTOREPEAT_SELECTIONS_INFO_ID, KBDI_KEYBOARD_STATUS_ID,
@@ -892,6 +893,23 @@ pub enum CoredllDispatch {
     },
 }
 
+/// The exact queue entry published by a successful raw launch call. This is
+/// attempt-local evidence for the post-native handoff, not another owner of
+/// the child or a guest-visible return value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PendingLaunchPublication {
+    pub kind: PendingLaunchProducerKind,
+    pub locator: PendingLaunchLocator,
+    pub caller_birth: Option<ThreadBirthKey>,
+    pub caller_process_birth: Option<ProcessBirthKey>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingLaunchProducerKind {
+    CreateProcess,
+    DirectShell,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoredllStubResult {
     pub subsystem: CoredllSubsystem,
@@ -1183,6 +1201,30 @@ impl CoredllExportTable {
     where
         M: CoredllGuestMemory,
     {
+        self.dispatch_raw_ordinal_with_framebuffer_args_and_context_with_publication(
+            kernel,
+            memory,
+            framebuffer,
+            context,
+            ordinal,
+            args,
+        )
+        .0
+    }
+
+    pub(crate) fn dispatch_raw_ordinal_with_framebuffer_args_and_context_with_publication<M>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn Framebuffer>,
+        context: CoredllRawContext,
+        ordinal: u32,
+        args: &[u32],
+    ) -> (CoredllDispatch, Option<PendingLaunchPublication>)
+    where
+        M: CoredllGuestMemory,
+    {
+        let mut publication = None;
         match self.resolve_ordinal(ordinal).cloned() {
             Some(export) => {
                 if let Some(value) = dispatch_real_raw_ordinal(
@@ -1193,16 +1235,17 @@ impl CoredllExportTable {
                     context.thread_id,
                     &export,
                     args,
+                    &mut publication,
                 ) {
-                    CoredllDispatch::Returned { export, value }
+                    (CoredllDispatch::Returned { export, value }, publication)
                 } else {
                     let stub = CoredllStubResult::for_export(&export, args.to_vec(), Some(context));
                     trace_stub_fallback(&export, &stub);
                     apply_stub_fallback_side_effects(kernel, &stub);
-                    CoredllDispatch::Stubbed { export, stub }
+                    (CoredllDispatch::Stubbed { export, stub }, None)
                 }
             }
-            None => CoredllDispatch::UnresolvedOrdinal(ordinal),
+            None => (CoredllDispatch::UnresolvedOrdinal(ordinal), None),
         }
     }
 
@@ -1878,6 +1921,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
     thread_id: u32,
     export: &CoredllExport,
     args: &[u32],
+    publication: &mut Option<PendingLaunchPublication>,
 ) -> Option<CoredllValue> {
     match export.ordinal {
         ORD_INITIALIZE_CRITICAL_SECTION => {
@@ -3976,7 +4020,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_CREATE_PROCESS_W => Some(CoredllValue::Bool(create_process_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            context,
+            thread_id,
+            args,
+            publication,
         ))),
         ORD_REG_CLOSE_KEY => Some(CoredllValue::U32(
             kernel.registry.reg_close_key(raw_arg(args, 0)),
@@ -8334,7 +8383,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             args,
         ))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            context,
+            thread_id,
+            args,
+            publication,
         ))),
         ORD_SHCREATE_SHORTCUT => Some(CoredllValue::U32(sh_create_shortcut_w_raw(
             kernel, memory, thread_id, args,
@@ -29182,8 +29236,10 @@ fn flush_file_buffers_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) ->
 fn create_process_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
+    publication: &mut Option<PendingLaunchPublication>,
 ) -> bool {
     let application = match read_optional_guest_wide_arg(memory, raw_arg(args, 0)) {
         Some(value) => value,
@@ -29208,12 +29264,21 @@ fn create_process_w_raw<M: CoredllGuestMemory>(
         .map(|directory| directory.and_then(|value| normalize_shell_directory(&value)))
         .unwrap_or(None);
 
-    let launch = kernel.queue_process_launch_with_options(
+    let caller_process_birth = context
+        .caller_birth
+        .and_then(|birth| kernel.checked_guest_process_caller_for_birth(birth));
+    let (launch, locator) = kernel.queue_process_launch_with_options_and_witness(
         application,
         command_line,
         current_directory,
         None,
     );
+    *publication = Some(PendingLaunchPublication {
+        kind: PendingLaunchProducerKind::CreateProcess,
+        locator,
+        caller_birth: context.caller_birth,
+        caller_process_birth,
+    });
     // CE6 NKCreateProcess treats PROCESS_INFORMATION as optional and ignores
     // CeSafeCopyMemory failure after a successful child creation. Preserve
     // the published birth even when the guest cannot receive all four words.
@@ -34695,6 +34760,13 @@ struct ShellLaunchCommand {
     command_line: Option<String>,
     current_directory: Option<String>,
     hinst_app: u32,
+    route: ShellLaunchRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellLaunchRoute {
+    Other,
+    DirectExecutable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34713,8 +34785,10 @@ struct ShellShortcutTarget {
 fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    context: &CoredllRawContext,
     thread_id: u32,
     args: &[u32],
+    publication: &mut Option<PendingLaunchPublication>,
 ) -> bool {
     let info_ptr = raw_arg(args, 0);
     if info_ptr == 0 {
@@ -34791,12 +34865,23 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         }
     };
 
-    let queued = kernel.queue_process_launch_with_options(
+    let caller_process_birth = context
+        .caller_birth
+        .and_then(|birth| kernel.checked_guest_process_caller_for_birth(birth));
+    let (queued, locator) = kernel.queue_process_launch_with_options_and_witness(
         launch.application,
         launch.command_line,
         launch.current_directory,
         Some(n_show),
     );
+    if launch.route == ShellLaunchRoute::DirectExecutable {
+        *publication = Some(PendingLaunchPublication {
+            kind: PendingLaunchProducerKind::DirectShell,
+            locator,
+            caller_birth: context.caller_birth,
+            caller_process_birth,
+        });
+    }
     // The child is already a live, exact-birth Kernel launch. A fault in an
     // output field cannot turn that published launch into a failed call.
     let _ = write_optional_u32(
@@ -35339,10 +35424,12 @@ fn resolve_shell_launch(
             command_line,
             current_directory,
             hinst_app: SHELL_EXECUTE_SUCCESS,
+            route: ShellLaunchRoute::Other,
         });
     }
     let file = normalize_shell_path(file, current_directory.as_deref());
-    let (target, launch_parameters) = if is_shell_shortcut(&file) {
+    let from_shortcut = is_shell_shortcut(&file);
+    let (target, launch_parameters) = if from_shortcut {
         let shortcut = resolve_ce_shortcut(kernel, &file).ok_or(ShellLaunchError::FileNotFound)?;
         (
             shortcut.path,
@@ -35360,6 +35447,11 @@ fn resolve_shell_launch(
             command_line: combine_shell_command_line(&target, launch_parameters.as_deref()),
             current_directory,
             hinst_app: SHELL_EXECUTE_SUCCESS,
+            route: if from_shortcut {
+                ShellLaunchRoute::Other
+            } else {
+                ShellLaunchRoute::DirectExecutable
+            },
         });
     }
     let file_attrs = kernel
@@ -35388,6 +35480,7 @@ fn resolve_shell_launch(
         command_line,
         current_directory,
         hinst_app: SHELL_EXECUTE_SUCCESS,
+        route: ShellLaunchRoute::Other,
     })
 }
 
@@ -73016,6 +73109,7 @@ mod tests {
                         ordinal,
                     },
                     args,
+                    &mut None,
                 )
             };
         let remote_alloc = ex_arm(

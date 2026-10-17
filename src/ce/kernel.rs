@@ -3422,6 +3422,27 @@ impl CeKernel {
             PendingLaunchOrigin::Ordinary,
             None,
         )
+        .0
+    }
+
+    /// Publish one ordinary launch and return the exact queue entry created
+    /// by this call. The locator is an attempt-local witness, not a second
+    /// owner of the pending child.
+    pub(crate) fn queue_process_launch_with_options_and_witness(
+        &mut self,
+        application: Option<String>,
+        command_line: Option<String>,
+        current_directory: Option<String>,
+        show_cmd: Option<u32>,
+    ) -> (PendingProcessLaunch, PendingLaunchLocator) {
+        self.queue_process_launch_with_options_and_origin(
+            application,
+            command_line,
+            current_directory,
+            show_cmd,
+            PendingLaunchOrigin::Ordinary,
+            None,
+        )
     }
 
     /// Validate the exact register-supplying caller before an event publishes
@@ -3465,18 +3486,20 @@ impl CeKernel {
             })?;
         let current_directory = self.process_current_directory.clone();
         let resolution_base_host_path = self.process_module_host_path.clone();
-        Ok(self.queue_process_launch_with_options_and_origin(
-            application,
-            command_line,
-            current_directory,
-            None,
-            PendingLaunchOrigin::Event {
-                event_id,
-                publisher_thread_birth: caller_birth,
-                publisher_process_birth,
-            },
-            resolution_base_host_path,
-        ))
+        Ok(self
+            .queue_process_launch_with_options_and_origin(
+                application,
+                command_line,
+                current_directory,
+                None,
+                PendingLaunchOrigin::Event {
+                    event_id,
+                    publisher_thread_birth: caller_birth,
+                    publisher_process_birth,
+                },
+                resolution_base_host_path,
+            )
+            .0)
     }
 
     fn queue_process_launch_with_options_and_origin(
@@ -3487,7 +3510,7 @@ impl CeKernel {
         show_cmd: Option<u32>,
         origin: PendingLaunchOrigin,
         resolution_base_host_path: Option<PathBuf>,
-    ) -> PendingProcessLaunch {
+    ) -> (PendingProcessLaunch, PendingLaunchLocator) {
         let process_id = self.next_process_id;
         self.next_process_id = self
             .next_process_id
@@ -3534,6 +3557,11 @@ impl CeKernel {
             entry_generation,
             phase: PendingLaunchPhase::Unreserved,
         });
+        let locator = PendingLaunchLocator {
+            process_birth: child_birth,
+            primary_thread_birth,
+            entry_generation,
+        };
         self.record_process_trace(ProcessTraceRecord {
             op: "CreateProcessWQueued",
             application: launch.application.clone(),
@@ -3547,7 +3575,7 @@ impl CeKernel {
             error: None,
             detail: Some(format!("show_cmd={show_cmd:?}")),
         });
-        launch
+        (launch, locator)
     }
 
     /// Reserve an entry-time FIFO batch without taking ownership from Kernel.
@@ -3602,6 +3630,58 @@ impl CeKernel {
             generation,
             locators,
         }))
+    }
+
+    /// Reserve only the ordinary launch identified by this publication's
+    /// exact process/thread births and queue-entry generation. No sibling is
+    /// reserved or moved, even if it was published before this child.
+    pub(crate) fn reserve_pending_process_launch_witness(
+        &mut self,
+        locator: PendingLaunchLocator,
+    ) -> Result<PendingLaunchBatch> {
+        let mut matches = self
+            .pending_process_launches
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.entry_generation == locator.entry_generation
+                    || entry.launch.process_birth == Some(locator.process_birth)
+            });
+        let (index, entry) = matches.next().ok_or_else(|| {
+            Error::Backend("pending launch publication witness is stale".to_owned())
+        })?;
+        if matches.next().is_some() {
+            return Err(Error::Backend(
+                "pending launch publication witness has duplicate entry or birth".to_owned(),
+            ));
+        }
+        if entry.entry_generation != locator.entry_generation
+            || entry.launch.process_birth != Some(locator.process_birth)
+            || entry.launch.primary_thread_birth != Some(locator.primary_thread_birth)
+            || entry.launch.process_id != locator.process_birth.process_id()
+            || entry.launch.thread_id != locator.primary_thread_birth.thread_id()
+            || entry.launch.origin != PendingLaunchOrigin::Ordinary
+            || entry.phase != PendingLaunchPhase::Unreserved
+            || self.handles.process_birth_key(entry.launch.process_id)
+                != Some(locator.process_birth)
+            || self.handles.thread_birth_key_by_id(entry.launch.thread_id)
+                != Some(locator.primary_thread_birth)
+        {
+            return Err(Error::Backend(
+                "pending launch publication witness is stale, ineligible or reserved".to_owned(),
+            ));
+        }
+        let generation = self.next_pending_launch_batch_generation;
+        self.next_pending_launch_batch_generation = generation.checked_add(1).ok_or_else(|| {
+            Error::Backend("pending launch batch generation exhausted".to_owned())
+        })?;
+        self.pending_process_launches[index].phase = PendingLaunchPhase::Reserved {
+            batch_generation: generation,
+        };
+        Ok(PendingLaunchBatch {
+            generation,
+            locators: vec![locator],
+        })
     }
 
     /// Neutral post-native service may select only the oldest unreserved
@@ -15444,6 +15524,105 @@ mod tests {
         assert_eq!(
             kernel.take_pending_process_launches(),
             vec![child_b, event_e, child_c, event_f]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_launch_b_only_claim_leaves_event_and_sibling_for_nested_b2() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let publisher = kernel
+            .live_thread_birth_key_by_id(1)
+            .expect("boot notification publisher birth");
+        let event = kernel.queue_notification_event_launch(
+            2,
+            1,
+            publisher,
+            Some("event.exe".to_owned()),
+            None,
+        )?;
+        let (child_b1, b1_witness) = kernel.queue_process_launch_with_options_and_witness(
+            Some("child-b1.exe".to_owned()),
+            None,
+            None,
+            None,
+        );
+        let sibling_c = kernel.queue_process_launch(Some("sibling-c.exe".to_owned()), None);
+
+        let event_witness = PendingLaunchLocator {
+            process_birth: event.process_birth.expect("E exact birth"),
+            primary_thread_birth: event.primary_thread_birth.expect("E primary birth"),
+            entry_generation: kernel.pending_process_launches[0].entry_generation,
+        };
+        assert!(
+            kernel
+                .reserve_pending_process_launch_witness(event_witness)
+                .is_err(),
+            "an Event origin is not an ordinary producer witness"
+        );
+        let first = kernel.reserve_pending_process_launch_witness(b1_witness)?;
+        assert_eq!(first.locators().len(), 1, "reserve only witnessed B1");
+        assert_eq!(
+            first.locators()[0].process_birth,
+            child_b1.process_birth.expect("B1 exact birth")
+        );
+        let (claim_b1, claimed_b1) =
+            kernel.claim_pending_process_launch(&first, first.locators()[0])?;
+        assert_eq!(claimed_b1, child_b1);
+        assert!(
+            kernel
+                .reserve_pending_process_launch_witness(b1_witness)
+                .is_err(),
+            "duplicate B1 reservation must not claim another queue entry"
+        );
+        assert_eq!(
+            kernel.pending_process_launches[0].phase,
+            PendingLaunchPhase::Unreserved
+        );
+        assert_eq!(
+            kernel.pending_process_launches[2].phase,
+            PendingLaunchPhase::Unreserved
+        );
+        assert!(kernel.has_unreserved_event_launch());
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event.process_birth.expect("E birth")),
+            Some(&event)
+        );
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(sibling_c.process_birth.expect("C birth")),
+            Some(&sibling_c)
+        );
+
+        let (child_b2, b2_witness) = kernel.queue_process_launch_with_options_and_witness(
+            Some("child-b2.exe".to_owned()),
+            None,
+            None,
+            None,
+        );
+        let second = kernel.reserve_pending_process_launch_witness(b2_witness)?;
+        assert_eq!(second.locators().len(), 1, "reserve only witnessed B2");
+        assert_eq!(
+            second.locators()[0].process_birth,
+            child_b2.process_birth.expect("B2 exact birth")
+        );
+        let (claim_b2, claimed_b2) =
+            kernel.claim_pending_process_launch(&second, second.locators()[0])?;
+        assert_eq!(claimed_b2, child_b2);
+        kernel.consume_pending_process_launch_claim(claim_b2)?;
+        kernel.release_pending_process_launch_batch(second)?;
+        kernel.consume_pending_process_launch_claim(claim_b1)?;
+        kernel.release_pending_process_launch_batch(first)?;
+        assert!(
+            kernel
+                .reserve_pending_process_launch_witness(b1_witness)
+                .is_err(),
+            "consumed B1 witness cannot be replayed"
+        );
+
+        assert_eq!(
+            kernel.take_pending_process_launches(),
+            vec![event, sibling_c],
+            "E and C retain their FIFO positions after both B claims"
         );
         Ok(())
     }
