@@ -20,30 +20,28 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   cloned Kernels to one machine lineage, or cover arbitrary mutation through
   public backing objects. The later bounded
   [P0 queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
-  adds in-place exact-birth claims but no independent event/Shell trigger or
-  checked parent restoration; raw `CreateProcessW` queues B before the
-  post-native caller-birth check. In the tested canonical/private A path,
+  adds in-place exact-birth claims. The focused P1 source adds a neutral Event
+  offer but no Shell trigger or checked parent restoration; raw
+  `CreateProcessW` queues B before the post-native caller-birth check. In the
+  tested canonical/private A path,
   refusal poisons its saved
   continuation and requires recovery, not resume; aliasless synthetic
   nonprivate attempts do not prove that poison or an exact `failure_operation`
   record. This is a source-audited risk, not an attributed live-app failure;
   the connected callback-scoped port and checked parent-suspension token
   remain open.
-- **Standalone event/Shell launches lack a service trigger:** raw
+- **Independent launch service remains incomplete:** raw
   [`CeEventHasOccurred`](src/ce/coredll.rs#L23525) and direct-EXE
   [`ShellExecuteExW`](src/ce/coredll.rs#L34753) queue launches with exact
   process/primary-thread births in [`CeKernel`](src/ce/kernel.rs#L3371).
-  The production runner is invoked only after a successful deferred
-  [`CreateProcessW` handoff](src/emulator/unicorn.rs#L15147), where the
-  [bounded P0 gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
-  reserves an entry-time batch in Kernel and claims each exact birth in place.
-  Guest execution may continue through later slices while an older event E
-  stays queued; without another `CreateProcessW`, E has no independent path
-  to CPU admission. This is a source-established liveness gap, not an
-  observed iNavi hang or measured frequency. P0 repairs queue ownership but
-  not this gap; [P1](docs/PLAN.md#L239) must add
-  fair exact-birth event/notification service before the witnessed B-only
-  gate, without inferring `NFY0:` return timing. The bounded
+  P0's deferred `CreateProcessW` batch still claims its entry-time E+B set
+  in place. The focused P1 source now offers the oldest Event independently
+  at a neutral host turn, but broad validation is pending and a nested P0
+  batch may still drain E, siblings and B together. Direct Shell launches
+  still lack their own independent service trigger. Requested debugger-stop,
+  monitor and live iNavi behavior are unproved; the `notify.dll` `NFY0:`
+  binding candidate gives no CE before/after-return timing. This is not an
+  attributed live-app failure. The bounded
   [Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
   did not add a trigger.
 - **Shell output success still leaves alias and status semantics open:** the
@@ -68,8 +66,9 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   `LastError=0` is a known CE6 mismatch and is not validated by this gate.
   Neither output-copy failure nor partial guest-byte writes imply launch
   rollback. P0 has replaced local queue draining, but the unchanged E+B
-  admission policy and absent independent event/Shell trigger remain open;
-  none of these are attributed to a live iNavi failure.
+  admission policy and absent independent Shell trigger remain open; focused
+  P1 Event service does not isolate B from nested E+B batches. None of these
+  are attributed to a live iNavi failure.
 - **Process exit leaves general private VM and mapped-file views behind:**
   exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
   heap/stack ranges, writable-image runs and heap state, but not ordinary

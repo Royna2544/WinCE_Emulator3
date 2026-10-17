@@ -4,6 +4,29 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 focused P1 independent Event-service source cut (broad pending)
+
+The current source records exact publisher thread/process births on each
+notification Event launch and offers the oldest unreserved Event once at a
+neutral, closed-native host-loop turn. The in-place Kernel claim leaves other
+entries in their original queue slots; relative paths use the captured
+publisher host base after process selection changes. Focused stamped logs
+passed [a04 Kernel **2/0**](evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
+[a05 real-MIPS Event **2/0**](evidence/stage3-event-trigger-p1-20261017/a05-guest-event-focused.raw.log),
+[a06 path provenance **1/0**](evidence/stage3-event-trigger-p1-20261017/a06-event-path-provenance.raw.log),
+[a07 raw-kernel **138/0**](evidence/stage3-event-trigger-p1-20261017/a07-raw-kernel.raw.log),
+[a08 pre-CPU retry **1/0**](evidence/stage3-event-trigger-p1-20261017/a08-event-retry.raw.log)
+and [a10 host-loop wiring **1/0**](evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log).
+A09 propagated the fixture's expected uninitialized-CPU error instead of
+asserting it; a10 corrected that harness error, not a production defect.
+Complete release/no-default suites, feature checks and a final source seal
+remain pending. A nested P0 `CreateProcessW` batch can still admit older E,
+siblings and B together; there is no attempt-local B-only producer witness or
+independent Shell service. Requested debugger-stop, monitor and live iNavi
+behavior are unproved. The dumped `notify.dll` `NFY0:` binding is only a
+candidate, not evidence of CE notification timing. No app or writable mount
+was run for this cut.
+
 ## 2026-10-17 bounded P0 in-place pending-launch ownership gate
 
 The post-native child runner now reserves its entry-time FIFO batch in
@@ -24,10 +47,10 @@ save a checkpoint during an active claim. Existing checkpoint refusal remains
 a separate source guard.
 
 P0 deliberately keeps the earlier aggregate *admission policy*: older event E
-and new B may both run under A's post-native handoff. Standalone event/Shell
-launches still have no independent fair trigger, and no producer-witnessed
-B-only isolation exists. This is not runnable CPU custody, the callback-scoped
-port, full Stage 3, or live-app acceptance. No app or writable mount was run.
+and new B may both run under A's post-native handoff. The later focused P1 cut
+adds a neutral Event offer but no Shell trigger or producer-witnessed B-only
+isolation. This is not runnable CPU custody, the callback-scoped port, full
+Stage 3, or live-app acceptance. No app or writable mount was run.
 
 ## 2026-10-17 bounded ShellExecuteEx output gate
 
