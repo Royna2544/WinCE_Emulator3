@@ -93898,9 +93898,30 @@ mod unicorn_tests {
             directory
                 .finish_leaf(
                     &mut leaf,
-                    crate::emulator::cpu_custody::CpuLeaseEnd::Runnable,
+                    crate::emulator::cpu_custody::CpuLeaseEnd::Quarantined(
+                        crate::emulator::cpu_custody::CpuQuarantineReason::BackendFailure,
+                    ),
                 )
                 .map_err(|error| Error::Backend(error.to_string()))?;
+            assert_eq!(
+                directory.admitted_phase(key, owner),
+                Ok(crate::emulator::cpu_custody::CpuAdmittedPhase::Quarantined(
+                    crate::emulator::cpu_custody::CpuQuarantineReason::BackendFailure,
+                ))
+            );
+            assert_eq!(
+                directory
+                    .issue_leaf(key, owner, receiver_birth, None)
+                    .unwrap_err(),
+                crate::emulator::cpu_custody::CpuCustodyError::NotRunnable,
+            );
+            assert_eq!(
+                directory.with_quarantined(key, owner, |cpu| {
+                    (cpu.private_slab_attempt_poisoned, cpu.has_saved_context())
+                }),
+                Ok((true, false)),
+                "the original CPU remains sealed in its exact slot"
+            );
             return Ok(());
         }
 
