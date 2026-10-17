@@ -261,9 +261,9 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      `deferred_` passed **17/0**, a14 no-default **1,548/0/2 ignored** and a15
      release **2,192/0/9 ignored** over 19 blocks each; a16 parent-resume
      passed **1/0** and three feature checks exited 0. Unchanged-context
-     mixed and existing non-live/both-mode controls pass. The mixed
-     control intentionally confirms that both launches are admitted together;
-     creator attribution is not checked. Raw `CreateProcessW` has already
+     mixed and existing non-live/both-mode controls pass. At that seal the
+     mixed control intentionally confirmed both launches admitted together;
+     creator attribution was not checked. Raw `CreateProcessW` has already
      queued B before the post-native caller-birth check. The later bounded
      [P0 in-place queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
      replaces the local take/drain with exact-birth claims and same-slot
@@ -277,11 +277,14 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      pass. Final-source 19-block a11 no-default **1,558/0/2 ignored** and a12
      release-feature **2,210/0/9 ignored** suites passed; a13–a15 feature
      checks exited 0. A09 was a corrected expected-error test-harness
-     assertion, not a production failure. Preserve separate debugger-stop,
-     monitor and live-app limits. P0 nested E+B batch admission can still
-     consume siblings; next stage the attempt-local producer witness and
-     B-only handoff, deliberately updating the mixed control. Shell needs its
-     own trigger. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+     assertion, not a production failure. Those were the separate
+     debugger-stop, monitor and live-app limits at P1's seal. The later
+     [combined monitor/P2 gate](evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+     carries an attempt-local producer witness, converts the mixed control to
+     B-only and adds the original direct-`.exe` Shell trigger. Continue with
+     other Shell routes, checked post-B parent restoration and the connected
+     callback-scoped port; do not infer `NFY0:` timing or live-app acceptance.
+     The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
      passed A03 raw-kernel **135/0**, 19-block A04 no-default **1,550/0/2
      ignored**, A05 release-feature **2,194/0/9 ignored**, and a06–a08 feature
      checks exit 0. The separate [sealed Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
@@ -289,13 +292,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      reporting `FALSE` after queueing a live child: focused **2/0**,
      raw-kernel **137/0**, 19-block no-default **1,552/0/2 ignored** and
      release **2,196/0/9 ignored**, with three feature checks exiting 0.
-     It does not admit that child, prove bad-pointer CE parity or provide a
-     Shell trigger; keep P1 before the proposed producer-witness gate.
+     At that seal it did not admit that child, prove bad-pointer CE parity or
+     provide a Shell trigger; P1 and the later bounded P2 direct-`.exe` cut
+     are separate gates.
      The bounded [REA/Shell finding](evidence/ce6-rea-shell-trigger-20261017/findings.md)
      supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and
      a `CeEventHasOccurred`→`DeviceIoControl` boundary routed through `NFY0:`
-     in local CE6 source; it does not establish notification launch timing or
-     implement the independent trigger or producer witness above. Audit
+     in local CE6 source; it does not establish notification launch timing.
+     The later P2 source implements only the witnessed original direct-`.exe`
+     route. Audit
      lifetime/retirement
      of process/thread aliases created when optional output is null or unwritable,
      and preserve the separate `TRUE`-before-loader gap. Output-copy failure

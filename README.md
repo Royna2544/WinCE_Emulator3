@@ -41,6 +41,13 @@ remote-control HTTP/WebSocket surface.
   remain open; no new iNavi run, performance result or full Stage 2/live
   acceptance follows. Persistent-owner
   architecture is deferred to Stage 8.
+- The bounded [combined monitor/P2 launch handoff](evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+  now gives native `CreateProcessW` and original direct-`.exe` Shell launches
+  exact-child B-only claims, leaving older notification E queued for an
+  independent host turn. Monitor `continue` can offer E and avoids re-entering
+  a completed CPU; `stop_pc` intentionally keeps E queued. Other Shell routes,
+  checked post-B restoration, full CPU custody and live-app behavior remain
+  open. The NAND `notify.dll` trace has not established CE launch timing.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,

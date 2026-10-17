@@ -23,13 +23,13 @@ The bounded [P1 receipt](evidence/stage3-event-trigger-p1-20261017/validation.re
 records 19-block no-default a11 **1,558/0/2 ignored** and release-feature
 a12 **2,210/0/9 ignored** suites, plus a13–a15 feature checks, all exit 0
 with unchanged counted source. Source-seal commit `ce2a4e7d` matches those
-counted files; a12's HEAD moved only across docs/backup commits. A nested P0
-`CreateProcessW` batch can still admit older E, siblings and B together; there
-is no attempt-local B-only producer witness or
-independent Shell service. Requested debugger-stop, monitor and live iNavi
-behavior are unproved. The dumped `notify.dll` `NFY0:` binding is only a
-candidate, not evidence of CE notification timing. No app or writable mount
-was run for this cut.
+counted files; a12's HEAD moved only across docs/backup commits. At that P1
+seal, a nested P0 `CreateProcessW` batch could still admit older E, siblings
+and B together; no attempt-local B-only producer witness or independent Shell
+service was present. The later combined monitor/P2 source cut supersedes those
+limits, but does not prove live iNavi behavior. The dumped `notify.dll` `NFY0:`
+binding and static IOCTL arm do not establish CE launch timing. No app or
+writable mount was run for this cut.
 
 ## 2026-10-17 bounded P0 in-place pending-launch ownership gate
 
@@ -50,10 +50,10 @@ the native slice. They do not independently probe a running child's queue or
 save a checkpoint during an active claim. Existing checkpoint refusal remains
 a separate source guard.
 
-P0 deliberately keeps the earlier aggregate *admission policy*: older event E
-and new B may both run under A's post-native handoff. The later bounded P1 gate
-adds a neutral Event offer but no Shell trigger or producer-witnessed B-only
-isolation. This is not runnable CPU custody, the callback-scoped port, full
+At its seal, P0 deliberately kept the earlier aggregate *admission policy*:
+older event E and new B could both run under A's post-native handoff. The later
+P1 Event offer and combined monitor/P2 exact-producer cut supersede that
+policy. P0 was not runnable CPU custody, the callback-scoped port, full
 Stage 3, or live-app acceptance. No app or writable mount was run.
 
 ## 2026-10-17 bounded ShellExecuteEx output gate

@@ -21,8 +21,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   public backing objects. The later bounded
   [P0 queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
   adds in-place exact-birth claims. The bounded P1 gate adds a neutral Event
-  offer with a selected-context check, but no Shell trigger or general
-  lineage-checked restoration for the deferred `CreateProcessW` handoff; raw
+  offer with a selected-context check. The later combined monitor/P2 gate
+  adds exact B-only producer claims and an original direct-`.exe` Shell
+  trigger, but not general lineage-checked restoration for the deferred
+  `CreateProcessW` handoff; raw
   `CreateProcessW` queues B before the post-native caller-birth check. In the
   tested canonical/private A path,
   refusal poisons its saved
@@ -31,31 +33,30 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   record. This is a source-audited risk, not an attributed live-app failure;
   the connected callback-scoped port and checked parent-suspension token
   remain open.
-- **Independent launch service remains incomplete:** raw
-  [`CeEventHasOccurred`](src/ce/coredll.rs#L23525) and direct-EXE
-  [`ShellExecuteExW`](src/ce/coredll.rs#L34753) queue launches with exact
-  process/primary-thread births in [`CeKernel`](src/ce/kernel.rs#L3371).
-  P0's deferred `CreateProcessW` batch still claims its entry-time E+B set
-  in place. The bounded [P1 Event-service gate](evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
-  now offers the oldest Event independently at a neutral host turn; its
-  19-block no-default/release-feature suites and feature checks passed. A
-  nested P0 batch may still drain E, siblings and B together. Direct Shell launches
-  still lack their own independent service trigger. Requested debugger-stop,
-  monitor and live iNavi behavior are unproved; the `notify.dll` `NFY0:`
-  binding candidate gives no CE before/after-return timing. This is not an
-  attributed live-app failure. The bounded
-  [Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
-  did not add a trigger.
+- **Independent launch service remains incomplete outside the bounded
+  routes:** raw [`CeEventHasOccurred`](src/ce/coredll.rs#L23551) and
+  [`ShellExecuteExW`](src/ce/coredll.rs#L34785) publish exact-birth launches
+  in [`CeKernel`](src/ce/kernel.rs#L3431). P1 offers the oldest Event at a
+  neutral host turn; the [combined monitor/P2 gate](evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+  adds a bounded monitor Event offer and exact B-only handoff for native
+  `CreateProcessW` and original non-shortcut direct `.exe` Shell. `.lnk`,
+  association, URL and other Shell routes may still queue without that
+  immediate producer service. A requested-PC monitor command leaves E queued
+  until a later ordinary `continue`; checkpoint save refuses pending Task
+  authority. The `notify.dll` `NFY0:` static IOCTL path still gives no CE
+  before/after-return launch timing. No live iNavi behavior is proven or
+  attributed to this issue.
 - **Shell output success still leaves alias and status semantics open:** the
   direct-EXE `hInstApp`/requested `hProcess` copy-fault controls passed under
   the [sealed source gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md),
   but an unwritable `hProcess` can leave its process alias undisclosed, with
   no executed retirement control. The shim still sets success-path
   `LastError=0`; bad-pointer CE behavior was not established. `TRUE` can
-  precede loader admission, and the independent Shell launch trigger above
-  remains absent. None is attributed to a live iNavi failure.
+  precede loader admission. The later P2 gate services only the original
+  direct-`.exe` route; other routes above remain open. None is attributed to
+  a live iNavi failure.
 - **`CreateProcessW` output correction leaves alias lifetime and loader status
-  open:** [the raw shim](src/ce/coredll.rs#L29141) now returns `TRUE` for a
+  open:** [the raw shim](src/ce/coredll.rs#L29236) now returns `TRUE` for a
   published child even when optional `PROCESS_INFORMATION` is null or cannot
   receive all four words. The [sealed output gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
   passed 19-block no-default **1,550/0/2 ignored** and release-feature
@@ -67,10 +68,10 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   still precedes PE load and CPU admission. The existing forced success-path
   `LastError=0` is a known CE6 mismatch and is not validated by this gate.
   Neither output-copy failure nor partial guest-byte writes imply launch
-  rollback. P0 has replaced local queue draining, but the unchanged E+B
-  admission policy and absent independent Shell trigger remain open; bounded
-  P1 Event service does not isolate B from nested E+B batches. None of these
-  are attributed to a live iNavi failure.
+  rollback. P0 replaced local queue draining, P1 added Event service, and
+  bounded P2 now isolates witnessed B from older E for the tested native
+  routes. Alias retirement and the Boolean-before-loader gap remain open;
+  none is attributed to a live iNavi failure.
 - **Process exit leaves general private VM and mapped-file views behind:**
   exact-birth [process completion](src/ce/kernel.rs#L3555) retires fixed
   heap/stack ranges, writable-image runs and heap state, but not ordinary
