@@ -903,6 +903,41 @@ success-path `LastError=0`, undisclosed alias retirement, loader admission
 and a post-native Shell trigger remain open. It does not implement the
 proposed claim gate below or confer O-T7/live acceptance.
 
+##### Preparatory P0 in-place pending-launch ownership cut (proposed, not implemented)
+
+Before changing which producer triggers service, replace the production
+post-native aggregate `take_pending_process_launches`/local-`VecDeque` drain
+with checked exact-birth claims and returns **in the existing Kernel queue**.
+The current runner remains the caller: it records non-owning entry-time birth
+order, claims each original entry there, and leaves unattempted siblings
+queryable in Kernel while another child is claimed or running. It must not
+hold a queue borrow across the child run. A retryable pre-CPU failure releases
+the same birth at its original position among still-pending siblings, ahead of
+later publications; stale or duplicate claims refuse without consuming a
+sibling. A nested service batch may see new publications, but must not steal
+or reorder an outer batch's unattempted entries; each batch keeps its own
+entry-time admission order.
+
+P0 deliberately preserves today's admission set and order, including an older
+notification E and new B both admitted under A's post-native tail. It adds no
+creator attribution, attempt-local producer witness, new Shell/notification
+trigger, or producer wiring. That E-under-A attribution remains a documented
+compatibility limit, not CE timing evidence or a policy to extend. Test first:
+an unchanged-context mixed E+B control still admits both in order; while E
+is claimed/running, unattempted B remains exact-birth queryable and makes
+pending-launch and checkpoint guards refuse; a later C remains visible while
+B runs; nested B2 publication cannot hide or reorder outer-batch siblings;
+and a retryable pre-CPU failure restores its original relative position and
+live, unsignaled birth. No ignored red stands in for those controls. P0 alone
+does not establish Stage 3, O-T7, a callback-scoped port, runnable CPU custody
+or live-app acceptance. These are proposed controls, not executed evidence.
+
+An independent fair event/notification trigger must follow P0 and precede the
+witnessed producer gate below. It must eventually service E by its own exact
+birth without requiring another process's child handoff, or narrowing that
+handoff to B would strand E. The local `NFY0:` evidence does not settle
+before/after-IOCTL-return timing.
+
 ##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
 
 The owning state stays in `CeKernel`'s existing pending-launch queue: each
@@ -946,8 +981,8 @@ as an ignored red:
 Raw `CeEventHasOccurred` currently queues launches but has no independent
 service trigger. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing, not the
-notification driver's scheduling/return timing. A later fair
-eventual-service gate may claim those exact entries; it must not assert
+notification driver's scheduling/return timing. The intervening fair
+eventual-service gate must claim those exact entries; it must not assert
 before- or after-IOCTL-return
 parity without handler/runtime evidence. This proposal does not implement
 O-T7, a connected callback-scoped Kernel/framebuffer port, checked post-B

@@ -228,16 +228,25 @@ not an implemented owner. Stage its connected source cut in this order:
    An exact-birth claim/return in Kernel's existing pending-launch queue may
    be implemented as a separate pre-CPU ownership cut. It does not confer a
    child run permit or make an admitted CPU safe on error.
-   Before that source cut, use the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
+   Stage [P0 in-place queue ownership](subsystems/tasks-scheduler.md#preparatory-p0-in-place-pending-launch-ownership-cut-proposed-not-implemented)
+   first: replace the existing aggregate take/local-drain loop with exact-birth
+   claims in Kernel's original queue. Preserve its current entry-time admission
+   set and order, including older event E and new B under A's tail; this is an
+   ownership repair, not creator attribution or a new service trigger. Test
+   queued-sibling visibility, nested batch order and same-index pre-CPU retry
+   before changing that admission policy.
+   Stage P1 next: add an independent fair event/notification service trigger so
+   E cannot be stranded waiting for another process's child handoff. Require
+   eventual exact-birth service without inferring `NFY0:` before/after-return
+   timing. Do not land the witnessed gate before this trigger.
+   Only then stage the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
    carry an attempt-local exact publication witness through the import
-   boundary; keep the claim in Kernel's original queue; and expected-red test
-   mixed older event E/new B isolation, nested sibling visibility, and
-   pre-CPU retry order. A first Shell trigger is limited to an original,
-   non-shortcut direct `.exe` branch. Its evidenced boundary is loader
-   completion/admission before the parent resumes, not a required first child
-   instruction. Notification service remains a separate fair-trigger gate
-   without an inferred `NFY0:` before/after-return timing. This bounded cut
-   does not settle O-T7, the callback-scoped port, or runnable CPU custody.
+   boundary; claim only B after the selected-context preflight; and test mixed
+   E/B isolation, nested sibling visibility and pre-CPU retry order. A first
+   Shell trigger is limited to an original, non-shortcut direct `.exe` branch.
+   Its evidenced boundary is loader completion/admission before the parent
+   resumes, not a required first child instruction. None of these bounded
+   cuts settles O-T7, the callback-scoped port or runnable CPU custody.
 2. Settle the callback-scoped machine-state port before claiming a sound
    lease. Successful `CreateProcessW` now stops A's native attempt at its
    staged return PC and runs B post-native, rather than through A's raw hook
