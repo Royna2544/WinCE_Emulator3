@@ -2679,6 +2679,21 @@ supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and a
 local CE6 source. It neither establishes notification launch timing nor
 implements the emulator's exact-birth service trigger/claim.
 
+## ShellExecuteEx post-publication output cut (2026-10-17, executed)
+
+Raw direct-EXE `ShellExecuteExW` no longer returns `FALSE` solely because
+`hInstApp` or a requested `hProcess` output copy fails after one exact-birth
+child has been queued. The [sealed receipt](../../evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+records a01 expected red **0/1**, a02 focused **2/0**, a03 raw-kernel
+**137/0**, a04 no-default 19 blocks **1,552/0/2 ignored**, a05
+release-feature 19 blocks **2,196/0/9 ignored**, and a06–a08 feature checks
+exiting 0. All eight stamped logs kept the source/test/context hashes stable.
+The hProcess case has no separate pre-fix execution; the focused assertions
+reject `FALSE` paired with a live, unsignaled child rather than proving CE
+invalid-pointer behavior. Success-path `LastError=0`, undisclosed-alias
+retirement, loader admission and independent exact-birth Shell service remain
+open. No app, writable-mount backup or mount write occurred for this cut.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

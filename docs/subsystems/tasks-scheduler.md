@@ -893,6 +893,16 @@ accepted exit is unproved. `TRUE` still precedes loader/CPU admission, and the
 deferred aggregate drain still has no creator attribution or independent
 event/Shell trigger. This does not establish Step 2, O-T7 or live acceptance.
 
+The separate [bounded Shell output gate](../../evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+keeps a published exact-birth direct-EXE launch from returning `FALSE` solely
+because an `hInstApp` or requested `hProcess` copy failed. A01 was expected
+red **0/1**; final focused **2/0**, raw-kernel **137/0**, 19-block no-default
+**1,552/0/2 ignored**, release-feature **2,196/0/9 ignored**, and three
+feature checks passed with stable source hashes. Invalid-pointer CE parity,
+success-path `LastError=0`, undisclosed alias retirement, loader admission
+and a post-native Shell trigger remain open. It does not implement the
+proposed claim gate below or confer O-T7/live acceptance.
+
 ##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
 
 The owning state stays in `CeKernel`'s existing pending-launch queue: each
