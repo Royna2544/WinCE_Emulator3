@@ -1,4 +1,6 @@
 #[cfg(feature = "unicorn")]
+use super::cpu_custody::{CpuCustodyError, CpuCustodyKey, CpuLeafVerifier};
+#[cfg(feature = "unicorn")]
 use super::cpu_mips::{
     LiveTrampolineState, MIPS_JMPBUF_FP_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_RA_SLOT,
     MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_S0_SLOT, MIPS_JMPBUF_SP_SLOT, MIPS_NOP,
@@ -19,8 +21,6 @@ use super::cpu_mips::{
     mips_halfword_jump_table_ranges, mips_patch_rva_overlaps_data_ranges, normal_branch_stub_words,
 };
 use super::machine_kernel_port::MachineKernelPort;
-#[cfg(feature = "unicorn")]
-use super::cpu_custody::{CpuCustodyError, CpuCustodyKey, CpuLeafVerifier};
 #[cfg(feature = "unicorn")]
 use super::machine_kernel_port::{AttemptAuthority, MachineStateLoan};
 #[cfg(feature = "unicorn")]
@@ -205,8 +205,7 @@ impl CpuExecutionBinding {
     ) -> Result<()> {
         match self {
             Self::LegacyUnbound => {
-                if kernel.cpu_machine_lineage().is_some()
-                    || kernel.requires_cpu_machine_relineage()
+                if kernel.cpu_machine_lineage().is_some() || kernel.requires_cpu_machine_relineage()
                 {
                     return Err(Error::Backend(
                         "unbound CPU cannot execute in a CPU-directory machine".to_owned(),
@@ -9578,7 +9577,9 @@ impl UnicornMips {
         if let Err(error) = self.cpu_execution_binding.verify_native_entry(
             kernel,
             self.current_thread_id,
-            kernel.handles.thread_birth_key_by_id(self.current_thread_id),
+            kernel
+                .handles
+                .thread_birth_key_by_id(self.current_thread_id),
         ) {
             report.failure_operation = Some("CPU custody execution preflight");
             return AttemptExecution {
@@ -9603,8 +9604,7 @@ impl UnicornMips {
             return AttemptExecution {
                 report,
                 result: Err(Error::Backend(
-                    "CPU-directory Send handoff requires a checked thread-leaf transfer"
-                        .to_owned(),
+                    "CPU-directory Send handoff requires a checked thread-leaf transfer".to_owned(),
                 )),
             };
         }
@@ -21041,11 +21041,7 @@ impl UnicornMips {
         let port = if kernel.cpu_machine_lineage().is_some()
             || kernel.requires_cpu_machine_relineage()
         {
-            MachineKernelPort::new_with_cpu_directory(
-                kernel,
-                framebuffer,
-                custody.leaf_verifier(),
-            )
+            MachineKernelPort::new_with_cpu_directory(kernel, framebuffer, custody.leaf_verifier())
         } else {
             MachineKernelPort::new(kernel, framebuffer)
         };
@@ -21192,11 +21188,7 @@ fn run_pending_process_launches_with_custody<D>(
     let port = if let Some(directory) = custody.as_ref()
         && (kernel.cpu_machine_lineage().is_some() || kernel.requires_cpu_machine_relineage())
     {
-        MachineKernelPort::new_with_cpu_directory(
-            kernel,
-            framebuffer,
-            directory.leaf_verifier(),
-        )
+        MachineKernelPort::new_with_cpu_directory(kernel, framebuffer, directory.leaf_verifier())
     } else {
         MachineKernelPort::new(kernel, framebuffer)
     };
@@ -73269,9 +73261,11 @@ mod unicorn_tests {
         crate::emulator::cpu_custody::CpuLeafLease,
     )> {
         let mut kernel = phase1_kernel("bound-cpu-fixture.exe")?;
-        let mut directory = super::CpuCustody::new()
-            .map_err(|error| Error::Backend(error.to_string()))?;
-        let birth = kernel.current_process_birth_key().expect("boot process birth");
+        let mut directory =
+            super::CpuCustody::new().map_err(|error| Error::Backend(error.to_string()))?;
+        let birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
         let thread = kernel
             .handles
             .process_primary_thread_birth(birth)
@@ -73323,7 +73317,10 @@ mod unicorn_tests {
             .with_cpu_mut(permit, |_original| ())
             .map_err(|error| Error::Backend(error.to_string()))?;
         directory
-            .finish_leaf(&mut leaf, crate::emulator::cpu_custody::CpuLeaseEnd::Runnable)
+            .finish_leaf(
+                &mut leaf,
+                crate::emulator::cpu_custody::CpuLeaseEnd::Runnable,
+            )
             .map_err(|error| Error::Backend(error.to_string()))?;
         Ok(())
     }
@@ -73352,8 +73349,71 @@ mod unicorn_tests {
         assert_eq!(unbound.native_engine_identity_for_test(), None);
         assert_eq!(directory.leaf_verifier().current_permit(), Some(permit));
         directory
-            .finish_leaf(&mut leaf, crate::emulator::cpu_custody::CpuLeaseEnd::Runnable)
+            .finish_leaf(
+                &mut leaf,
+                crate::emulator::cpu_custody::CpuLeaseEnd::Runnable,
+            )
             .map_err(|error| Error::Backend(error.to_string()))?;
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_slot_refuses_boxed_parked_child_and_returns_original_tree() -> crate::Result<()> {
+        use crate::emulator::cpu_custody::{CpuCustodyError, CpuCustodyState};
+
+        let kernel = phase1_kernel("admission-tree.exe")?;
+        let birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let mut root = super::UnicornMips::new()?;
+        root.parked_child_processes.push_back(super::ParkedProcess {
+            application: Some("parked-child.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: birth.process_id() + 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: MAIN_GUEST_THREAD_ID,
+            cpu: Box::new(super::UnicornMips::new()?),
+            blocked_send_id: None,
+            module_base: 0,
+            module_path: "parked-child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::new(),
+            command_line: String::new(),
+            current_directory: None,
+        });
+        let child_ptr = &*root.parked_child_processes[0].cpu as *const super::UnicornMips;
+        let mut directory =
+            super::CpuCustody::new().map_err(|error| Error::Backend(error.to_string()))?;
+        let key = directory
+            .reserve(birth)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+
+        let (error, mut returned) = directory
+            .admit_reserved(key, birth, root)
+            .expect_err("a process slot cannot own a boxed child CPU");
+        assert_eq!(error, CpuCustodyError::ParkedChildProcessTree);
+        assert_eq!(
+            directory.snapshot_exact(key, birth).unwrap().state,
+            CpuCustodyState::Reserved
+        );
+        assert_eq!(returned.parked_child_process_count(), 1);
+        assert_eq!(
+            &*returned.parked_child_processes[0].cpu as *const super::UnicornMips, child_ptr,
+            "refusal must return the original boxed child, not a clone",
+        );
+
+        let child = returned.parked_child_processes.pop_front().unwrap();
+        directory
+            .admit_reserved(key, birth, returned)
+            .map_err(|(error, _)| Error::Backend(error.to_string()))?;
+        assert_eq!(
+            directory.snapshot_exact(key, birth).unwrap().state,
+            CpuCustodyState::Runnable
+        );
+        assert_eq!(&*child.cpu as *const super::UnicornMips, child_ptr);
         Ok(())
     }
 
@@ -84775,13 +84835,15 @@ mod unicorn_tests {
         };
 
         let mut kernel = phase1_kernel("lineage-port.exe")?;
-        let birth = kernel.current_process_birth_key().expect("boot process birth");
+        let birth = kernel
+            .current_process_birth_key()
+            .expect("boot process birth");
         let thread_birth = kernel
             .handles
             .process_primary_thread_birth(birth)
             .expect("boot primary thread birth");
-        let mut directory = super::CpuCustody::new()
-            .map_err(|error| Error::Backend(error.to_string()))?;
+        let mut directory =
+            super::CpuCustody::new().map_err(|error| Error::Backend(error.to_string()))?;
         let key = directory
             .reserve(birth)
             .map_err(|error| Error::Backend(error.to_string()))?;
@@ -84800,7 +84862,8 @@ mod unicorn_tests {
         {
             let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
             assert_eq!(
-                port.enter_attempt(authority, "bound without directory").err(),
+                port.enter_attempt(authority, "bound without directory")
+                    .err(),
                 Some(MachinePortFailure::MissingCpuDirectory {
                     operation: "bound without directory"
                 })
@@ -84864,8 +84927,7 @@ mod unicorn_tests {
         );
         drop(port);
 
-        let fresh = super::CpuCustody::new()
-            .map_err(|error| Error::Backend(error.to_string()))?;
+        let fresh = super::CpuCustody::new().map_err(|error| Error::Backend(error.to_string()))?;
         let port = super::MachineKernelPort::new_with_cpu_directory(
             &mut kernel,
             &mut framebuffer,
@@ -93733,6 +93795,115 @@ mod unicorn_tests {
             inner_ids
         );
 
+        if bound_directory {
+            let outer_send_before = kernel.gwe.sent_message(outer_id).cloned();
+            let inner_send_before = kernel.gwe.sent_message(inner_id).cloned();
+            let outer_wait_before = kernel.blocked_waiter(outer_wait_id).cloned();
+            let inner_wait_before = kernel.blocked_waiter(inner_wait_id).cloned();
+            let mut directory =
+                super::CpuCustody::new().map_err(|error| Error::Backend(error.to_string()))?;
+            let owner = kernel
+                .current_process_birth_key()
+                .expect("boot process birth");
+            kernel
+                .bind_cpu_machine_lineage(directory.machine_lineage())
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let key = directory
+                .reserve(owner)
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            directory
+                .admit_reserved(key, owner, cpu)
+                .map_err(|(error, _cpu)| Error::Backend(error.to_string()))?;
+            let mut leaf = directory
+                .issue_leaf(key, owner, receiver_birth, None)
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let handle = directory
+                .acquire_cpu_handle(key, owner)
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let permit = leaf.permit();
+            let cpu_before = handle
+                .with_cpu_mut(permit, |cpu| {
+                    (
+                        cpu.saved_context.clone(),
+                        cpu.saved_context_thread_birth,
+                        cpu.current_thread_id,
+                        cpu.blocked_wait_threads.clone(),
+                        cpu.pending_wndproc_returns.clone(),
+                    )
+                })
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            let rejected = handle
+                .with_cpu_mut(permit, |cpu| {
+                    cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                        &mut kernel,
+                        &mut framebuffer,
+                        super::UnicornRunLimits {
+                            instruction_limit: 128,
+                            wall_clock_limit_ms: 500,
+                            stop_pc: Some(sender_wndproc),
+                            live_pump: true,
+                        },
+                        &mut directory,
+                    )
+                })
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            assert!(
+                matches!(&rejected.result, Err(Error::Backend(reason)) if reason.contains("CPU-directory Send handoff")),
+                "bound reciprocal handoff must refuse before effects: {:?}; {:?}",
+                rejected.result,
+                rejected.report,
+            );
+            assert_eq!(rejected.report.attempt_id(), None);
+            assert_eq!(rejected.report.start_pc(), None);
+            assert_eq!(
+                rejected.report.failure_operation(),
+                Some("CPU custody Send handoff preflight")
+            );
+            assert_eq!(
+                kernel.gwe.sent_message(outer_id),
+                outer_send_before.as_ref()
+            );
+            assert_eq!(
+                kernel.gwe.sent_message(inner_id),
+                inner_send_before.as_ref()
+            );
+            assert_eq!(
+                kernel.blocked_waiter(outer_wait_id),
+                outer_wait_before.as_ref()
+            );
+            assert_eq!(
+                kernel.blocked_waiter(inner_wait_id),
+                inner_wait_before.as_ref()
+            );
+            assert_eq!(
+                kernel.gwe.sent_message_ids_for_windows(&[receiver_hwnd]),
+                outer_ids
+            );
+            assert_eq!(
+                kernel.gwe.sent_message_ids_for_windows(&[sender_hwnd]),
+                inner_ids
+            );
+            let cpu_after = handle
+                .with_cpu_mut(permit, |cpu| {
+                    (
+                        cpu.saved_context.clone(),
+                        cpu.saved_context_thread_birth,
+                        cpu.current_thread_id,
+                        cpu.blocked_wait_threads.clone(),
+                        cpu.pending_wndproc_returns.clone(),
+                    )
+                })
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            assert_eq!(cpu_after, cpu_before, "bound handoff changed CPU state");
+            directory
+                .finish_leaf(
+                    &mut leaf,
+                    crate::emulator::cpu_custody::CpuLeaseEnd::Runnable,
+                )
+                .map_err(|error| Error::Backend(error.to_string()))?;
+            return Ok(());
+        }
+
         if corrupt_parent_birth {
             let parent = cpu.pending_wndproc_returns[0]
                 .resume_import
@@ -98001,6 +98172,15 @@ mod unicorn_tests {
 
     #[test]
     fn send_message_blocked_wait_resume_restores_sender_context() {
+        send_message_blocked_wait_resume_fixture(false);
+    }
+
+    #[test]
+    fn bound_ready_sender_probe_refuses_without_consuming_reply_or_wait() {
+        send_message_blocked_wait_resume_fixture(true);
+    }
+
+    fn send_message_blocked_wait_resume_fixture(bound_directory: bool) {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
@@ -98098,6 +98278,66 @@ mod unicorn_tests {
         let suspended = Rc::new(RefCell::new(None));
         let running_thread = Rc::new(RefCell::new(None));
         let selected = std::cell::Cell::new(None);
+        if bound_directory {
+            let directory = super::CpuCustody::new().expect("machine directory");
+            kernel
+                .bind_cpu_machine_lineage(directory.machine_lineage())
+                .expect("bind Kernel to directory");
+            let send_before = kernel.gwe.sent_message(send_id).cloned();
+            let wait_before = kernel.blocked_waiter(wait_id).cloned();
+            let orphan_before = kernel.blocked_waiter(orphan_wait_id).cloned();
+            let native_wait_before = blocked_waits.borrow().clone();
+            let regs_before = (
+                uc.reg_read(RegisterMIPS::S0).unwrap(),
+                uc.reg_read(RegisterMIPS::V0).unwrap(),
+                uc.reg_read(RegisterMIPS::RA).unwrap(),
+                uc.reg_read(RegisterMIPS::PC).unwrap(),
+            );
+            assert!(super::try_resume_blocked_wait_with_active_pc_mode(
+                &mut kernel,
+                &mut uc,
+                &super::SealedHostWriteGuard::default(),
+                None,
+                receiver_thread,
+                &current_thread_id,
+                &blocked_waits,
+                &suspended,
+                None,
+                &running_thread,
+                None,
+                false,
+                super::SendResumePhase::PreEntryProbe(&selected),
+            ));
+            assert!(matches!(
+                current_thread_id.terminal_error.borrow().as_ref(),
+                Some(Error::Backend(reason)) if reason.contains("CPU-directory Send handoff")
+            ));
+            assert_eq!(selected.get(), None);
+            assert_eq!(kernel.gwe.sent_message(send_id), send_before.as_ref());
+            assert_eq!(kernel.blocked_waiter(wait_id), wait_before.as_ref());
+            assert_eq!(
+                kernel.blocked_waiter(orphan_wait_id),
+                orphan_before.as_ref()
+            );
+            assert_eq!(*blocked_waits.borrow(), native_wait_before);
+            assert!(kernel.sent_message_result_ready(send_id));
+            assert_eq!(*running_thread.borrow(), None);
+            assert!(suspended.borrow().is_none());
+            assert_eq!(
+                (
+                    uc.reg_read(RegisterMIPS::S0).unwrap(),
+                    uc.reg_read(RegisterMIPS::V0).unwrap(),
+                    uc.reg_read(RegisterMIPS::RA).unwrap(),
+                    uc.reg_read(RegisterMIPS::PC).unwrap(),
+                ),
+                regs_before,
+            );
+            let mut result_bytes = [0; 4];
+            uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+                .unwrap();
+            assert_eq!(u32::from_le_bytes(result_bytes), 0);
+            return;
+        }
         assert!(!super::try_resume_blocked_wait_with_active_pc_mode(
             &mut kernel,
             &mut uc,
