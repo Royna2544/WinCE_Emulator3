@@ -19,7 +19,7 @@ use crate::{
     },
     emulator::{
         cpu::{CpuBackend, UnicornMips},
-        types::{NativeSliceOutcome, UnicornMemoryFault},
+        types::{AttemptExecution, NativeSliceOutcome, UnicornMemoryFault},
     },
 };
 
@@ -493,7 +493,7 @@ impl Drop for CpuSlotHandle {
     }
 }
 
-/// Non-clone attempt owner. Call `finish_leaf` or `suspend_for_child`; an
+/// Non-clone attempt owner. Call `finish_attempt` or `suspend_for_child`; an
 /// unresolved drop revokes its permit and quarantines the original CPU.
 #[must_use = "finish or suspend the CPU leaf before returning"]
 #[derive(Debug)]
@@ -1010,7 +1010,69 @@ impl CpuCustody {
         Ok(next)
     }
 
+    /// End a leased CPU from the actual backend result. The caller's proposed
+    /// continuation applies only to a successful, entered, non-exit attempt;
+    /// it cannot override an error or a terminal/unverified report. Returning
+    /// the original execution preserves its error and raw observations for
+    /// the host-turn classifier. An accepted exit must be retired separately
+    /// with a Kernel witness after this lease and all payload loans close.
+    pub fn finish_attempt(
+        &mut self,
+        lease: &mut CpuLeafLease,
+        execution: AttemptExecution,
+        successful_end: CpuLeaseEnd,
+    ) -> Result<AttemptExecution, CpuCustodyError> {
+        let end = if execution
+            .result
+            .as_ref()
+            .is_err_and(|error| error.is_host_exit_recovery_required())
+        {
+            CpuLeaseEnd::Quarantined(CpuQuarantineReason::RecoveryRequired)
+        } else if execution.report.final_outcome() == NativeSliceOutcome::NativeError {
+            CpuLeaseEnd::Quarantined(CpuQuarantineReason::NativeFault)
+        } else if execution.result.is_err()
+            || execution.report.final_outcome() == NativeSliceOutcome::BackendError
+        {
+            CpuLeaseEnd::Quarantined(CpuQuarantineReason::BackendFailure)
+        } else if execution.report.attempt_id().is_none()
+            || matches!(
+                execution.report.final_outcome(),
+                NativeSliceOutcome::NoAttempt | NativeSliceOutcome::GuestProcessExit
+            )
+        {
+            // A successful preflight-only action or a reported guest exit is
+            // not proof of a resumable leaf or an accepted exact-birth exit.
+            CpuLeaseEnd::Quarantined(CpuQuarantineReason::UnresolvedLeaf)
+        } else {
+            successful_end
+        };
+        match self.finish_leaf_classified(lease, end) {
+            Ok(()) => Ok(execution),
+            Err(error @ (CpuCustodyError::WrongThread | CpuCustodyError::WrongFrame)) => {
+                // Even a bad caller-supplied parked locator cannot strand
+                // the original payload in Leased or make it executable.
+                self.finish_leaf_classified(
+                    lease,
+                    CpuLeaseEnd::Quarantined(CpuQuarantineReason::PortFailure),
+                )?;
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Test-only primitive for exercising directory phase and permit checks.
+    /// Production callers must classify the actual `AttemptExecution` above.
+    #[cfg(test)]
     pub fn finish_leaf(
+        &mut self,
+        lease: &mut CpuLeafLease,
+        end: CpuLeaseEnd,
+    ) -> Result<(), CpuCustodyError> {
+        self.finish_leaf_classified(lease, end)
+    }
+
+    fn finish_leaf_classified(
         &mut self,
         lease: &mut CpuLeafLease,
         end: CpuLeaseEnd,
@@ -1631,7 +1693,14 @@ impl Drop for CpuCustody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ce::object::HandleTable, emulator::memory::MemoryPerms};
+    use crate::{
+        ce::object::HandleTable,
+        emulator::{
+            memory::MemoryPerms,
+            types::{DiagnosticAttemptId, NativeAttemptReport, UnicornRunLimits},
+        },
+        error::Error,
+    };
 
     fn births() -> (ProcessBirthKey, ProcessBirthKey) {
         let mut handles = HandleTable::default();
@@ -1662,6 +1731,201 @@ mod tests {
             (first, handles.thread_birth_key_by_id(201).unwrap()),
             (second, handles.thread_birth_key_by_id(211).unwrap()),
         )
+    }
+
+    fn reported_execution(
+        outcome: NativeSliceOutcome,
+        result: crate::Result<()>,
+    ) -> AttemptExecution {
+        let mut report = NativeAttemptReport::no_attempt(UnicornRunLimits::default());
+        if outcome != NativeSliceOutcome::NoAttempt {
+            report.attempt_id = Some(DiagnosticAttemptId::next().unwrap());
+        }
+        report.final_outcome = outcome;
+        AttemptExecution { report, result }
+    }
+
+    #[test]
+    fn finish_attempt_never_resumes_failed_or_unverified_cpu_despite_runnable_request() {
+        let cases = [
+            (
+                NativeSliceOutcome::NativeError,
+                Err(Error::Backend("native fault".to_owned())),
+                CpuQuarantineReason::NativeFault,
+            ),
+            (
+                NativeSliceOutcome::BackendError,
+                Ok(()),
+                CpuQuarantineReason::BackendFailure,
+            ),
+            (
+                NativeSliceOutcome::CountLimit,
+                Err(Error::Backend("failed tail".to_owned())),
+                CpuQuarantineReason::BackendFailure,
+            ),
+            (
+                NativeSliceOutcome::NoAttempt,
+                Err(Error::HostExitAuthorityRecoveryRequired {
+                    reason: "checked recovery hold",
+                }),
+                CpuQuarantineReason::RecoveryRequired,
+            ),
+            (
+                NativeSliceOutcome::NoAttempt,
+                Ok(()),
+                CpuQuarantineReason::UnresolvedLeaf,
+            ),
+            (
+                NativeSliceOutcome::GuestProcessExit,
+                Ok(()),
+                CpuQuarantineReason::UnresolvedLeaf,
+            ),
+        ];
+        for (outcome, result, reason) in cases {
+            let expected_error = result.is_err();
+            let ((birth, thread), _) = births_with_threads();
+            let mut custody = CpuCustody::new().unwrap();
+            let key = custody.reserve(birth).unwrap();
+            let mut original = UnicornMips::new().unwrap();
+            CpuBackend::map_region(
+                &mut original,
+                0x3000,
+                0x1000,
+                MemoryPerms::READ,
+                "attempt-original",
+            )
+            .unwrap();
+            custody.admit_reserved(key, birth, original).unwrap();
+            let handle = custody.acquire_cpu_handle(key, birth).unwrap();
+            let mut lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+            let permit = lease.permit();
+            let cell = Rc::clone(custody.admitted_cell(key, birth).unwrap());
+            let returned = handle
+                .with_cpu_mut(permit, |_original| {
+                    let returned = custody
+                        .finish_attempt(
+                            &mut lease,
+                            reported_execution(outcome, result),
+                            CpuLeaseEnd::Runnable,
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        cell.phase.get(),
+                        CpuAdmittedPhase::Quarantined(reason),
+                        "outcome {outcome:?}"
+                    );
+                    assert!(!cell.quarantine_sealed.get(), "open loan defers seal");
+                    returned
+                })
+                .unwrap();
+            assert_eq!(returned.report.final_outcome(), outcome);
+            assert_eq!(returned.result.is_err(), expected_error);
+            assert!(
+                cell.quarantine_sealed.get(),
+                "loan close seals original CPU"
+            );
+            assert_eq!(custody.counts().quarantined, 1);
+            assert_eq!(
+                custody.with_quarantined(key, birth, |cpu| {
+                    CpuBackend::memory(cpu).regions().count()
+                }),
+                Ok(1),
+                "original CPU stays in its exact slot"
+            );
+            assert_eq!(
+                custody.issue_leaf(key, birth, thread, None).unwrap_err(),
+                CpuCustodyError::NotRunnable
+            );
+            drop(lease);
+            drop(handle);
+        }
+    }
+
+    #[test]
+    fn finish_attempt_allows_only_reported_success_to_resume_runnable() {
+        let ((birth, thread), _) = births_with_threads();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let mut lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        let old = lease.permit();
+        let completed = custody
+            .finish_attempt(
+                &mut lease,
+                reported_execution(NativeSliceOutcome::CountLimit, Ok(())),
+                CpuLeaseEnd::Runnable,
+            )
+            .unwrap();
+        assert!(completed.result.is_ok());
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Runnable)
+        );
+        assert_eq!(
+            custody
+                .leaf_verifier()
+                .validate(old, key, birth, thread, None),
+            Err(CpuCustodyError::StalePermit)
+        );
+        drop(lease);
+        let next = custody.issue_leaf(key, birth, thread, None).unwrap();
+        assert_ne!(next.permit().attempt_generation(), old.attempt_generation());
+        drop(next);
+    }
+
+    #[test]
+    fn finish_attempt_bad_parked_locator_quarantines_instead_of_stranding_lease() {
+        let mut handles = HandleTable::default();
+        handles.create_process(20);
+        handles.create_process(21);
+        let birth = handles.process_birth_key(20).unwrap();
+        let other_birth = handles.process_birth_key(21).unwrap();
+        handles
+            .try_create_thread_in_birth(birth, 201, 0x1000, 0, false)
+            .unwrap();
+        handles
+            .try_create_thread_in_birth(other_birth, 211, 0x2000, 0, false)
+            .unwrap();
+        let thread = handles.thread_birth_key_by_id(201).unwrap();
+        let other_thread = handles.thread_birth_key_by_id(211).unwrap();
+        let foreign_wait = TaskFrameRef::new(
+            handles.preflight_finite_sleep_frame(other_thread).unwrap(),
+            41,
+        )
+        .unwrap();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let mut lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        assert_eq!(
+            custody
+                .finish_attempt(
+                    &mut lease,
+                    reported_execution(NativeSliceOutcome::CountLimit, Ok(())),
+                    CpuLeaseEnd::Parked(foreign_wait),
+                )
+                .unwrap_err(),
+            CpuCustodyError::WrongThread
+        );
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::PortFailure
+            ))
+        );
+        assert!(
+            custody
+                .admitted_cell(key, birth)
+                .unwrap()
+                .quarantine_sealed
+                .get()
+        );
+        assert_eq!(custody.counts().leased, 0);
+        drop(lease);
     }
 
     #[test]

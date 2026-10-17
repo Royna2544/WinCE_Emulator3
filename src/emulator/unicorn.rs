@@ -93895,14 +93895,14 @@ mod unicorn_tests {
                 })
                 .map_err(|error| Error::Backend(error.to_string()))?;
             assert_eq!(cpu_after, cpu_before, "bound handoff changed CPU state");
-            directory
-                .finish_leaf(
+            let completed = directory
+                .finish_attempt(
                     &mut leaf,
-                    crate::emulator::cpu_custody::CpuLeaseEnd::Quarantined(
-                        crate::emulator::cpu_custody::CpuQuarantineReason::BackendFailure,
-                    ),
+                    rejected,
+                    crate::emulator::cpu_custody::CpuLeaseEnd::Runnable,
                 )
                 .map_err(|error| Error::Backend(error.to_string()))?;
+            assert!(completed.result.is_err(), "refusal remains terminal");
             assert_eq!(
                 directory.admitted_phase(key, owner),
                 Ok(crate::emulator::cpu_custody::CpuAdmittedPhase::Quarantined(
