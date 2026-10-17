@@ -21415,7 +21415,12 @@ where
             if child_admitted
                 && matches!(&child_result, Ok(ChildProcessRunOutcome::Parked))
                 && let Some(witness) = parent_witness
-                && let Some(leaf_birth) = verified_rotated_child_pair(&child, launch_birth, kernel)
+                && let Some(leaf_birth) = verified_rotated_child_pair(
+                    &child,
+                    launch_birth,
+                    saved_current_directory.as_deref(),
+                    kernel,
+                )
             {
                 #[cfg(test)]
                 ROTATED_CHILD_SELECTION_CHALLENGE.with(|challenge| {
@@ -22159,6 +22164,7 @@ fn retained_cpu_main_image_matches_path(
 fn verified_rotated_child_pair(
     child: &UnicornMips,
     origin: crate::ce::object::ProcessBirthKey,
+    inherited_parent_directory: Option<&str>,
     kernel: &CeKernel,
 ) -> Option<crate::ce::object::ProcessBirthKey> {
     fn verify_cpu(
@@ -22238,7 +22244,11 @@ fn verified_rotated_child_pair(
         || parked.module_path != parked_guest_path
         || parked.application.as_deref() != Some(parked.module_path.as_str())
         || parked.command_line != parked_launch.command_line.as_deref().unwrap_or("")
-        || parked.current_directory.as_deref() != parked_launch.current_directory.as_deref()
+        || parked.current_directory.as_deref()
+            != parked_launch
+                .current_directory
+                .as_deref()
+                .or(inherited_parent_directory)
         || kernel.current_process_birth_key() != Some(active_birth)
         || kernel.current_process_state().exit_code != crate::ce::kernel::STILL_ACTIVE
         || kernel.current_process_state().signaled
@@ -83869,6 +83879,9 @@ mod unicorn_tests {
 
         let mut kernel = phase1_kernel("parent.exe")?;
         kernel.set_process_module_host_path(parent_path.clone());
+        // Both CreateProcessW calls pass no current-directory argument. B
+        // must retain A's effective directory, and C must inherit B's.
+        kernel.set_process_current_directory(Some("\\Test\\Inherited".to_owned()));
         let boot_birth = kernel
             .current_process_birth_key()
             .expect("boot process birth");
@@ -83913,6 +83926,19 @@ mod unicorn_tests {
             .process_birth_key_for_handle(queued[1].process_handle.expect("C handle"))
             .expect("original C birth");
         assert_ne!(child_birth, leaf_birth);
+        assert_eq!(kernel.current_process_birth_key(), Some(child_birth));
+        assert_eq!(
+            kernel.process_current_directory(),
+            Some("\\Test\\Inherited")
+        );
+        assert_eq!(
+            cpu.owned_process_launch
+                .as_ref()
+                .expect("active B launch")
+                .current_directory,
+            None,
+            "B inherited A's directory rather than receiving an explicit one"
+        );
         let initial = assert_exact_cpu_census(
             "after-nested-launch",
             &cpu,
