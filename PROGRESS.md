@@ -31,6 +31,10 @@ second slice; enabled a03 instead asserts this precise current fail-closed
 behavior. This is reproduced selection/lease non-progress, not observed CPU
 loss. It does not make the nested route acceptable; O-T7 acceptance must turn
 that follow-on call into witnessed guest progress with exact slot ownership.
+On the same a03 test-source hash, later 19-block broad runs passed
+no-default **1,560/0/2 ignored** and release-feature **2,220/0/9 ignored**;
+both new enabled real-MIPS diagnostics passed in the release suite. These
+checks validate the current baseline, not the missing second-slice progress.
 
 ## 2026-10-17 combined monitor Event + P2 witnessed B-only launch gate
 
