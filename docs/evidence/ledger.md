@@ -13,6 +13,41 @@ Conventions: "executed" means compiled and run with the result recorded here;
 never upgrades itself into acceptance: acceptance is defined only by the plan's
 stage gates.
 
+## 2026-10-17 O-T7a process-only permit and boot-host expected red (bounded)
+
+The [process-permit receipt](../../evidence/ot7a-process-permit-20261017/validation.receipt.md)
+seals the earlier `cpu_custody.rs` API foundation at `147d9012…57d24c`:
+a02 reproduced a stale active permit after payload-loan unwind (expected red,
+0/1, exit 101); a03 full-feature and a04 no-default focused suites each
+passed **28/0/0 ignored**. The directory issues a process/birth/slot/attempt
+permit only after bound-Kernel, exact live selected birth, admitted runnable
+slot and closed-loan checks. The non-clone lease and leaf permit share one
+active latch; unresolved drop or payload-loan unwind retains the original
+CPU non-runnable. Parent suspension has no successful resume path. After an
+independent API review, mutable CPU loans, process finish/classification and
+parked wake were restricted to `cfg(test)` pending a non-moving production
+run facade, permit-bound native report and canonical completed-wait witness.
+The resulting [a06 focused log](../../evidence/ot7a-process-permit-20261017/a06-gated-focused.raw.log)
+passed **28/0/0 ignored**, exit 0, on `cpu_custody.rs` SHA-256
+`105a67a3…26994a` with unchanged stamped source hashes. It was superseded
+by a warning-only source edit. The final-source a08 full-feature debug suite
+passed **2,266/0/10 ignored** over 19 test-result blocks, exit 0, at stable
+HEAD `dc3e643b` and `cpu_custody.rs` SHA-256 `0600ecbc…84779`; its closed
+raw-log SHA-256 is `33a98f12…eba43f`. The same-source a09 no-default suite
+passed **1,592/0/2 ignored** over 19 result blocks, exit 0; its closed
+[raw log](../../evidence/ot7a-process-permit-20261017/a09-gated-nodefault-broad.raw.log)
+has SHA-256 `61f2f562…2cd042`.
+
+The separate [boot-host receipt](../../evidence/ot7a-boot-host-selector-red-20261017/validation.receipt.md)
+preserves invalid a01 (source changed during compile) and valid stable a02
+expected red (0/1, exit 101): the normal host loop entered exact boot A,
+executed two ordinary guest MIPS instructions and stopped at `0x00401008`,
+but `admitted_key_for_birth(A)` was absent. That red used the earlier source
+seal and proves a boot custody bypass, not permit issuance. Production native
+entry and `MachineKernelPort` still accept the older thread-bearing leaf;
+boot/host-turn selection has not migrated. No connected Cut 1/Cut 2 or live
+iNavi/writable-mount run is claimed.
+
 ## 2026-10-17 O-T7a host-turn plan boundary (executed foundation test)
 
 The [attempt-local receipt](../../evidence/ot7a-host-turn-contract-20261017/validation.receipt.md)
