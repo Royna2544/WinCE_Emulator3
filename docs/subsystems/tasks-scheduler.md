@@ -901,7 +901,7 @@ red **0/1**; final focused **2/0**, raw-kernel **137/0**, 19-block no-default
 **1,552/0/2 ignored**, release-feature **2,196/0/9 ignored**, and three
 feature checks passed with stable source hashes. Invalid-pointer CE parity,
 success-path `LastError=0`, undisclosed alias retirement, loader admission
-and a post-native Shell trigger remain open. It does not implement the
+and a post-native Shell trigger remained open at that seal. It does not implement the
 later producer-witness gate below or confer O-T7/live acceptance.
 
 ##### Preparatory P0 in-place pending-launch ownership cut (bounded source-test gate)

@@ -2748,8 +2748,10 @@ neutral host-loop offer selects one oldest unreserved Event by exact birth
 from Kernel's in-place queue, even without another `CreateProcessW`. It does
 not create a dummy native owner. A retryable pre-CPU error returns the same
 birth to its queue slot; ordinary B and unselected siblings remain queued.
-The nested P0 `CreateProcessW` path still admits its aggregate E+B batch, so
-this bounded gate does not isolate a witnessed B or add Shell service.
+At the P1 seal, the nested P0 `CreateProcessW` path still admitted its
+aggregate E+B batch, so that bounded gate did not isolate a witnessed B or
+add Shell service. The later combined monitor/P2 seal changes those source
+behaviors without changing the historical P1 result.
 
 Stamped focused logs: [a04 Kernel 2/0](../../evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
 [a05 real-MIPS Event 2/0](../../evidence/stage3-event-trigger-p1-20261017/a05-guest-event-focused.raw.log),
@@ -2771,6 +2773,30 @@ notification timing are not proved;
 the [NAND driver finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 is a binding candidate, not a timing witness. No app or writable mount was
 run for this source cut.
+
+## Combined monitor Event + P2 witnessed launch handoff (2026-10-17, bounded source/test gate)
+
+The [single combined receipt](../../evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+seals five source-file SHA-256 values and rehashes every counted raw log. A
+real-MIPS `CreateProcessW` control converts the historical A-tail E+B
+admission into B-only: E keeps its exact pending birth. A direct original
+`.exe` `ShellExecuteExW` route and real-MIPS ordinal-480 control make the
+same B-only observation; `.lnk`/association routes publish no direct witness.
+Kernel B1/B2 claims preserve E/C, and an invalid-PE pre-CPU retry admits the
+same B birth after repair. Monitor `continue` offers E at a closed-native
+boundary, whereas `stop_pc` leaves it queued. A real-MIPS completed-root red
+exposed a monitor offer returning to a completed CPU and refusing native
+re-entry; the same-seal green takes a bounded handoff/break before CPU entry.
+This defect arose in the monitor offer, not producer publication.
+
+Final counted source passed 19-block no-default **1,560/0/2 ignored** and
+release-feature **2,218/0/9 ignored**; normal, `unicorn`-only and
+`unicorn,win32-desktop` feature checks exited 0. `HEAD` moved across backup
+commits while the five counted source hashes stayed unchanged. No live iNavi
+or writable mount was run. A separate [NAND static follow-up](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+identifies `notify.dll`'s event IOCTL arm but does not prove its launch path or
+before/after-return timing. Post-B selector restoration, full CPU custody,
+other Shell routes and Stage 3/O-T7 remain open.
 
 ## Chat-project validation notes (not in this repository)
 
