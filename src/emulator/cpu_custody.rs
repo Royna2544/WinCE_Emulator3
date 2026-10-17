@@ -6,7 +6,9 @@
 //! moves the original CPU into that slot without allocation after a fault.
 
 use std::{
+    cell::Cell,
     fmt,
+    rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -26,6 +28,46 @@ pub struct CpuCustodyKey {
     machine_lineage: u64,
     index: usize,
     generation: u64,
+}
+
+/// A separate, generation-checked holding place for a whole returned CPU
+/// tree. It is not an executable slot or a verified per-process CPU owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RetainedTreeKey {
+    machine_lineage: u64,
+    index: usize,
+    generation: u64,
+}
+
+impl RetainedTreeKey {
+    pub fn machine_lineage(self) -> u64 {
+        self.machine_lineage
+    }
+
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetainedTreeState {
+    ReservedUnbound,
+    UnverifiedStopped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetainedTreeSnapshot {
+    pub key: RetainedTreeKey,
+    /// The launch that reserved capacity, never a substitute CPU birth.
+    pub origin_birth: ProcessBirthKey,
+    pub state: RetainedTreeState,
+    pub metrics_available: bool,
+    pub mapped_blob_bytes: u64,
+    pub virtual_region_bytes: u64,
 }
 
 impl CpuCustodyKey {
@@ -66,6 +108,8 @@ pub struct CpuCustodySnapshot {
 pub struct CpuCustodyCounts {
     pub reserved: usize,
     pub quarantined: usize,
+    pub reserved_unbound_trees: usize,
+    pub unverified_stopped_trees: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +123,7 @@ pub enum CpuCustodyError {
     WrongBirth,
     NotReserved,
     NotQuarantined,
+    NotRetainedTree,
 }
 
 impl fmt::Display for CpuCustodyError {
@@ -93,6 +138,7 @@ impl fmt::Display for CpuCustodyError {
             Self::WrongBirth => "CPU custody process birth differs from the frozen birth",
             Self::NotReserved => "CPU custody slot is not reserved",
             Self::NotQuarantined => "CPU custody slot is not quarantined",
+            Self::NotRetainedTree => "CPU tree holding slot has no retained payload",
         };
         f.write_str(reason)
     }
@@ -127,6 +173,78 @@ struct Slot {
     state: SlotState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeCellPhase {
+    Vacant,
+    ReservedUnbound,
+    UnverifiedStopped,
+}
+
+struct RetainedTreeCell {
+    key: RetainedTreeKey,
+    origin_birth: ProcessBirthKey,
+    phase: Cell<TreeCellPhase>,
+    // A unique deposit ticket is the only writer while ReservedUnbound. Cell
+    // makes that transfer non-borrowing and allocation-free even if a status
+    // reader examined the directory during a nested guest run.
+    cpu: Cell<Option<UnicornMips>>,
+}
+
+impl fmt::Debug for RetainedTreeCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RetainedTreeCell")
+            .field("key", &self.key)
+            .field("origin_birth", &self.origin_birth)
+            .field("phase", &self.phase.get())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Preallocated capacity for exactly one returned CPU tree. This token is
+/// deliberately neither Clone nor Copy. The directory retains the same cell,
+/// so depositing consumes the ticket without a fallible directory borrow.
+#[must_use = "cancel or deposit the original CPU tree before returning"]
+#[derive(Debug)]
+pub struct CpuDepositTicket {
+    cell: Rc<RetainedTreeCell>,
+}
+
+struct RestoredTreeRead<'a> {
+    cell: &'a Cell<Option<UnicornMips>>,
+    cpu: Option<UnicornMips>,
+}
+
+impl Drop for RestoredTreeRead<'_> {
+    fn drop(&mut self) {
+        // This also restores the original owner if an inspection panics.
+        self.cell.set(self.cpu.take());
+    }
+}
+
+impl CpuDepositTicket {
+    pub fn key(&self) -> RetainedTreeKey {
+        self.cell.key
+    }
+
+    /// Cancel only after the CPU was never admitted or another durable owner
+    /// has accepted it. No CPU payload exists in this cell on that path.
+    pub fn cancel(self) {
+        self.cell.phase.set(TreeCellPhase::Vacant);
+    }
+
+    /// Retain a whole tree whose exact, per-process ownership is not proven.
+    /// Even a single-birth error path is stopped until a later checked drain;
+    /// `origin_birth` is provenance, never an executable CPU label.
+    pub fn deposit_unverified(self, cpu: UnicornMips) -> RetainedTreeKey {
+        // Only this non-clone ticket can write the preallocated cell, and
+        // consuming it prevents a second deposit. The directory has no API
+        // that changes a ReservedUnbound cell while its ticket exists.
+        self.cell.cpu.set(Some(cpu));
+        self.cell.phase.set(TreeCellPhase::UnverifiedStopped);
+        self.cell.key
+    }
+}
+
 /// Sole owner of terminal CPUs. Do not clone or include this in a CPU-only
 /// checkpoint; a machine checkpoint must explicitly relineage the directory.
 #[derive(Debug)]
@@ -134,6 +252,7 @@ pub struct CpuCustody {
     machine_lineage: u64,
     next_generation: u64,
     slots: Vec<Slot>,
+    retained_trees: Vec<Rc<RetainedTreeCell>>,
 }
 
 impl CpuCustody {
@@ -147,11 +266,97 @@ impl CpuCustody {
             machine_lineage,
             next_generation: 0,
             slots: Vec::new(),
+            retained_trees: Vec::new(),
         })
     }
 
     pub fn machine_lineage(&self) -> u64 {
         self.machine_lineage
+    }
+
+    /// Reserve a whole-tree holding cell before a child enters guest code.
+    /// Its origin is only a launch provenance; the returned root can be a
+    /// different process after nested rotation and is not relabeled here.
+    pub fn reserve_unbound(
+        &mut self,
+        origin_birth: ProcessBirthKey,
+    ) -> Result<CpuDepositTicket, CpuCustodyError> {
+        if self.retained_trees.iter().any(|cell| {
+            cell.origin_birth == origin_birth && cell.phase.get() != TreeCellPhase::Vacant
+        }) {
+            return Err(CpuCustodyError::DuplicateBirth);
+        }
+        let generation = self
+            .next_generation
+            .checked_add(1)
+            .ok_or(CpuCustodyError::GenerationExhausted)?;
+        let vacant = self
+            .retained_trees
+            .iter()
+            .position(|cell| cell.phase.get() == TreeCellPhase::Vacant);
+        let index = if let Some(index) = vacant {
+            index
+        } else {
+            self.retained_trees
+                .try_reserve(1)
+                .map_err(|_| CpuCustodyError::SlotCapacityExhausted)?;
+            self.retained_trees.len()
+        };
+        let cell = Rc::new(RetainedTreeCell {
+            key: RetainedTreeKey {
+                machine_lineage: self.machine_lineage,
+                index,
+                generation,
+            },
+            origin_birth,
+            phase: Cell::new(TreeCellPhase::ReservedUnbound),
+            cpu: Cell::new(None),
+        });
+        if index == self.retained_trees.len() {
+            self.retained_trees.push(Rc::clone(&cell));
+        } else {
+            self.retained_trees[index] = Rc::clone(&cell);
+        }
+        self.next_generation = generation;
+        Ok(CpuDepositTicket { cell })
+    }
+
+    /// Inspect a retained tree without cloning or granting a run lease.
+    /// The payload is returned to the same stable cell even on unwind.
+    pub(crate) fn with_retained_tree<R>(
+        &self,
+        key: RetainedTreeKey,
+        inspect: impl for<'a> FnOnce(&'a UnicornMips) -> R,
+    ) -> Result<R, CpuCustodyError> {
+        let cell = self.retained_tree_cell(key)?;
+        if !matches!(cell.phase.get(), TreeCellPhase::UnverifiedStopped) {
+            return Err(CpuCustodyError::NotRetainedTree);
+        }
+        let cpu = cell.cpu.take().ok_or(CpuCustodyError::NotRetainedTree)?;
+        let restore = RestoredTreeRead {
+            cell: &cell.cpu,
+            cpu: Some(cpu),
+        };
+        Ok(inspect(
+            restore.cpu.as_ref().expect("retained tree read owns CPU"),
+        ))
+    }
+
+    fn retained_tree_cell(
+        &self,
+        key: RetainedTreeKey,
+    ) -> Result<&RetainedTreeCell, CpuCustodyError> {
+        if key.machine_lineage != self.machine_lineage {
+            return Err(CpuCustodyError::WrongMachine);
+        }
+        let cell = self
+            .retained_trees
+            .get(key.index)
+            .ok_or(CpuCustodyError::StaleKey)?;
+        if cell.key != key || cell.phase.get() == TreeCellPhase::Vacant {
+            return Err(CpuCustodyError::StaleKey);
+        }
+        Ok(cell)
     }
 
     /// Preallocate the future terminal slot before the child is constructed.
@@ -316,6 +521,42 @@ impl CpuCustody {
             .collect()
     }
 
+    /// The origin is a reservation witness, not necessarily the root CPU's
+    /// process birth. Unverified trees never report a verified owner birth.
+    pub fn retained_tree_snapshots(&self) -> Vec<RetainedTreeSnapshot> {
+        self.retained_trees
+            .iter()
+            .filter_map(|cell| {
+                let state = match cell.phase.get() {
+                    TreeCellPhase::Vacant => return None,
+                    TreeCellPhase::ReservedUnbound => RetainedTreeState::ReservedUnbound,
+                    TreeCellPhase::UnverifiedStopped => RetainedTreeState::UnverifiedStopped,
+                };
+                let metrics = self.with_retained_tree(cell.key, |cpu| {
+                    (
+                        Self::blob_bytes(cpu),
+                        CpuBackend::memory(cpu)
+                            .regions()
+                            .map(|region| u64::from(region.size))
+                            .fold(0, u64::saturating_add),
+                    )
+                });
+                let (metrics_available, mapped_blob_bytes, virtual_region_bytes) = match metrics {
+                    Ok((blobs, regions)) => (true, blobs, regions),
+                    Err(_) => (false, 0, 0),
+                };
+                Some(RetainedTreeSnapshot {
+                    key: cell.key,
+                    origin_birth: cell.origin_birth,
+                    state,
+                    metrics_available,
+                    mapped_blob_bytes,
+                    virtual_region_bytes,
+                })
+            })
+            .collect()
+    }
+
     pub fn counts(&self) -> CpuCustodyCounts {
         let mut counts = CpuCustodyCounts::default();
         for slot in &self.slots {
@@ -325,6 +566,13 @@ impl CpuCustody {
                 SlotState::Quarantined { .. } => counts.quarantined += 1,
             }
         }
+        for cell in &self.retained_trees {
+            match cell.phase.get() {
+                TreeCellPhase::Vacant => {}
+                TreeCellPhase::ReservedUnbound => counts.reserved_unbound_trees += 1,
+                TreeCellPhase::UnverifiedStopped => counts.unverified_stopped_trees += 1,
+            }
+        }
         counts
     }
 
@@ -332,17 +580,28 @@ impl CpuCustody {
         self.slots
             .iter()
             .any(|slot| !matches!(&slot.state, SlotState::Vacant))
+            || self
+                .retained_trees
+                .iter()
+                .any(|cell| cell.phase.get() != TreeCellPhase::Vacant)
     }
 
     /// Only CPU-owned mapped blobs; excludes Kernel stack/private/shared pages.
     pub fn retained_cpu_blob_bytes(&self) -> u64 {
-        self.slots
+        let quarantined = self
+            .slots
             .iter()
             .filter_map(|slot| match &slot.state {
                 SlotState::Quarantined { cpu, .. } => Some(Self::blob_bytes(cpu)),
                 _ => None,
             })
-            .fold(0, u64::saturating_add)
+            .fold(0, u64::saturating_add);
+        self.retained_tree_snapshots()
+            .iter()
+            .filter(|snapshot| snapshot.metrics_available)
+            .fold(quarantined, |total, snapshot| {
+                total.saturating_add(snapshot.mapped_blob_bytes)
+            })
     }
 
     fn slot(&self, key: CpuCustodyKey) -> Result<&Slot, CpuCustodyError> {
@@ -527,5 +786,61 @@ mod tests {
             custody.snapshot_exact(key, birth),
             Err(CpuCustodyError::StaleKey)
         );
+    }
+
+    #[test]
+    fn unbound_ticket_retains_original_tree_without_origin_relabel() {
+        let (origin, actual) = births();
+        let mut custody = CpuCustody::new().unwrap();
+        let ticket = custody.reserve_unbound(origin).unwrap();
+        let key = ticket.key();
+        assert_eq!(custody.counts().reserved_unbound_trees, 1);
+        assert!(custody.has_any_custody());
+        assert!(matches!(
+            custody.reserve_unbound(origin),
+            Err(CpuCustodyError::DuplicateBirth)
+        ));
+
+        let mut cpu = UnicornMips::new().unwrap();
+        CpuBackend::map_region(&mut cpu, 0x1000, 0x1000, MemoryPerms::READ, "tree").unwrap();
+        assert_eq!(ticket.deposit_unverified(cpu), key);
+        let snapshot = custody.retained_tree_snapshots().pop().unwrap();
+        assert_eq!(snapshot.key, key);
+        assert_eq!(snapshot.origin_birth, origin);
+        assert_eq!(snapshot.state, RetainedTreeState::UnverifiedStopped);
+        assert!(snapshot.metrics_available);
+        assert_eq!(snapshot.virtual_region_bytes, 0x1000);
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(
+            custody.with_retained_tree(key, |original| {
+                CpuBackend::memory(original).regions().count()
+            }),
+            Ok(1)
+        );
+
+        let other = custody.reserve_unbound(actual).unwrap();
+        let other_key = other.key();
+        assert_ne!(other_key.generation(), key.generation());
+        other.cancel();
+        assert_eq!(custody.counts().reserved_unbound_trees, 0);
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+    }
+
+    #[test]
+    fn cancelled_unbound_ticket_reuses_index_with_new_generation() {
+        let (origin, actual) = births();
+        let mut custody = CpuCustody::new().unwrap();
+        let first = custody.reserve_unbound(origin).unwrap();
+        let stale = first.key();
+        first.cancel();
+        assert!(!custody.has_any_custody());
+        assert_eq!(
+            custody.with_retained_tree(stale, |_| ()),
+            Err(CpuCustodyError::StaleKey)
+        );
+        let next = custody.reserve_unbound(actual).unwrap();
+        assert_eq!(next.key().index(), stale.index());
+        assert_ne!(next.key().generation(), stale.generation());
+        next.cancel();
     }
 }

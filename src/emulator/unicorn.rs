@@ -20,6 +20,9 @@ use super::cpu_mips::{
 };
 #[cfg(feature = "unicorn")]
 use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
+use super::machine_kernel_port::MachineKernelPort;
+#[cfg(feature = "unicorn")]
+use super::machine_kernel_port::{AttemptAuthority, MachineStateLoan};
 #[cfg(feature = "unicorn")]
 use crate::ce::memory::{
     PreparedPrivateVm, PreparedPrivateVmChange, PrivatePageIdentity, PrivateVmNativePageChange,
@@ -216,56 +219,48 @@ struct NativeMixedJrStopProbe {
     checked_stop_seen: bool,
 }
 
-/// A bounded reentry fence for the scheduler block callback. This is not the
-/// machine-wide Kernel/framebuffer port: the other hook families and the
-/// post-native child handoff still have their own raw aliases.
+/// The scheduler callback's self-reentry fence uses the same state port as
+/// the code, import and memory-fault callback families.
 #[cfg(feature = "unicorn")]
-struct SchedulerBlockStateLease<'a, 'frame> {
-    busy: &'a std::cell::Cell<bool>,
-    kernel: *mut CeKernel,
-    framebuffer: *mut (dyn Framebuffer + 'frame),
+struct SchedulerBlockStateLease<'port, 'machine> {
+    busy: &'port std::cell::Cell<bool>,
+    state: MachineStateLoan<'port, 'machine>,
 }
 
 #[cfg(feature = "unicorn")]
-impl<'a, 'frame> SchedulerBlockStateLease<'a, 'frame> {
+impl<'port, 'machine> SchedulerBlockStateLease<'port, 'machine> {
     fn try_enter(
-        busy: &'a std::cell::Cell<bool>,
-        kernel: *mut CeKernel,
-        framebuffer: *mut (dyn Framebuffer + 'frame),
+        busy: &'port std::cell::Cell<bool>,
+        port: &'port MachineKernelPort<'machine>,
+        authority: AttemptAuthority,
     ) -> Option<Self> {
         if busy.replace(true) {
             None
         } else {
-            Some(Self {
-                busy,
-                kernel,
-                framebuffer,
-            })
+            match port.try_loan_for_attempt(authority, "scheduler block hook") {
+                Ok(state) => Some(Self { busy, state }),
+                Err(_) => {
+                    busy.set(false);
+                    None
+                }
+            }
         }
     }
 
     fn kernel(&self) -> &CeKernel {
-        // SAFETY: this call is confined to the audited scheduler callback.
-        // The guard prevents another scheduler callback from entering while
-        // this reference is live; other hook aliases remain an open port cut.
-        unsafe { &*self.kernel }
+        self.state.kernel()
     }
 
     fn kernel_mut(&mut self) -> &mut CeKernel {
-        // SAFETY: the returned loan is tied to this callback-local guard.
-        // Whole-attempt exclusivity is not claimed by this bounded fence.
-        unsafe { &mut *self.kernel }
+        self.state.kernel_mut()
     }
 
     fn framebuffer_mut(&mut self) -> &mut dyn Framebuffer {
-        // SAFETY: the returned loan is tied to this callback-local guard.
-        unsafe { &mut *self.framebuffer }
+        self.state.framebuffer_mut()
     }
 
     fn kernel_and_framebuffer_mut(&mut self) -> (&mut CeKernel, &mut dyn Framebuffer) {
-        // SAFETY: Kernel and framebuffer are disjoint parameters of the
-        // native attempt, and both loans end before this guard is reused.
-        unsafe { (&mut *self.kernel, &mut *self.framebuffer) }
+        self.state.split_mut()
     }
 }
 
@@ -9382,7 +9377,28 @@ impl UnicornMips {
         limits: UnicornRunLimits,
         custody: Option<&mut CpuCustody>,
     ) -> AttemptExecution {
+        let port = MachineKernelPort::new(kernel, framebuffer);
+        self.run_until_import_trap_with_framebuffer_limits_report_on_port(&port, limits, custody)
+    }
+
+    fn run_until_import_trap_with_framebuffer_limits_report_on_port(
+        &mut self,
+        port: &MachineKernelPort<'_>,
+        limits: UnicornRunLimits,
+        custody: Option<&mut CpuCustody>,
+    ) -> AttemptExecution {
         let mut report = NativeAttemptReport::no_attempt(limits);
+        let mut preflight_state = match port.try_loan("CPU run preflight") {
+            Ok(state) => state,
+            Err(failure) => {
+                report.failure_operation = Some("CPU run preflight port loan");
+                return AttemptExecution {
+                    report,
+                    result: Err(Error::Backend(failure.to_string())),
+                };
+            }
+        };
+        let (kernel, framebuffer) = preflight_state.split_mut();
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
         if self.writable_main_image.is_some() {
             report.failure_operation = Some("unmigrated writable-image run boundary");
@@ -9516,9 +9532,10 @@ impl UnicornMips {
         }
         #[cfg(not(feature = "unicorn"))]
         let _ = (limits, custody);
+        drop(preflight_state);
         #[cfg(feature = "unicorn")]
         {
-            let result = self.run_with_unicorn(kernel, framebuffer, limits, &mut report, custody);
+            let result = self.run_with_unicorn(port, limits, &mut report, custody);
             return AttemptExecution { report, result };
         }
 
@@ -9616,8 +9633,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn run_with_unicorn(
         &mut self,
-        kernel: &mut CeKernel,
-        framebuffer: &mut dyn Framebuffer,
+        port: &MachineKernelPort<'_>,
         limits: UnicornRunLimits,
         report: &mut NativeAttemptReport,
         custody: Option<&mut CpuCustody>,
@@ -9625,8 +9641,7 @@ impl UnicornMips {
         let mut outcome_before_handoff = None;
         let mut stopped_deferred_child_error = false;
         let result = self.run_with_unicorn_attempt(
-            kernel,
-            framebuffer,
+            port,
             limits,
             report,
             &mut outcome_before_handoff,
@@ -9691,8 +9706,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn run_with_unicorn_attempt(
         &mut self,
-        kernel: &mut CeKernel,
-        framebuffer: &mut dyn Framebuffer,
+        port: &MachineKernelPort<'_>,
         limits: UnicornRunLimits,
         report: &mut NativeAttemptReport,
         outcome_before_handoff: &mut Option<NativeSliceOutcome>,
@@ -9708,6 +9722,10 @@ impl UnicornMips {
         use unicorn_engine::{RegisterMIPS, unicorn_const::HookType};
 
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+        let mut setup_state = port
+            .try_loan("prepare native attempt")
+            .map_err(|failure| Error::Backend(failure.to_string()))?;
+        let (kernel, framebuffer) = setup_state.split_mut();
         // Refuse a nested native attempt before private setup takes the saved
         // CPU context and marks it poisoned. The permit ends as soon as the
         // single emu_start returns, before any deferred child can run.
@@ -9849,6 +9867,11 @@ impl UnicornMips {
         // Capture once, before any import can create the first public slab.
         // A later selected-PID change must not retarget this native attempt.
         let native_owner_birth = kernel.current_process_birth_key();
+        let port_authority = AttemptAuthority {
+            process_birth: native_owner_birth,
+            thread_birth: slice_entry_thread_birth,
+            slice_generation: self.run_slice_generation,
+        };
         let native_owned_launch_birth = self
             .owned_process_launch
             .as_ref()
@@ -10201,8 +10224,6 @@ impl UnicornMips {
             trampoline_stub_by_origin.clone(),
         )));
         let progress_import_traps = self.import_traps.clone();
-        let kernel_ptr = kernel as *mut CeKernel;
-        let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let _ = self.complete_orphaned_active_send_wait(kernel);
         let framebuffer_tick_error = Rc::new(RefCell::new(None::<Error>));
         let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
@@ -10314,11 +10335,13 @@ impl UnicornMips {
                 "hookless trampoline mode: no per-instruction code hooks installed"
             );
         } else if code_hook_mode == UnicornCodeHookMode::Global {
+            let code_port = port;
             let native_hook_stop_reason_code_hook = Rc::clone(&native_hook_stop_reason);
             let native_hook_control_error_code_hook = Rc::clone(&native_hook_control_error);
             let pending_decoded_exit_call_global = Rc::clone(&pending_decoded_exit_call);
             let decoded_exit_call_witness_global = Rc::clone(&decoded_exit_call_witness);
             pre_run_state_try!(uc.add_code_hook(1, 0, move |uc, address, _size| {
+            if code_port.try_with_attempt_state(port_authority, "global code hook", |kernel, framebuffer| {
             let pc = address as u32;
             // A completed call cannot authorize a later unrelated PC-zero
             // stop. The next code callback after its delay slot clears it.
@@ -10355,7 +10378,7 @@ impl UnicornMips {
             if pc >= IMPORT_TRAP_BASE {
                 clear_orphaned_live_blocked_get_message(
                     &blocked_get_message_live_hook,
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                 );
             }
             if let Some(pending_reason) = host_wall_clock_stop_pending_hook.get()
@@ -10441,18 +10464,18 @@ impl UnicornMips {
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
             if code_trace_index & 0x0fff == 0 {
-                if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                if let Err(err) = framebuffer.emulator_tick() {
                     *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
                     let _ = uc.emu_stop();
                     return;
                 }
                 clear_orphaned_live_blocked_get_message(
                     &blocked_get_message_live_hook,
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                 );
                 let live_blocked = blocked_get_message_live_hook.borrow().clone();
                 let remote_drained = drain_remote_server_control_messages_for_message_target(
-                    unsafe { &mut *kernel_ptr },
+                    &mut *kernel,
                     live_blocked,
                 );
                 if live_pump && remote_drained != 0 {
@@ -10462,7 +10485,7 @@ impl UnicornMips {
                     }
                 }
                 if let Err(err) = drain_win32_host_input_to_active_window(unsafe {
-                    &mut *kernel_ptr
+                    &mut *kernel
                 }) {
                     *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
                     let _ = uc.emu_stop();
@@ -10756,6 +10779,9 @@ impl UnicornMips {
                 target,
                 stack_words: read_unicorn_stack_words(uc, read_mips_reg(uc, RegisterMIPS::SP), 0x50),
             });
+            }).is_err() {
+                let _ = uc.emu_stop();
+            }
             })
             .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}"))));
         } else {
@@ -10800,10 +10826,12 @@ impl UnicornMips {
                 let blocked_get_message = Rc::clone(&fast_blocked_get_message);
                 let pc_stop = Rc::clone(&fast_pc_stop);
                 let current_thread_id_fast_code_hook = Rc::clone(&current_thread_id_fast_code_hook);
+                let fast_port = port;
                 pre_run_state_try!(uc.add_code_hook(
                     u64::from(start),
                     u64::from(end),
                     move |uc, address, _size| {
+                        if fast_port.try_with_attempt_state(port_authority, "sparse code hook", |kernel, framebuffer| {
                         let pc = address as u32;
                         let previous_pc = fast_code_previous_pc.replace(Some(pc));
                         let code_trace_index = code_trace_counter.get().wrapping_add(1);
@@ -10813,7 +10841,7 @@ impl UnicornMips {
                         };
                         if pc >= IMPORT_TRAP_BASE {
                             clear_orphaned_live_blocked_get_message(&blocked_get_message, unsafe {
-                                &*kernel_ptr
+                                &*kernel
                             });
                         }
                         if stop_pc == Some(pc) {
@@ -10846,18 +10874,18 @@ impl UnicornMips {
                         }
                         let service_tick_mask = if live_pump { 0x00ff } else { 0x0fff };
                         if code_trace_index & service_tick_mask == 0 {
-                            if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                            if let Err(err) = framebuffer.emulator_tick() {
                                 *framebuffer_tick_error.borrow_mut() = Some(err);
                                 let _ = uc.emu_stop();
                                 return;
                             }
                             clear_orphaned_live_blocked_get_message(&blocked_get_message, unsafe {
-                                &*kernel_ptr
+                                &*kernel
                             });
                             let live_blocked = blocked_get_message.borrow().clone();
                             let remote_drained =
                                 drain_remote_server_control_messages_for_message_target(
-                                    unsafe { &mut *kernel_ptr },
+                                    &mut *kernel,
                                     live_blocked,
                                 );
                             if live_pump && remote_drained != 0 {
@@ -10867,7 +10895,7 @@ impl UnicornMips {
                                 }
                             }
                             if live_pump && pending_stop_reason.get().is_none() {
-                                let kernel = unsafe { &*kernel_ptr };
+                                let kernel = &*kernel;
                                 let parked = parked_child_processes.borrow();
                                 let active_thread_id = current_thread_id_fast_code_hook.get().0;
                                 let visible =
@@ -10894,7 +10922,7 @@ impl UnicornMips {
                                 }
                             }
                             if let Err(err) =
-                                drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
+                                drain_win32_host_input_to_active_window(&mut *kernel)
                             {
                                 *framebuffer_tick_error.borrow_mut() = Some(err);
                                 let _ = uc.emu_stop();
@@ -10970,6 +10998,9 @@ impl UnicornMips {
                             &trampoline_ranges,
                         ) {
                             let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                        }
+                        }).is_err() {
+                            let _ = uc.emu_stop();
                         }
                     },
                 )
@@ -11333,7 +11364,6 @@ impl UnicornMips {
         let timeslice_service_at_hook = Rc::clone(&timeslice_service_at);
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
         let scheduler_timeslice_pending_hook = Rc::clone(&scheduler_timeslice_pending);
-        let framebuffer_timeslice_hook = framebuffer as *mut dyn Framebuffer;
         let scheduler_block_busy = Rc::new(Cell::new(false));
         #[cfg(test)]
         let scheduler_block_busy = self
@@ -11408,8 +11438,8 @@ impl UnicornMips {
             }
             let Some(mut scheduler_state) = SchedulerBlockStateLease::try_enter(
                 scheduler_block_busy_hook.as_ref(),
-                kernel_ptr,
-                framebuffer_timeslice_hook,
+                port,
+                port_authority,
             ) else {
                 scheduler_block_access_fault_hook
                     .set(Some("reentrant scheduler block state access"));
@@ -11885,14 +11915,16 @@ impl UnicornMips {
         let pc_stop_import_hook = Rc::clone(&pc_stop);
         let process_primary_thread_birth =
             native_owner_birth.and_then(|owner| kernel.handles.process_primary_thread_birth(owner));
+        let import_port = port;
         pre_entry_try!(uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
             move |uc, address, _size| {
+                if import_port.try_with_attempt_state(port_authority, "import hook", |kernel, framebuffer| {
                 let address = address as u32;
                 let active_thread_id = current_thread_id_hook.get().0;
                 if let Some(reason) = pending_guest_thread_return_stale_reason(
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     pending_guest_thread_returns_hook.borrow().as_slice(),
                     active_thread_id,
                 ) {
@@ -11914,18 +11946,18 @@ impl UnicornMips {
                     return;
                 }
                 if live_pump {
-                    let has_pending_remote_control = unsafe { &*kernel_ptr }
+                    let has_pending_remote_control = kernel
                         .remote_server
                         .as_ref()
                         .is_some_and(|server| server.pending_control_count() != 0);
                     if has_pending_remote_control {
                         clear_orphaned_live_blocked_get_message(
                             &blocked_get_message_hook,
-                            unsafe { &*kernel_ptr },
+                            &*kernel,
                         );
                         let live_blocked = blocked_get_message_hook.borrow().clone();
                         let _ = drain_remote_server_control_messages_for_message_target(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             live_blocked,
                         );
                     }
@@ -11943,7 +11975,7 @@ impl UnicornMips {
                     let no_running_thread = running_guest_thread_hook.borrow().is_none();
                     if no_running_thread {
                         let Some(verified_birth) = verified_native_guest_thread_exit_birth(
-                            unsafe { &*kernel_ptr },
+                            &*kernel,
                             &current_thread_id_hook,
                             active_thread_id,
                             None,
@@ -11975,22 +12007,22 @@ impl UnicornMips {
                         };
                         if verified_birth != primary_birth {
                             *worker_exit_birth_import_hook.borrow_mut() = Some(verified_birth);
-                        let thread_handle = unsafe { &*kernel_ptr }
+                        let thread_handle = kernel
                             .guest_thread_handle_by_id(active_thread_id)
                             .unwrap_or(0);
                         let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                         remove_stale_blocked_waits_for_thread(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             &blocked_wait_threads_hook,
                             active_thread_id,
                         );
                         remove_stale_blocked_get_message_for_thread(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             &blocked_guest_thread_hook,
                             active_thread_id,
                         );
                         remove_stale_displaced_get_messages_for_thread(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             &displaced_blocked_get_messages_hook,
                             active_thread_id,
                         );
@@ -11998,9 +12030,9 @@ impl UnicornMips {
                             &suspended_guest_thread_hook,
                             Some(&suspended_guest_thread_queue_hook),
                             active_thread_id,
-                            unsafe { &*kernel_ptr }.handles.thread_birth_key_by_id(active_thread_id),
+                            kernel.handles.thread_birth_key_by_id(active_thread_id),
                         );
-                        if !unsafe { &mut *kernel_ptr }
+                        if !kernel
                             .mark_guest_thread_exited_by_birth(verified_birth, exit_code)
                         {
                             current_thread_id_hook.fail_exit_authority_recovery(
@@ -12022,7 +12054,7 @@ impl UnicornMips {
                             "guest thread exited through raw thread-exit stub"
                         );
                         if try_wait_and_resume_blocked_wait(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             active_thread_id,
@@ -12034,7 +12066,7 @@ impl UnicornMips {
                             host_wall_clock_limit,
                             live_pump,
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             active_thread_id,
@@ -12060,7 +12092,7 @@ impl UnicornMips {
                 }
                 if address == CREATE_WINDOW_RETURN_STUB_ADDR {
                     if handle_create_window_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &create_window_returns_hook,
                         &last_wndproc_returns_hook,
@@ -12096,7 +12128,7 @@ impl UnicornMips {
                                                 .to_owned())
                                         } else {
                                             preflight_reciprocal_sent_return(
-                                                unsafe { &*kernel_ptr },
+                                                &*kernel,
                                                 callout,
                                                 call_sp,
                                                 current_thread_id_hook.get(),
@@ -12140,7 +12172,7 @@ impl UnicornMips {
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
                     if let Some(token) = callout.send_restore.as_ref() {
-                        if unsafe { &mut *kernel_ptr }.complete_sent_message_for_birth(
+                        if kernel.complete_sent_message_for_birth(
                             token.receiver_birth,
                             token.send_id,
                             result,
@@ -12160,13 +12192,13 @@ impl UnicornMips {
                             callout.msg,
                             crate::ce::gwe::WM_DESTROY | crate::ce::gwe::WM_NCDESTROY
                         ) {
-                            unsafe { &mut *kernel_ptr }
+                                kernel
                                 .gwe
                                 .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                         }
-                        release_wndproc_typed_payload(unsafe { &mut *kernel_ptr }, &callout);
+                        release_wndproc_typed_payload(&mut *kernel, &callout);
                         let _ = finish_guest_paint_after_wndproc_return(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             &callout,
                         );
                         record_wndproc_return(
@@ -12202,7 +12234,7 @@ impl UnicornMips {
                         return;
                     }
                     if let Some(resume) = callout.resume_import.as_ref() {
-                        let kernel = unsafe { &*kernel_ptr };
+                        let kernel = &*kernel;
                         let current_birth = current_thread_id_hook.get();
                         if !resume_import_has_live_birth(kernel, resume)
                             || (is_message_read_sent_source(callout.source)
@@ -12261,7 +12293,7 @@ impl UnicornMips {
                         let _ = uc.reg_write(RegisterMIPS::SP, u64::from(callout.return_sp));
                     }
                     if let Err(error) = complete_recorded_sent_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         &callout,
                         result,
                     ) {
@@ -12331,13 +12363,13 @@ impl UnicornMips {
                         callout.msg,
                         crate::ce::gwe::WM_DESTROY | crate::ce::gwe::WM_NCDESTROY
                     ) {
-                        unsafe { &mut *kernel_ptr }
+                            kernel
                             .gwe
                             .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                     }
-                    release_wndproc_typed_payload(unsafe { &mut *kernel_ptr }, &callout);
+                    release_wndproc_typed_payload(&mut *kernel, &callout);
                     let _ = finish_guest_paint_after_wndproc_return(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         &callout,
                     );
                     record_wndproc_return(
@@ -12363,12 +12395,12 @@ impl UnicornMips {
                     if let Some((recent_calls, recent_imports, recent_code)) =
                         wndproc_trace_tail.as_ref()
                     {
-                        let thread_id = unsafe { &*kernel_ptr }
+                        let thread_id = kernel
                             .gwe
                             .window_thread_process_id(callout.hwnd)
                             .map(|(thread_id, _)| thread_id)
                             .unwrap_or(0);
-                        unsafe { &mut *kernel_ptr }.record_window_lifecycle_trace(
+                        kernel.record_window_lifecycle_trace(
                             "wndproc_return",
                             thread_id,
                             Some(callout.hwnd),
@@ -12397,7 +12429,7 @@ impl UnicornMips {
                     }
                     if let Some(continuation) = callout.continuation.clone() {
                         if enter_wndproc_continuation(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &callout,
                             continuation,
@@ -12408,7 +12440,7 @@ impl UnicornMips {
                         }
                     }
                     if let Some(hwnd) = callout.clear_focus_after_return {
-                        unsafe { &mut *kernel_ptr }.clear_focus_and_activation_within(hwnd);
+                        kernel.clear_focus_and_activation_within(hwnd);
                     }
                     if let Some(resume) = callout.resume_import.clone() {
                         current_thread_id_hook.set_verified(resume.thread_birth);
@@ -12463,16 +12495,16 @@ impl UnicornMips {
                     }
                     if callout.finalize_destroy {
                         let destroy_root = callout.destroy_root_hwnd.unwrap_or(callout.hwnd);
-                        let _ = unsafe { &mut *kernel_ptr }.destroy_window_with_framebuffer(
+                        let _ = kernel.destroy_window_with_framebuffer(
                             destroy_root,
                             callout.source,
-                            Some(unsafe { &mut *framebuffer_ptr }),
+                            Some(&mut *framebuffer),
                         );
                     }
                     let api_result = callout.api_result.or_else(|| {
                         callout
                             .dialog_result_hwnd
-                            .and_then(|hwnd| unsafe { &*kernel_ptr }.gwe.dialog_result(hwnd))
+                            .and_then(|hwnd| kernel.gwe.dialog_result(hwnd))
                     });
                     if let Some(caller_regs) = callout.caller_regs.as_ref() {
                         restore_mips_gprs(uc, caller_regs);
@@ -12490,7 +12522,7 @@ impl UnicornMips {
                 }
                 if address == DLL_LIFECYCLE_RETURN_STUB_ADDR {
                     if !handle_dll_lifecycle_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &pending_dll_lifecycle_returns_hook,
                     ) {
@@ -12523,7 +12555,7 @@ impl UnicornMips {
                 }
                 if address == DPA_ENUM_RETURN_STUB_ADDR {
                     handle_dpa_enum_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &pending_dpa_enum_returns_hook,
                     );
@@ -12531,7 +12563,7 @@ impl UnicornMips {
                 }
                 if address == COM_NOTIFICATION_RETURN_STUB_ADDR {
                     handle_com_notification_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &pending_com_notification_returns_hook,
                     );
@@ -12539,7 +12571,7 @@ impl UnicornMips {
                 }
                 if address == DSA_ENUM_RETURN_STUB_ADDR {
                     handle_dsa_enum_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &pending_dsa_enum_returns_hook,
                     );
@@ -12590,7 +12622,7 @@ impl UnicornMips {
                 if address == FSDMGR_FILE_LOCK_RETURN_STUB_ADDR {
                     let active_thread_id = current_thread_id_hook.get().0;
                     if !handle_fsdmgr_file_lock_return_stub(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         active_thread_id,
@@ -12605,7 +12637,7 @@ impl UnicornMips {
                     let active_thread_id = current_thread_id_hook.get().0;
                     let pending = match verified_native_exit_pending_return(
                         &pending_guest_thread_returns_hook,
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         &current_thread_id_hook,
                         active_thread_id,
                         native_owner_birth,
@@ -12625,7 +12657,7 @@ impl UnicornMips {
                             let _ = uc.emu_stop();
                             return;
                         };
-                        if !unsafe { &mut *kernel_ptr }
+                        if !kernel
                             .mark_guest_thread_exited_by_birth(callout.worker_birth, exit_code)
                         {
                             let _ = uc.emu_stop();
@@ -12639,7 +12671,7 @@ impl UnicornMips {
                         let _ = update_user_kdata_current_ids(
                             uc,
                             callout.creator_thread_id,
-                            unsafe { &*kernel_ptr }.current_process_id(),
+                            kernel.current_process_id(),
                         );
                         *running_guest_thread_hook.borrow_mut() = None;
                         restore_mips_gprs(uc, &callout.creator_regs);
@@ -12665,7 +12697,7 @@ impl UnicornMips {
                         *running_guest_thread_hook.borrow()
                     else {
                         if verified_native_guest_thread_exit_birth(
-                            unsafe { &*kernel_ptr },
+                            &*kernel,
                             &current_thread_id_hook,
                             active_thread_id,
                             None,
@@ -12679,7 +12711,7 @@ impl UnicornMips {
                             return;
                         }
                         if try_wait_and_resume_blocked_wait(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             active_thread_id,
@@ -12691,7 +12723,7 @@ impl UnicornMips {
                             host_wall_clock_limit,
                             live_pump,
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             active_thread_id,
@@ -12711,7 +12743,7 @@ impl UnicornMips {
                         return;
                     };
                     let Some(worker_birth) = verified_native_guest_thread_exit_birth(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         &current_thread_id_hook,
                         worker_thread_id,
                         None,
@@ -12722,7 +12754,7 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    if !unsafe { &mut *kernel_ptr }
+                    if !kernel
                         .mark_guest_thread_exited_by_birth(worker_birth, exit_code)
                     {
                         let _ = uc.emu_stop();
@@ -12735,7 +12767,7 @@ impl UnicornMips {
                     );
                     let Some(suspended) = suspended_guest_thread_hook.borrow_mut().take() else {
                         if try_wait_and_resume_blocked_wait(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             worker_thread_id,
@@ -12747,7 +12779,7 @@ impl UnicornMips {
                             host_wall_clock_limit,
                             live_pump,
                         ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
                             &sealed_host_write_guard_import,
                             worker_thread_id,
@@ -12768,7 +12800,7 @@ impl UnicornMips {
                     };
                     if !activate_suspended_thread(
                         uc,
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         &current_thread_id_hook,
                         &running_guest_thread_hook,
                         &suspended,
@@ -12800,7 +12832,7 @@ impl UnicornMips {
                 // uc_mem_read does not trigger the guest UNMAPPED hook.
                 if let Err(err) = map_kernel_memory_allocations_for_owner(
                     uc,
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     &mut mapped_kernel_memory_hook.borrow_mut(),
                     unsafe { &mut *mapped_blobs_ptr },
                     native_owner_birth,
@@ -12816,7 +12848,7 @@ impl UnicornMips {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(err);
                     return;
                 }
-                if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                if let Err(err) = framebuffer.emulator_tick() {
                     *framebuffer_tick_error_hook.borrow_mut() = Some(err);
                     let _ = uc.emu_stop();
                     return;
@@ -12936,7 +12968,7 @@ impl UnicornMips {
                 }
                 let active_thread_id = current_thread_id_hook.get().0;
                 let caller_birth = verified_native_register_birth(
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     &current_thread_id_hook,
                     active_thread_id,
                 );
@@ -12966,7 +12998,7 @@ impl UnicornMips {
                         trap.ordinal,
                     )
                 }) && !caller_birth.zip(native_owner_birth).is_some_and(|(birth, process)| {
-                    unsafe { &*kernel_ptr }.checked_window_delivery_owner_for_birth(birth)
+                    kernel.checked_window_delivery_owner_for_birth(birth)
                         == Some(crate::ce::gwe::WindowDeliveryOwner::Birth { thread: birth, process })
                 }) {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
@@ -12983,7 +13015,7 @@ impl UnicornMips {
                         trap.ordinal,
                     )
                 }) && !native_process_exit_import_caller_matches_owner(
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     caller_birth,
                     native_owner_birth,
                 ) {
@@ -13001,7 +13033,7 @@ impl UnicornMips {
                         trap.ordinal,
                     )
                 }) && !native_process_exit_import_caller_matches_owner(
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     caller_birth,
                     native_owner_birth,
                 ) {
@@ -13015,7 +13047,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     complete_escaped_get_message_sent_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13035,7 +13067,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_get_message_sent_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13051,7 +13083,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_empty_get_message(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         mapped_kernel_memory_hook.as_ref(),
@@ -13091,9 +13123,9 @@ impl UnicornMips {
                     trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
                         && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_MESSAGE_BOX_W)
                         && try_resume_blocked_modal_message_box(
-                            unsafe { &mut *kernel_ptr },
+                            &mut *kernel,
                             uc,
-                            Some(unsafe { &mut *framebuffer_ptr }),
+                            Some(&mut *framebuffer),
                             active_thread_id,
                             &current_thread_id_hook,
                             &blocked_modal_message_box_hook,
@@ -13110,9 +13142,9 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_for_message_box_modal_wait(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
-                        Some(unsafe { &mut *framebuffer_ptr }),
+                        Some(&mut *framebuffer),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -13127,9 +13159,9 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_for_popup_menu_modal_wait(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
-                        Some(unsafe { &mut *framebuffer_ptr }),
+                        Some(&mut *framebuffer),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -13146,7 +13178,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_for_send_message_timeout_wait(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13163,7 +13195,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_for_clipboard_data_wait(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         mapped_kernel_memory_hook.as_ref(),
@@ -13189,7 +13221,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_sleep(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13218,7 +13250,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_thread_context_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13234,7 +13266,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_message_queue_io(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13260,7 +13292,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_for_single_object(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13288,7 +13320,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_for_multiple_objects(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13314,7 +13346,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_msg_wait_for_multiple_objects_ex(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13337,7 +13369,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_serial_read_file(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         native_owner_birth.map(|owner| UnicornPrivateVmMapping {
@@ -13363,7 +13395,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_comm_event(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         native_owner_birth.map(|owner| UnicornPrivateVmMapping {
@@ -13389,7 +13421,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_winsock_read(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13409,7 +13441,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_exit_guest_thread_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13484,7 +13516,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dispatch_message_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13497,7 +13529,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_send_message_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13518,7 +13550,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_set_window_pos_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         Some(UnicornHeapMapping { mapped: mapped_kernel_memory_hook.as_ref(), mapped_blobs: mapped_blobs_ptr }),
@@ -13534,7 +13566,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_window_proc_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13546,7 +13578,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_dlg_proc_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13558,7 +13590,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_enable_window_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13570,9 +13602,9 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_destroy_window_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
-                        Some(unsafe { &mut *framebuffer_ptr }),
+                        Some(&mut *framebuffer),
                         trap.module_kind,
                         trap.ordinal,
                         &args,
@@ -13583,7 +13615,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_update_window_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13595,7 +13627,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_is_dialog_message_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13607,7 +13639,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_call_window_proc_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13621,7 +13653,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_create_thread_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13686,7 +13718,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_enum_font_families_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13711,7 +13743,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_ime_enum_register_word_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13724,7 +13756,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_enum_windows_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13736,7 +13768,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_enum_display_monitors_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -13749,7 +13781,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dpa_enum_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13761,7 +13793,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dsa_enum_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -13788,7 +13820,7 @@ impl UnicornMips {
                 if let Some(result) = trap.as_ref().and_then(|trap| {
                     try_handle_runtime_loader_import(
                         memory.uc,
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         unsafe { &mut *memory_map_ptr },
                         unsafe { &mut *mapped_blobs_ptr },
                         unsafe { &mut *loaded_modules_ptr },
@@ -13860,7 +13892,7 @@ impl UnicornMips {
                                 reason: "native pseudo exit lacks caller or process birth",
                             });
                         };
-                        if unsafe { &*kernel_ptr }.checked_guest_process_caller_for_birth(caller)
+                        if kernel.checked_guest_process_caller_for_birth(caller)
                             != Some(owner)
                         {
                             return Err(Error::HostExitAuthorityRecoveryRequired {
@@ -13936,9 +13968,9 @@ impl UnicornMips {
                 let Some(import_return) = traps
                     .borrow()
                     .dispatch_trap_registers_with_framebuffer_and_context(
-                    unsafe { &mut *kernel_ptr },
+                    &mut *kernel,
                     &mut memory,
-                    Some(unsafe { &mut *framebuffer_ptr }),
+                    Some(&mut *framebuffer),
                     crate::ce::coredll::CoredllRawContext {
                         thread_id: active_thread_id,
                         caller_birth,
@@ -13976,7 +14008,7 @@ impl UnicornMips {
                             process,
                         },
                     );
-                    let actual_owner = unsafe { &*kernel_ptr }
+                    let actual_owner = kernel
                         .gwe
                         .window(result)
                         .map(|window| window.delivery_owner());
@@ -13992,7 +14024,7 @@ impl UnicornMips {
                 }
                 if let Err(err) = map_kernel_memory_allocations_for_owner(
                     memory.uc,
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                     &mut mapped_kernel_memory_hook.borrow_mut(),
                     unsafe { &mut *mapped_blobs_ptr },
                     native_owner_birth,
@@ -14009,7 +14041,7 @@ impl UnicornMips {
                     return;
                 }
                 if native_owned_launch_birth.is_some_and(|birth| {
-                    unsafe { &*kernel_ptr }
+                    kernel
                         .handles
                         .process_termination_requested_exit_code_by_birth(birth)
                         .is_some()
@@ -14053,7 +14085,7 @@ impl UnicornMips {
                 {
                     record_inavi_slot_import_after_return_trace(
                         &inavi_render_milestones_import_hook,
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -14069,7 +14101,7 @@ impl UnicornMips {
                     import_return.publication,
                     caller_birth,
                     native_owner_birth,
-                    unsafe { &*kernel_ptr },
+                    &*kernel,
                 ) {
                     Ok(publication) => publication,
                     Err(error) => {
@@ -14085,7 +14117,7 @@ impl UnicornMips {
                         let name =
                             trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
                         let detail = import_detail_after_return(
-                            unsafe { &*kernel_ptr },
+                            &*kernel,
                             memory.uc,
                             trap.module_kind,
                             trap.ordinal,
@@ -14168,7 +14200,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_create_window_create_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -14191,7 +14223,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dialog_init_callout(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -14204,7 +14236,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_resumed_thread_callout(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -14224,7 +14256,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_wave_out_function_callback(
-                        unsafe { &*kernel_ptr },
+                        &*kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         trap.module_kind,
@@ -14288,7 +14320,7 @@ impl UnicornMips {
                 }
                 if pending_wndproc_returns_hook.borrow().is_empty() {
                     if try_resume_blocked_wait_with_native_mapping(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         native_owner_birth.map(|owner| UnicornPrivateVmMapping {
@@ -14307,7 +14339,7 @@ impl UnicornMips {
                         return;
                     }
                     if try_resume_blocked_get_message(
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         memory.uc,
                         &sealed_host_write_guard_import,
                         active_thread_id,
@@ -14321,6 +14353,9 @@ impl UnicornMips {
                     ) {
                         return;
                     }
+                }
+                }).is_err() {
+                    let _ = uc.emu_stop();
                 }
             },
         )
@@ -14492,6 +14527,7 @@ impl UnicornMips {
             1,
             0,
             move |uc, access, address, size, value| {
+                match port.try_with_attempt_state(port_authority, "memory fault hook", |kernel, _framebuffer| {
                 let access_name = format!("{access:?}");
                 if access_name.contains("UNMAPPED") {
                     match repair_missing_virtual_page_for_fault(
@@ -14499,7 +14535,7 @@ impl UnicornMips {
                         // The callback runs sequentially while the primary
                         // native attempt owns the kernel. A stack fault must
                         // publish its one prepared page after native mapping.
-                        unsafe { &mut *kernel_ptr },
+                        &mut *kernel,
                         &mut mapped_kernel_memory_fault_hook.borrow_mut(),
                         address as u32,
                         native_owner_birth,
@@ -14528,6 +14564,13 @@ impl UnicornMips {
                     pc: read_mips_reg(uc, RegisterMIPS::PC),
                 });
                 false
+                }) {
+                    Ok(handled) => handled,
+                    Err(_failure) => {
+                        let _ = uc.emu_stop();
+                        false
+                    }
+                }
             },
         )
         .map_err(|err| Error::Backend(format!("install memory fault hook: {err:?}"))));
@@ -15048,12 +15091,17 @@ impl UnicornMips {
         // selected Kernel context. Child setup intentionally changes this
         // stamp later, so capture it once at the primary native boundary.
         let pre_native_selected_context = kernel.selected_process_context_stamp();
+        drop(setup_state);
+        let port_attempt_guard = pre_entry_try!(port
+            .enter_attempt(port_authority, "enter native guest attempt")
+            .map_err(|failure| Error::Backend(failure.to_string())));
         let result = uc.emu_start(
             u64::from(start_pc),
             0,
             native_timeout_us,
             limits.instruction_limit,
         );
+        drop(port_attempt_guard);
         drop(native_entry_guard);
         // Both queries belong to this primary native lease and must precede
         // capture or deferred child execution. A failed query is a hard
@@ -15136,7 +15184,8 @@ impl UnicornMips {
                     .fatal_payload_error
                     .take()
                     .map(Error::Backend)
-            });
+            })
+            .or_else(|| port.terminal_failure().map(|failure| Error::Backend(failure.to_string())));
         let scheduler_block_access_failure = scheduler_block_access_fault
             .take()
             .map(|reason| Error::Backend(reason.to_owned()));
@@ -15171,6 +15220,24 @@ impl UnicornMips {
         let mut deferred_launch_preflight_failed = false;
         let mut deferred_quarantined_child_fault = false;
         let mut deferred_view_sync_error = None;
+        macro_rules! post_native_loan {
+            ($operation:expr) => {{
+                match port.try_loan($operation) {
+                    Ok(loan) => loan,
+                    Err(failure) => {
+                        self.persist_run_state_handles(&run_state);
+                        self.orphaned_wndproc_returns =
+                            std::mem::take(&mut *last_wndproc_returns.borrow_mut());
+                        let abort = uc.abort_close();
+                        active_private_page_guards.borrow_mut().clear();
+                        report.failure_operation = Some($operation);
+                        return Err(Error::Backend(format!(
+                            "post-native machine-state loan failed: {failure}; native close: {abort:?}"
+                        )));
+                    }
+                }
+            }};
+        }
         #[cfg(test)]
         if deferred_process_launch.get().is_some()
             && self.test_rewrite_selected_context_before_deferred_launch
@@ -15178,6 +15245,8 @@ impl UnicornMips {
             // Test-only reentrant same-birth metadata write after A stops.
             // The value is unchanged, but the selected-context generation is not.
             self.test_rewrite_selected_context_before_deferred_launch = false;
+            let mut state = post_native_loan!("test selected context rewrite");
+            let kernel = state.kernel_mut();
             kernel.set_process_show_cmd(kernel.process_show_cmd());
         }
         if result.is_ok()
@@ -15190,14 +15259,17 @@ impl UnicornMips {
             && deferred_process_launch.get().is_some()
             && pseudo_self_exit_intent.get().is_none()
         {
-            let preflight = preflight_deferred_process_launch_context(
-                kernel,
-                pre_native_selected_context,
-                native_owner_pid,
-                native_owner_birth,
-                native_stop_thread,
-                &report.raw_stop_pc,
-            );
+            let preflight = {
+                let mut state = post_native_loan!("preflight deferred process launch");
+                preflight_deferred_process_launch_context(
+                    state.kernel_mut(),
+                    pre_native_selected_context,
+                    native_owner_pid,
+                    native_owner_birth,
+                    native_stop_thread,
+                    &report.raw_stop_pc,
+                )
+            };
             deferred_launch_preflight_failed = preflight.is_err();
             deferred_launch_error = preflight
                 .and_then(|_| {
@@ -15211,10 +15283,9 @@ impl UnicornMips {
                     // a batch from older queue entries or the return Boolean.
                     run_witnessed_pending_process_launch_with_custody(
                         &mut uc,
-                        kernel,
+                        port,
                         native_owner_pid,
                         &sealed_host_write_guard,
-                        framebuffer,
                         limits,
                         &deferred_process_dll_search_dirs,
                         &parked_child_processes,
@@ -15225,15 +15296,17 @@ impl UnicornMips {
                 })
                 .err();
             if deferred_launch_error.is_none() {
+                let mut state = post_native_loan!("sync parent views after child");
                 deferred_view_sync_error = sync_file_mapping_views_to_unicorn_guarded(
                     &mut uc,
-                    kernel,
+                    state.kernel_mut(),
                     native_owner_pid,
                     &sealed_host_write_guard,
-                )
-                .err();
+                ).err();
             }
         }
+        let mut tail_state = post_native_loan!("complete native attempt tail");
+        let (kernel, framebuffer) = tail_state.split_mut();
         let mut post_run_pc_repair_error = None::<String>;
         if should_repair_native_deadline_jr_import_thunk(
             result.is_ok(),
@@ -20728,9 +20801,9 @@ impl UnicornMips {
         };
         let mut parent_queue = DirectPendingLaunchParentQueue(&mut self.parked_child_processes);
         let mut quarantined_child_fault = false;
+        let port = MachineKernelPort::new(kernel, framebuffer);
         let service = run_pending_process_launch_batch_with_custody(
-            kernel,
-            framebuffer,
+            &port,
             limits,
             &self.dll_search_dirs,
             &mut parent_queue,
@@ -20743,6 +20816,9 @@ impl UnicornMips {
             #[cfg(test)]
             None,
         );
+        let restored_state = port.try_loan("verify event launch selection")
+            .map_err(|failure| Error::Backend(failure.to_string()))?;
+        let kernel = restored_state.kernel();
         if kernel.current_process_birth_key() != original_birth
             || kernel.current_process_state() != original_state
             || kernel.process_module_base() != original_base
@@ -20856,10 +20932,10 @@ fn run_pending_process_launches_with_custody<D>(
     let Some(batch) = kernel.reserve_pending_process_launch_batch()? else {
         return Ok(());
     };
+    let port = MachineKernelPort::new(kernel, framebuffer);
     let mut parent_queue = SharedPendingLaunchParentQueue(parked_child_processes);
     run_pending_process_launch_batch_with_custody(
-        kernel,
-        framebuffer,
+        &port,
         limits,
         dll_search_dirs,
         &mut parent_queue,
@@ -20884,10 +20960,9 @@ fn run_pending_process_launches_with_custody<D>(
 #[cfg(feature = "unicorn")]
 fn run_witnessed_pending_process_launch_with_custody<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
-    kernel: &mut CeKernel,
+    port: &MachineKernelPort<'_>,
     parent_owner_pid: u32,
     sealed_host_write_guard: &SealedHostWriteGuard,
-    framebuffer: &mut dyn Framebuffer,
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
     parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
@@ -20895,11 +20970,14 @@ fn run_witnessed_pending_process_launch_with_custody<D>(
     quarantined_child_fault: &mut bool,
     publication: crate::ce::coredll::PendingLaunchPublication,
 ) -> Result<()> {
-    let batch = kernel.reserve_pending_process_launch_witness(publication.locator)?;
+    let batch = port
+        .try_loan("reserve witnessed child launch")
+        .map_err(|failure| Error::Backend(failure.to_string()))?
+        .kernel_mut()
+        .reserve_pending_process_launch_witness(publication.locator)?;
     let mut parent_queue = SharedPendingLaunchParentQueue(parked_child_processes);
     run_pending_process_launch_batch_with_custody(
-        kernel,
-        framebuffer,
+        port,
         limits,
         dll_search_dirs,
         &mut parent_queue,
@@ -20923,8 +21001,7 @@ fn run_witnessed_pending_process_launch_with_custody<D>(
 
 #[cfg(feature = "unicorn")]
 fn run_pending_process_launch_batch_with_custody<Q, F>(
-    kernel: &mut CeKernel,
-    framebuffer: &mut dyn Framebuffer,
+    port: &MachineKernelPort<'_>,
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
     parent_queue: &mut Q,
@@ -20948,8 +21025,36 @@ where
     // and retain their original FIFO positions throughout the child run.
     let mut active_claim = None;
     let result = (|| -> Result<()> {
-        prepare(kernel)?;
+        {
+            let mut state = port
+                .try_loan("prepare parent before child launch")
+                .map_err(|failure| Error::Backend(failure.to_string()))?;
+            prepare(state.kernel_mut())?;
+        }
         for locator in batch.locators().iter().copied() {
+            let (
+                launch,
+                launch_birth,
+                path,
+                image,
+                custody_key,
+                deposit_ticket,
+                mut child,
+                saved_base,
+                saved_path,
+                saved_host_path,
+                saved_command_line,
+                saved_current_directory,
+                saved_show_cmd,
+                saved_process_state,
+                child_module_path,
+                mut child_admitted,
+                child_prepare_result,
+            ) = {
+            let mut pre_state = port
+                .try_loan("prepare exact child CPU")
+                .map_err(|failure| Error::Backend(failure.to_string()))?;
+            let (kernel, framebuffer) = pre_state.split_mut();
             let (claim, launch) = kernel.claim_pending_process_launch(&batch, locator)?;
             active_claim = Some(claim);
             #[cfg(test)]
@@ -21080,6 +21185,24 @@ where
             } else {
                 None
             };
+            // The returned CPU can be a different selected birth after nested
+            // rotation. Reserve an unbound, no-allocation terminal destination
+            // before any guest instruction runs.
+            let deposit_ticket = if let Some(directory) = custody.as_deref_mut() {
+                match directory.reserve_unbound(launch_birth) {
+                    Ok(ticket) => Some(ticket),
+                    Err(error) => {
+                        if let Some(key) = custody_key {
+                            let _ = directory.cancel_reservation(key, launch_birth);
+                        }
+                        return Err(Error::Backend(format!(
+                            "reserve returned child tree custody: {error}"
+                        )));
+                    }
+                }
+            } else {
+                None
+            };
             let mut child = match UnicornMips::new() {
                 Ok(child) => child,
                 Err(error) => {
@@ -21091,6 +21214,9 @@ where
                                     "cancel unbuilt child CPU custody: {cancel}"
                                 ))
                             })?;
+                    }
+                    if let Some(ticket) = deposit_ticket {
+                        ticket.cancel();
                     }
                     return Err(error);
                 }
@@ -21122,7 +21248,7 @@ where
             kernel.reset_current_process_exit_state();
 
             let mut child_admitted = false;
-            let child_result = (|| -> Result<ChildProcessRunOutcome> {
+            let child_prepare_result = (|| -> Result<()> {
                 child.owned_process_launch = Some(launch.clone());
                 child.set_dll_search_dirs(dll_search_dirs.to_vec());
                 child.set_initial_thread_id(launch.thread_id);
@@ -21144,36 +21270,121 @@ where
                     // has no hook at this boundary.
                     observer(kernel, &launch);
                 }
-                let execution = if let Some(directory) = custody.as_deref_mut() {
-                    child.run_until_import_trap_with_framebuffer_limits_report_with_custody(
-                        kernel,
-                        framebuffer,
-                        limits,
-                        directory,
-                    )
-                } else {
-                    child.run_until_import_trap_with_framebuffer_limits_report(
-                        kernel,
-                        framebuffer,
-                        limits,
-                    )
-                };
+                Ok(())
+            })();
+            (
+                launch,
+                launch_birth,
+                path,
+                image,
+                custody_key,
+                deposit_ticket,
+                child,
+                saved_base,
+                saved_path,
+                saved_host_path,
+                saved_command_line,
+                saved_current_directory,
+                saved_show_cmd,
+                saved_process_state,
+                child_module_path,
+                child_admitted,
+                child_prepare_result,
+            )
+            };
+            // No Kernel/framebuffer loan survives the recursive guest run.
+            let execution = if child_prepare_result.is_ok() {
+                Some(child.run_until_import_trap_with_framebuffer_limits_report_on_port(
+                    port,
+                    limits,
+                    custody.as_deref_mut(),
+                ))
+            } else {
+                None
+            };
+            let child_result = (|| -> Result<ChildProcessRunOutcome> {
+                child_prepare_result?;
+                let execution = execution.expect("successful child preparation has an execution");
                 if let Err(error) = execution.result {
                     if error.is_host_exit_recovery_required() {
                         return Ok(ChildProcessRunOutcome::RecoveryRequired(error));
                     }
                     return Err(error);
                 }
-                let outcome = if child.completed_active_process_exit {
+                // Classification waits until the returned CPU tree has been
+                // checked against the original birth and parked labels.
+                Ok(ChildProcessRunOutcome::Parked)
+            })();
+            let mut post_state = match port.try_loan("restore parent after child return") {
+                Ok(state) => state,
+                Err(failure) => {
+                    if let Some(ticket) = deposit_ticket {
+                        ticket.deposit_unverified(child);
+                    }
+                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                        let _ = directory.cancel_reservation(key, launch_birth);
+                    }
+                    return Err(Error::Backend(failure.to_string()));
+                }
+            };
+            let (kernel, framebuffer) = post_state.split_mut();
+            let mut deposit_ticket = deposit_ticket;
+            if child_admitted {
+                let verified = verified_returned_child_tree_births(&child, launch_birth, kernel);
+                let ownership_conflict = if let Some(ref births) = verified {
+                    if births.is_empty()
+                        || (child.completed_active_process_exit
+                            && child.parked_child_processes.is_empty())
+                    {
+                        false
+                    } else {
+                        match parent_queue.with_queue(
+                            Error::Backend(
+                                "returned child ownership queue borrow conflict".to_owned(),
+                            ),
+                            |queue| Ok(queue_contains_cpu_birth(queue, births)),
+                        ) {
+                            Ok(conflict) => conflict,
+                            Err(_) => true,
+                        }
+                    }
+                } else {
+                    true
+                };
+                if ownership_conflict {
+                    if let Some(ticket) = deposit_ticket.take() {
+                        ticket.deposit_unverified(child);
+                    }
+                    if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key) {
+                        let _ = directory.cancel_reservation(key, launch_birth);
+                    }
+                    // The original caller selection has not yet been restored.
+                    // Do not classify, skip, or publish a mismatched payload.
+                    kernel.set_process_module_base(saved_base);
+                    kernel.set_process_module_path(saved_path);
+                    kernel.set_process_module_host_path_option(saved_host_path);
+                    kernel.set_process_command_line(saved_command_line);
+                    kernel.set_process_current_directory(saved_current_directory);
+                    kernel.set_process_show_cmd(saved_show_cmd);
+                    kernel.set_current_process_state(saved_process_state);
+                    return Err(Error::Backend(
+                        "returned child CPU tree disagrees with origin or queue ownership; retained unverified"
+                            .to_owned(),
+                    ));
+                }
+            }
+            let child_result = child_result.map(|outcome| {
+                if child.completed_active_process_exit {
                     ChildProcessRunOutcome::Completed
                 } else {
-                    classify_uncompleted_deferred_child(&child, kernel)
-                };
-                // Keep the CPU until the kernel accepts a checked completion. A
-                // rejected exit must remain owned even if the child stopped at an
-                // exit stub during this first slice.
-                Ok(outcome)
-            })();
+                    match outcome {
+                        ChildProcessRunOutcome::Parked => {
+                            classify_uncompleted_deferred_child(&child, kernel)
+                        }
+                        other => other,
+                    }
+                }
+            });
             let child_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
 
             #[cfg(test)]

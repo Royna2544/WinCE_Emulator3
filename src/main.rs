@@ -2115,10 +2115,12 @@ fn publish_remote_debug_after_scheduler_change(
 fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
     let counts = cpu_custody.counts();
     let mut out = format!(
-        "  cpu_custody: lineage={} reserved={} quarantined={} retained_cpu_blob_bytes={}\n",
+        "  cpu_custody: lineage={} reserved={} quarantined={} reserved_unbound_trees={} unverified_stopped_trees={} retained_cpu_blob_bytes={}\n",
         cpu_custody.machine_lineage(),
         counts.reserved,
         counts.quarantined,
+        counts.reserved_unbound_trees,
+        counts.unverified_stopped_trees,
         cpu_custody.retained_cpu_blob_bytes(),
     );
     for snapshot in cpu_custody.snapshots() {
@@ -2135,6 +2137,21 @@ fn cpu_custody_debug_text(cpu_custody: &CpuCustody) -> String {
             snapshot.virtual_region_bytes,
             snapshot.native_outcome,
             snapshot.memory_fault,
+        );
+    }
+    for snapshot in cpu_custody.retained_tree_snapshots() {
+        let _ = writeln!(
+            out,
+            "    retained_tree={}:{}:{} origin={}:{} state={:?} metrics_available={} mapped_blob_bytes={} virtual_region_bytes={}",
+            snapshot.key.machine_lineage(),
+            snapshot.key.index(),
+            snapshot.key.generation(),
+            snapshot.origin_birth.process_id(),
+            snapshot.origin_birth.incarnation(),
+            snapshot.state,
+            snapshot.metrics_available,
+            snapshot.mapped_blob_bytes,
+            snapshot.virtual_region_bytes,
         );
     }
     out
@@ -2161,12 +2178,32 @@ fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &
             })
         })
         .collect::<Vec<_>>();
+    let retained_trees = cpu_custody
+        .retained_tree_snapshots()
+        .into_iter()
+        .map(|snapshot| {
+            serde_json::json!({
+                "machineLineage": snapshot.key.machine_lineage(),
+                "index": snapshot.key.index(),
+                "generation": snapshot.key.generation(),
+                "originProcessId": snapshot.origin_birth.process_id(),
+                "originProcessIncarnation": snapshot.origin_birth.incarnation(),
+                "state": format!("{:?}", snapshot.state),
+                "metricsAvailable": snapshot.metrics_available,
+                "mappedBlobBytes": snapshot.mapped_blob_bytes,
+                "virtualRegionBytes": snapshot.virtual_region_bytes,
+            })
+        })
+        .collect::<Vec<_>>();
     server.publish_cpu_custody_status(serde_json::json!({
         "machineLineage": cpu_custody.machine_lineage(),
         "reserved": counts.reserved,
         "quarantined": counts.quarantined,
+        "reservedUnboundTrees": counts.reserved_unbound_trees,
+        "unverifiedStoppedTrees": counts.unverified_stopped_trees,
         "retainedCpuBlobBytes": cpu_custody.retained_cpu_blob_bytes(),
         "slots": slots,
+        "retainedTrees": retained_trees,
     }));
     server.publish_debug_text("cpu-custody", cpu_custody_debug_text(cpu_custody));
 }
@@ -4950,6 +4987,42 @@ mod tests {
                         UnicornMips::new().expect("held CPU initializes"),
                     )
                     .expect("quarantine original CPU");
+            }
+        }
+
+        let mut held_tree = CpuCustody::new().expect("tree custody initializes");
+        let mut ticket = Some(
+            held_tree
+                .reserve_unbound(birth)
+                .expect("reserve unbound tree before guest run"),
+        );
+        for state in ["reserved unbound", "unverified stopped"] {
+            assert!(matches!(
+                try_monitor_checkpoint_save_with_custody(
+                    state.to_owned(),
+                    &cpu,
+                    &kernel,
+                    &framebuffer,
+                    &held_tree,
+                ),
+                Err(wince_emulation_v3::Error::Unsupported(message))
+                    if message.contains("CPU custody needs machine-level checkpoint relineage")
+            ));
+            assert!(matches!(
+                try_monitor_checkpoint_restore_with_custody(
+                    &checkpoint,
+                    &cpu,
+                    &kernel,
+                    &held_tree,
+                ),
+                Err(wince_emulation_v3::Error::Unsupported(message))
+                    if message.contains("CPU custody needs machine-level checkpoint relineage")
+            ));
+            if state == "reserved unbound" {
+                ticket
+                    .take()
+                    .expect("original tree ticket")
+                    .deposit_unverified(UnicornMips::new().expect("retained tree CPU initializes"));
             }
         }
     }
