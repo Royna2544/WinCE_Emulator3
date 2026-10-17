@@ -388,6 +388,42 @@ fn run_cpu_loop(
             }
             break;
         }
+        // A notification is published by a guest import, but its executable
+        // admission belongs to the machine's next closed-native host turn.
+        // Offer one Event launch here even if the selected CPU is idle or has
+        // completed; neither state necessarily has another import boundary.
+        // A requested-PC diagnostic keeps its existing selected-CPU semantics
+        // until child stop ownership has a separate gate.
+        #[cfg(feature = "unicorn")]
+        if args.cpu_stop_pc.is_none() && kernel.has_unreserved_event_launch() {
+            let (wall_clock_limit_ms, live_pump_slice) = effective_wall_clock_limit_ms(
+                args.cpu_wall_clock_limit_ms,
+                run_started.elapsed(),
+                args.desktop,
+                args.remote_server.is_some(),
+                host_idle_message_poll_slice(cpu, args.desktop),
+                cpu.active_process_has_visible_receiver_work(kernel)
+                    || cpu.active_process_has_receiver_work(kernel),
+            );
+            let instruction_limit = effective_instruction_limit(
+                args.cpu_instruction_limit,
+                live_pump_slice,
+                std::env::var_os("WINCE_EMU_FAST_START").is_some(),
+            );
+            let service = cpu.service_one_event_launch_with_custody(
+                kernel,
+                desktop.framebuffer_mut(),
+                UnicornRunLimits {
+                    instruction_limit,
+                    wall_clock_limit_ms,
+                    stop_pc: None,
+                    live_pump: live_pump_slice,
+                },
+                cpu_custody,
+            );
+            publish_cpu_custody_observation(kernel.remote_server.as_ref(), cpu_custody);
+            service?;
+        }
         if cpu.active_process_execution_completed() {
             // The child CPU is gone, but a parked parent may still be blocked
             // on a wait, message, or remote input that becomes ready later.

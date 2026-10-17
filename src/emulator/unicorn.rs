@@ -729,6 +729,15 @@ fn native_process_exit_import_requires_verified_birth(
 }
 
 #[cfg(feature = "unicorn")]
+fn native_notification_event_import_requires_verified_birth(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+        && ordinal == Some(crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED)
+}
+
+#[cfg(feature = "unicorn")]
 fn native_process_exit_import_caller_matches_owner(
     kernel: &CeKernel,
     caller_birth: Option<crate::ce::object::ThreadBirthKey>,
@@ -752,6 +761,7 @@ fn native_import_requires_verified_thread_birth(
         || native_send_import_requires_verified_birth(module_kind, ordinal)
         || native_no_wait_effect_import_requires_verified_birth(module_kind, ordinal)
         || native_process_exit_import_requires_verified_birth(module_kind, ordinal)
+        || native_notification_event_import_requires_verified_birth(module_kind, ordinal)
         || (module_kind == crate::emulator::imports::ImportModuleKind::Coredll
             && first_arg == 0
             && matches!(
@@ -7624,6 +7634,8 @@ impl UnicornMips {
                 primary_thread_birth: kernel
                     .handles
                     .thread_birth_key_for_handle(record.thread_handle?),
+                origin: crate::ce::kernel::PendingLaunchOrigin::Ordinary,
+                resolution_base_host_path: None,
             })
         })
     }
@@ -7672,6 +7684,8 @@ impl UnicornMips {
                 primary_thread_birth: kernel
                     .handles
                     .thread_birth_key_for_handle(record.thread_handle?),
+                origin: crate::ce::kernel::PendingLaunchOrigin::Ordinary,
+                resolution_base_host_path: None,
             })
         })
     }
@@ -12959,6 +12973,24 @@ impl UnicornMips {
                     *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
                         format!(
                             "native TerminateProcess has stale or mismatched process birth for TID {active_thread_id}"
+                        ),
+                    ));
+                    let _ = uc.emu_stop();
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    native_notification_event_import_requires_verified_birth(
+                        trap.module_kind,
+                        trap.ordinal,
+                    )
+                }) && !native_process_exit_import_caller_matches_owner(
+                    unsafe { &*kernel_ptr },
+                    caller_birth,
+                    native_owner_birth,
+                ) {
+                    *immediate_process_sync_error_hook.borrow_mut() = Some(Error::Backend(
+                        format!(
+                            "native CeEventHasOccurred has stale or mismatched process birth for TID {active_thread_id}"
                         ),
                     ));
                     let _ = uc.emu_stop();
@@ -20564,6 +20596,96 @@ fn preflight_deferred_process_launch_context(
 }
 
 #[cfg(feature = "unicorn")]
+impl UnicornMips {
+    /// Offer one exact event launch at a machine-owned host turn. The previous
+    /// native slice has already synchronized its file views and closed its
+    /// hooks; no parent Unicorn owner is borrowed or synthesized here.
+    pub fn service_one_event_launch_with_custody(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+        custody: &mut CpuCustody,
+    ) -> Result<bool> {
+        if !kernel.has_unreserved_event_launch() {
+            return Ok(false);
+        }
+        // A callback cannot run this machine-level service while another
+        // engine still owns raw Kernel/framebuffer pointers.
+        drop(NativeGuestExecutionGuard::enter()?);
+        if self.private_slab_attempt_poisoned
+            || matches!(
+                self.last_native_slice_outcome,
+                NativeSliceOutcome::NativeError
+                    | NativeSliceOutcome::BackendError
+                    | NativeSliceOutcome::RequestedPcStop
+            )
+        {
+            return Err(Error::Backend(
+                "event launch service requires a clean closed CPU boundary".to_owned(),
+            ));
+        }
+        let original_birth = kernel.current_process_birth_key();
+        if !self.completed_active_process_exit
+            && let Some(owned) = self.owned_process_launch.as_ref()
+            && owned.process_birth != original_birth
+        {
+            return Err(Error::Backend(
+                "event launch service selected CPU and Kernel process births differ".to_owned(),
+            ));
+        }
+        let original_state = kernel.current_process_state();
+        let original_base = kernel.process_module_base();
+        let original_path = kernel.process_module_path().to_owned();
+        let original_host_path = kernel.process_module_host_path().cloned();
+        let original_command_line = kernel.process_command_line().to_owned();
+        let original_directory = kernel.process_current_directory().map(ToOwned::to_owned);
+        let original_show_cmd = kernel.process_show_cmd();
+        let Some(batch) = kernel.reserve_oldest_unreserved_event_launch_batch()? else {
+            return Ok(false);
+        };
+        let mut parent_queue = DirectPendingLaunchParentQueue(&mut self.parked_child_processes);
+        let mut quarantined_child_fault = false;
+        let service = run_pending_process_launch_batch_with_custody(
+            kernel,
+            framebuffer,
+            limits,
+            &self.dll_search_dirs,
+            &mut parent_queue,
+            Some(custody),
+            &mut quarantined_child_fault,
+            batch,
+            |_| Ok(()),
+            #[cfg(test)]
+            None,
+            #[cfg(test)]
+            None,
+        );
+        if kernel.current_process_birth_key() != original_birth
+            || kernel.current_process_state() != original_state
+            || kernel.process_module_base() != original_base
+            || kernel.process_module_path() != original_path
+            || kernel.process_module_host_path() != original_host_path.as_ref()
+            || kernel.process_command_line() != original_command_line
+            || kernel.process_current_directory() != original_directory.as_deref()
+            || kernel.process_show_cmd() != original_show_cmd
+        {
+            self.private_slab_attempt_poisoned = true;
+            self.saved_context = None;
+            return Err(Error::Backend(format!(
+                "event launch service did not restore the selected process after {service:?}; recovery required"
+            )));
+        }
+        if quarantined_child_fault && service.is_ok() {
+            return Err(Error::Backend(
+                "event launch service quarantined a child without a terminal error".to_owned(),
+            ));
+        }
+        service.map(|()| true)
+    }
+}
+
+#[cfg(feature = "unicorn")]
 #[cfg(all(test, feature = "unicorn"))]
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -20593,6 +20715,44 @@ fn run_pending_process_launches<D>(
 }
 
 #[cfg(feature = "unicorn")]
+trait PendingLaunchParentQueue {
+    fn with_queue<R>(
+        &mut self,
+        conflict: Error,
+        f: impl FnOnce(&mut VecDeque<ParkedProcess>) -> Result<R>,
+    ) -> Result<R>;
+}
+
+#[cfg(feature = "unicorn")]
+struct SharedPendingLaunchParentQueue<'a>(&'a Rc<RefCell<VecDeque<ParkedProcess>>>);
+
+#[cfg(feature = "unicorn")]
+impl PendingLaunchParentQueue for SharedPendingLaunchParentQueue<'_> {
+    fn with_queue<R>(
+        &mut self,
+        conflict: Error,
+        f: impl FnOnce(&mut VecDeque<ParkedProcess>) -> Result<R>,
+    ) -> Result<R> {
+        let mut queue = self.0.try_borrow_mut().map_err(|_| conflict)?;
+        f(&mut queue)
+    }
+}
+
+#[cfg(feature = "unicorn")]
+struct DirectPendingLaunchParentQueue<'a>(&'a mut VecDeque<ParkedProcess>);
+
+#[cfg(feature = "unicorn")]
+impl PendingLaunchParentQueue for DirectPendingLaunchParentQueue<'_> {
+    fn with_queue<R>(
+        &mut self,
+        _conflict: Error,
+        f: impl FnOnce(&mut VecDeque<ParkedProcess>) -> Result<R>,
+    ) -> Result<R> {
+        f(self.0)
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn run_pending_process_launches_with_custody<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
@@ -20602,7 +20762,7 @@ fn run_pending_process_launches_with_custody<D>(
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
     parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
-    mut custody: Option<&mut CpuCustody>,
+    custody: Option<&mut CpuCustody>,
     quarantined_child_fault: &mut bool,
     #[cfg(test)] launch_observer: Option<
         &dyn Fn(&CeKernel, &crate::ce::kernel::PendingProcessLaunch),
@@ -20614,17 +20774,59 @@ fn run_pending_process_launches_with_custody<D>(
     let Some(batch) = kernel.reserve_pending_process_launch_batch()? else {
         return Ok(());
     };
+    let mut parent_queue = SharedPendingLaunchParentQueue(parked_child_processes);
+    run_pending_process_launch_batch_with_custody(
+        kernel,
+        framebuffer,
+        limits,
+        dll_search_dirs,
+        &mut parent_queue,
+        custody,
+        quarantined_child_fault,
+        batch,
+        |kernel| {
+            sync_file_mapping_views_from_unicorn_guarded(
+                parent_uc,
+                kernel,
+                parent_owner_pid,
+                sealed_host_write_guard,
+            )
+        },
+        #[cfg(test)]
+        launch_observer,
+        #[cfg(test)]
+        post_admission_observer,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn run_pending_process_launch_batch_with_custody<Q, F>(
+    kernel: &mut CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    limits: UnicornRunLimits,
+    dll_search_dirs: &[std::path::PathBuf],
+    parent_queue: &mut Q,
+    mut custody: Option<&mut CpuCustody>,
+    quarantined_child_fault: &mut bool,
+    batch: crate::ce::kernel::PendingLaunchBatch,
+    prepare: F,
+    #[cfg(test)] launch_observer: Option<
+        &dyn Fn(&CeKernel, &crate::ce::kernel::PendingProcessLaunch),
+    >,
+    #[cfg(test)] post_admission_observer: Option<
+        &dyn Fn(&mut CeKernel, &crate::ce::kernel::PendingProcessLaunch),
+    >,
+) -> Result<()>
+where
+    Q: PendingLaunchParentQueue,
+    F: FnOnce(&mut CeKernel) -> Result<()>,
+{
     // Keep the entry-time batch in Kernel. A nested child handoff can reserve
     // only launches published later, while untouched siblings remain visible
     // and retain their original FIFO positions throughout the child run.
     let mut active_claim = None;
     let result = (|| -> Result<()> {
-        sync_file_mapping_views_from_unicorn_guarded(
-            parent_uc,
-            kernel,
-            parent_owner_pid,
-            sealed_host_write_guard,
-        )?;
+        prepare(kernel)?;
         for locator in batch.locators().iter().copied() {
             let (claim, launch) = kernel.claim_pending_process_launch(&batch, locator)?;
             active_claim = Some(claim);
@@ -20854,9 +21056,7 @@ fn run_pending_process_launches_with_custody<D>(
 
             kernel.set_process_module_base(saved_base);
             kernel.set_process_module_path(saved_path);
-            if let Some(saved_host_path) = saved_host_path {
-                kernel.set_process_module_host_path(saved_host_path);
-            }
+            kernel.set_process_module_host_path_option(saved_host_path);
             kernel.set_process_command_line(saved_command_line);
             kernel.set_process_current_directory(saved_current_directory);
             kernel.set_process_show_cmd(saved_show_cmd);
@@ -20940,23 +21140,20 @@ fn run_pending_process_launches_with_custody<D>(
                         // Exit and window restoration already committed inside the
                         // child lease. A publication failure here is terminal for
                         // its descendants, not a recoverable stopped-exit refusal.
-                        let mut parent_queue = match parked_child_processes.try_borrow_mut() {
-                            Ok(queue) => queue,
-                            Err(_) => {
-                                return Err(Error::Backend(
+                        parent_queue.with_queue(
+                            Error::Backend(
                                 "completed child descendant CPU queue borrow conflict after committed exit; terminal descendant CPU ownership loss".to_owned(),
-                            ));
-                            }
-                        };
-                        if parent_queue
-                            .try_reserve(child.parked_child_processes.len())
-                            .is_err()
-                        {
-                            return Err(Error::Backend(
-                            "completed child descendant CPU queue reservation failed after committed exit; terminal descendant CPU ownership loss".to_owned(),
-                        ));
-                        }
-                        parent_queue.append(&mut child.parked_child_processes);
+                            ),
+                            |queue| {
+                                queue.try_reserve(child.parked_child_processes.len()).map_err(|_| {
+                                    Error::Backend(
+                                        "completed child descendant CPU queue reservation failed after committed exit; terminal descendant CPU ownership loss".to_owned(),
+                                    )
+                                })?;
+                                queue.append(&mut child.parked_child_processes);
+                                Ok(())
+                            },
+                        )?;
                     }
                     continue;
                 }
@@ -20968,7 +21165,7 @@ fn run_pending_process_launches_with_custody<D>(
                         kernel,
                         framebuffer,
                         exit_code,
-                        parked_child_processes,
+                        parent_queue,
                     ) {
                         Ok(completed) => completed,
                         Err(error) => {
@@ -21048,7 +21245,7 @@ fn run_pending_process_launches_with_custody<D>(
                 command_line: launch.command_line.clone().unwrap_or_default(),
                 current_directory: child_current_directory.clone(),
             };
-            if let Err(error) = try_publish_parked_child(parked_child_processes, parked) {
+            if let Err(error) = try_publish_parked_child(parent_queue, parked) {
                 return Err(error);
             }
             if let Some(error) = completion_recovery_error {
@@ -21091,32 +21288,30 @@ fn run_pending_process_launches_with_custody<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn try_publish_parked_child(
-    parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+fn try_publish_parked_child<Q: PendingLaunchParentQueue>(
+    parent_queue: &mut Q,
     parked: ParkedProcess,
 ) -> Result<()> {
     // This is a terminal invariant failure, not an exit-recovery hold: the
     // caller cannot retain this CPU tree if the queue is already borrowed.
-    parent_queue
-        .try_borrow_mut()
-        .map_err(|_| {
-            Error::Backend(
-                "child CPU queue borrow conflict; terminal CPU ownership loss".to_owned(),
-            )
-        })?
-        .push_back(parked);
-    Ok(())
+    parent_queue.with_queue(
+        Error::Backend("child CPU queue borrow conflict; terminal CPU ownership loss".to_owned()),
+        |queue| {
+            queue.push_back(parked);
+            Ok(())
+        },
+    )
 }
 
 #[cfg(feature = "unicorn")]
-fn complete_first_slice_child_exit(
+fn complete_first_slice_child_exit<Q: PendingLaunchParentQueue>(
     child: &mut UnicornMips,
     launch: &crate::ce::kernel::PendingProcessLaunch,
     launch_birth: crate::ce::object::ProcessBirthKey,
     kernel: &mut CeKernel,
     framebuffer: &mut dyn Framebuffer,
     exit_code: u32,
-    parent_queue: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    parent_queue: &mut Q,
 ) -> Result<bool> {
     let Some(canonical_primary) = kernel.handles.process_primary_thread_birth(launch_birth) else {
         return Err(Error::HostExitAuthorityRecoveryRequired {
@@ -21142,36 +21337,40 @@ fn complete_first_slice_child_exit(
     )?;
     // Hold a needed publication slot and its capacity across Kernel
     // completion; a child without survivors does not borrow the parent queue.
-    let mut parent_queue = if survivor_plan.output_len == 0 {
-        None
-    } else {
-        let mut queue = parent_queue.try_borrow_mut().map_err(|_| {
-            Error::HostExitAuthorityRecoveryRequired {
-                reason: "first-slice exit has no exclusive parent CPU queue",
-            }
-        })?;
-        queue
-            .try_reserve(survivor_plan.output_len)
-            .map_err(|_| Error::Backend("reserve first-slice exit survivor queue".to_owned()))?;
-        Some(queue)
-    };
-
-    let completed = kernel.try_mark_process_launch_exited_with_framebuffer(
-        launch,
-        exit_code,
-        Some(&mut *framebuffer),
-    )?;
-    if completed {
-        survivor_plan.apply(&mut child.parked_child_processes);
-        if let Some(queue) = parent_queue.as_mut() {
-            while let Some(survivor) = child.parked_child_processes.pop_front() {
-                queue.push_back(survivor);
-            }
-        } else {
+    if survivor_plan.output_len == 0 {
+        let completed = kernel.try_mark_process_launch_exited_with_framebuffer(
+            launch,
+            exit_code,
+            Some(&mut *framebuffer),
+        )?;
+        if completed {
+            survivor_plan.apply(&mut child.parked_child_processes);
             debug_assert!(child.parked_child_processes.is_empty());
         }
+        return Ok(completed);
     }
-    Ok(completed)
+    parent_queue.with_queue(
+        Error::HostExitAuthorityRecoveryRequired {
+            reason: "first-slice exit has no exclusive parent CPU queue",
+        },
+        |queue| {
+            queue.try_reserve(survivor_plan.output_len).map_err(|_| {
+                Error::Backend("reserve first-slice exit survivor queue".to_owned())
+            })?;
+            let completed = kernel.try_mark_process_launch_exited_with_framebuffer(
+                launch,
+                exit_code,
+                Some(&mut *framebuffer),
+            )?;
+            if completed {
+                survivor_plan.apply(&mut child.parked_child_processes);
+                while let Some(survivor) = child.parked_child_processes.pop_front() {
+                    queue.push_back(survivor);
+                }
+            }
+            Ok(completed)
+        },
+    )
 }
 
 #[cfg(feature = "unicorn")]
@@ -21235,6 +21434,10 @@ fn resolve_process_launch_path(
     kernel: &CeKernel,
     launch: &crate::ce::kernel::PendingProcessLaunch,
 ) -> Result<Option<std::path::PathBuf>> {
+    let event_origin = matches!(
+        launch.origin,
+        crate::ce::kernel::PendingLaunchOrigin::Event { .. }
+    );
     let raw_path = if let Some(application) = launch
         .application
         .as_deref()
@@ -21256,11 +21459,15 @@ fn resolve_process_launch_path(
     let separator = std::path::MAIN_SEPARATOR.to_string();
     let relative = raw_path.replace('\\', &separator);
     let relative_path = std::path::Path::new(&relative);
-    if let Some(current_directory) = launch
-        .current_directory
-        .as_deref()
-        .or_else(|| kernel.process_current_directory())
-    {
+    let current_directory = if event_origin {
+        launch.current_directory.as_deref()
+    } else {
+        launch
+            .current_directory
+            .as_deref()
+            .or_else(|| kernel.process_current_directory())
+    };
+    if let Some(current_directory) = current_directory {
         let guest_candidate = format!(
             "{}\\{}",
             current_directory.trim_end_matches(['\\', '/']),
@@ -21272,7 +21479,12 @@ fn resolve_process_launch_path(
             }
         }
     }
-    let Some(parent_exe) = kernel.process_module_host_path() else {
+    let parent_exe = if event_origin {
+        launch.resolution_base_host_path.as_ref()
+    } else {
+        kernel.process_module_host_path()
+    };
+    let Some(parent_exe) = parent_exe else {
         return Ok(None);
     };
     let Some(parent_dir) = parent_exe.parent() else {
@@ -54135,6 +54347,7 @@ mod guest_thread_stack_tests {
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
         let pixels_before = framebuffer.pixels().to_vec();
         let dirty_before = framebuffer.dirty_rects().to_vec();
+        let mut parent_queue_adapter = SharedPendingLaunchParentQueue(&parent_queue);
 
         assert!(complete_first_slice_child_exit(
             &mut child,
@@ -54143,7 +54356,7 @@ mod guest_thread_stack_tests {
             &mut fixture.kernel,
             &mut framebuffer,
             0x63,
-            &parent_queue,
+            &mut parent_queue_adapter,
         )?);
 
         assert!(
@@ -54243,6 +54456,7 @@ mod guest_thread_stack_tests {
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
         let pixels_before = framebuffer.pixels().to_vec();
         let dirty_before = framebuffer.dirty_rects().to_vec();
+        let mut parent_queue_adapter = SharedPendingLaunchParentQueue(&parent_queue);
 
         let error = complete_first_slice_child_exit(
             &mut child,
@@ -54251,7 +54465,7 @@ mod guest_thread_stack_tests {
             &mut fixture.kernel,
             &mut framebuffer,
             0x63,
-            &parent_queue,
+            &mut parent_queue_adapter,
         )
         .expect_err("mismatched saved foreign CPU owner must refuse before A exits");
         assert!(
@@ -54342,6 +54556,7 @@ mod guest_thread_stack_tests {
             .clone();
         let trace_before = fixture.kernel.recent_process_ops().to_vec();
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut parent_queue_adapter = SharedPendingLaunchParentQueue(&parent_queue);
 
         let error = complete_first_slice_child_exit(
             &mut child,
@@ -54350,7 +54565,7 @@ mod guest_thread_stack_tests {
             &mut fixture.kernel,
             &mut framebuffer,
             0x63,
-            &parent_queue,
+            &mut parent_queue_adapter,
         )
         .expect_err("held parent queue must refuse before A exits");
         assert!(matches!(
@@ -54371,7 +54586,7 @@ mod guest_thread_stack_tests {
         parked.process_handle = Some(fixture.exiting.process_handle);
         parked.thread_handle = Some(fixture.exiting.thread_handle);
         parked.process_state.process_id = fixture.exiting.process_id;
-        let error = try_publish_parked_child(&parent_queue, parked)
+        let error = try_publish_parked_child(&mut parent_queue_adapter, parked)
             .expect_err("held parent queue must return a terminal error without panicking");
         assert!(matches!(
             &error,
@@ -73081,6 +73296,16 @@ mod unicorn_tests {
         bytes
     }
 
+    fn tiny_mips_event_has_occurred_then_spin_pe() -> Vec<u8> {
+        let mut bytes = tiny_mips_create_process_then_spin_pe();
+        let event_ordinal = crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED;
+        write_vec_u32(&mut bytes, 0x450, 0x8000_0000 | event_ordinal);
+        write_vec_u32(&mut bytes, 0x470, 0x8000_0000 | event_ordinal);
+        write_vec_u32(&mut bytes, 0x200 + 2 * 4, 0x2404_0002); // addiu a0,zero,2
+        write_vec_u32(&mut bytes, 0x200 + 3 * 4, 0); // a1 remains NULL
+        bytes
+    }
+
     fn tiny_mips_direct_pseudo_exit_pe() -> Vec<u8> {
         let mut bytes = tiny_mips_spinner_pe();
         for (index, word) in [
@@ -81582,19 +81807,30 @@ mod unicorn_tests {
         kernel: &mut crate::ce::kernel::CeKernel,
         application: &str,
     ) -> crate::Result<crate::ce::kernel::PendingProcessLaunch> {
-        use crate::ce::coredll::{CoredllDispatch, CoredllExportTable, CoredllValue};
+        use crate::ce::coredll::{
+            CoredllDispatch, CoredllExportTable, CoredllRawContext, CoredllValue,
+        };
 
         kernel.schedule_app_at_event(application.to_owned(), 2);
+        let caller_birth = kernel
+            .live_thread_birth_key_by_id(super::MAIN_GUEST_THREAD_ID)
+            .expect("canonical event publisher birth");
         let mut raw_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|error| Error::Backend(format!("event fixture native owner: {error:?}")))?;
         let mut memory = super::UnicornGuestMemory::new(&mut raw_uc);
-        let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
-            kernel,
-            &mut memory,
-            super::MAIN_GUEST_THREAD_ID,
-            crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED,
-            [2, 0],
-        );
+        let result = CoredllExportTable::default()
+            .dispatch_raw_ordinal_with_framebuffer_and_context(
+                kernel,
+                &mut memory,
+                None,
+                CoredllRawContext {
+                    thread_id: super::MAIN_GUEST_THREAD_ID,
+                    caller_birth: Some(caller_birth),
+                    ..Default::default()
+                },
+                crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED,
+                [2, 0],
+            );
         assert!(matches!(
             result,
             CoredllDispatch::Returned {
@@ -81607,6 +81843,256 @@ mod unicorn_tests {
         let event_launch = launches[0].clone();
         kernel.restore_pending_process_launches(launches);
         Ok(event_launch)
+    }
+
+    #[test]
+    fn guest_event_notification_eventually_admits_without_create_process() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_event_has_occurred_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("event.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        kernel.schedule_app_at_event("event.exe".to_owned(), 2);
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        assert!(matches!(
+            image.imports[0].imports[0].import,
+            crate::pe::ImportBy::Ordinal(ordinal)
+                if u32::from(ordinal) == crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED
+        ));
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        let (event_handle, event_thread_handle, event_pid) = {
+            let queued: Vec<_> = kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .collect();
+            assert_eq!(queued.len(), 1, "one guest event notification launch");
+            (
+                queued[0].process_handle.expect("event process handle"),
+                queued[0]
+                    .thread_handle
+                    .expect("event primary thread handle"),
+                queued[0].process_id.expect("event process ID"),
+            )
+        };
+        let event_birth = kernel
+            .handles
+            .process_birth_key_for_handle(event_handle)
+            .expect("original event process birth");
+        let event_thread_birth = kernel
+            .handles
+            .thread_birth_key_for_handle(event_thread_handle)
+            .expect("original event primary thread birth");
+        assert_eq!(event_birth.process_id(), event_pid);
+        assert_eq!(
+            kernel.handles.process_primary_thread_birth(event_birth),
+            Some(event_thread_birth)
+        );
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(
+            kernel.process_exit_code(event_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+        assert_eq!(kernel.is_wait_ready(event_handle, 1), Some(false));
+
+        // Offer one neutral host turn after the closed parent slice. The
+        // notification must not need a later CreateProcessW import.
+        assert!(cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        )?);
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        for _ in 0..2 {
+            let next = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+                &mut custody,
+            );
+            next.result?;
+        }
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| {
+                    record.op == "CreateProcessResolved" && record.process_id == Some(event_pid)
+                })
+                .count(),
+            1,
+            "event E must be admitted without a later CreateProcessW"
+        );
+        let event_owners: Vec<_> = cpu
+            .owned_process_launch
+            .iter()
+            .chain(
+                cpu.parked_child_processes
+                    .iter()
+                    .filter_map(|parked| parked.cpu.owned_process_launch.as_ref()),
+            )
+            .filter(|launch| launch.process_birth == Some(event_birth))
+            .collect();
+        assert_eq!(event_owners.len(), 1, "one original event CPU owner");
+        assert_eq!(
+            event_owners[0].primary_thread_birth,
+            Some(event_thread_birth)
+        );
+        assert_eq!(kernel.pending_process_launch_for_birth(event_birth), None);
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            1,
+            "the guest has no later CreateProcessW call"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn guest_event_notification_services_two_original_births_in_fifo_order() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_event_has_occurred_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("a-event.exe"), tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("b-event.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        // CE's event registry enumerates normalized app-name keys, not
+        // registration order. One guest import publishes both original births.
+        kernel.schedule_app_at_event("b-event.exe".to_owned(), 2);
+        kernel.schedule_app_at_event("a-event.exe".to_owned(), 2);
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let limits = super::UnicornRunLimits {
+            instruction_limit: 128,
+            wall_clock_limit_ms: 500,
+            stop_pc: None,
+            live_pump: false,
+        };
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        let queued: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessWQueued")
+            .map(|record| {
+                (
+                    record.application.clone().expect("event application"),
+                    record.process_handle.expect("event process handle"),
+                    record.process_id.expect("event process ID"),
+                )
+            })
+            .collect();
+        assert_eq!(queued.len(), 2, "one guest event published two launches");
+        assert_eq!(queued[0].0, "a-event.exe");
+        assert_eq!(queued[1].0, "b-event.exe");
+        let first_birth = kernel
+            .handles
+            .process_birth_key_for_handle(queued[0].1)
+            .expect("first original event birth");
+        let second_birth = kernel
+            .handles
+            .process_birth_key_for_handle(queued[1].1)
+            .expect("second original event birth");
+        assert_eq!(first_birth.process_id(), queued[0].2);
+        assert_eq!(second_birth.process_id(), queued[1].2);
+        assert_ne!(first_birth, second_birth);
+        assert!(
+            kernel
+                .pending_process_launch_for_birth(first_birth)
+                .is_some()
+        );
+        assert!(
+            kernel
+                .pending_process_launch_for_birth(second_birth)
+                .is_some()
+        );
+
+        assert!(cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        )?);
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(kernel.pending_process_launch_for_birth(first_birth), None);
+        assert!(
+            kernel
+                .pending_process_launch_for_birth(second_birth)
+                .is_some()
+        );
+        let resolved_after_first: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessResolved")
+            .map(|record| record.process_id.expect("resolved event PID"))
+            .collect();
+        assert_eq!(resolved_after_first, vec![queued[0].2]);
+
+        assert!(cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        )?);
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        assert_eq!(kernel.pending_process_launch_for_birth(second_birth), None);
+        assert!(!cpu.service_one_event_launch_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            limits,
+            &mut custody,
+        )?);
+        let resolved: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessResolved")
+            .map(|record| record.process_id.expect("resolved event PID"))
+            .collect();
+        assert_eq!(resolved, vec![queued[0].2, queued[1].2]);
+        Ok(())
     }
 
     #[test]
