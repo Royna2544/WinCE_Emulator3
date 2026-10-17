@@ -11847,7 +11847,9 @@ impl UnicornMips {
         // modes. The child is loaded after this native attempt closes but
         // before the parent executes another guest instruction; this also
         // prevents an in-hook child run through raw Kernel/framebuffer aliases.
-        let deferred_process_launch = Rc::new(Cell::new(false));
+        let deferred_process_launch = Rc::new(Cell::new(
+            None::<crate::ce::coredll::PendingLaunchPublication>,
+        ));
         let deferred_process_launch_hook = Rc::clone(&deferred_process_launch);
         let pseudo_self_exit_intent = Rc::new(Cell::new(None::<StoppedPseudoSelfExit>));
         let pseudo_self_exit_intent_hook = Rc::clone(&pseudo_self_exit_intent);
@@ -14045,11 +14047,22 @@ impl UnicornMips {
                         result,
                     );
                 }
-                let successful_create_process = trap.as_ref().is_some_and(|trap| {
-                    trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
-                        && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
-                        && result != 0
-                });
+                let launch_publication = match checked_deferred_launch_publication(
+                    trap.as_ref().map(|trap| trap.module_kind),
+                    trap.as_ref().and_then(|trap| trap.ordinal),
+                    result,
+                    import_return.publication,
+                    caller_birth,
+                    native_owner_birth,
+                    unsafe { &*kernel_ptr },
+                ) {
+                    Ok(publication) => publication,
+                    Err(error) => {
+                        *immediate_process_sync_error_hook.borrow_mut() = Some(error);
+                        let _ = memory.uc.emu_stop();
+                        return;
+                    }
+                };
                 if let Some(trap) = trap.as_ref() {
                     let trace_import =
                         should_trace_import_by_default(trap) || import_trace_all_enabled;
@@ -14225,32 +14238,32 @@ impl UnicornMips {
                     let _ = memory.uc.emu_stop();
                     return;
                 }
-                // CreateProcess has published the child's handle and output
-                // words, but the parent must not execute its next guest
-                // instruction before child loading finishes. End this native
-                // attempt at the import return; both run modes use the
-                // post-native launch and file-view synchronization path.
+                // The exact CreateProcessW or eligible direct-Shell producer
+                // has published one child, but the parent must not execute its
+                // next guest instruction before that child's loader resolves.
+                // End the native attempt and carry this producer's witness to
+                // the post-native claim; older Event/sibling entries stay put.
                 // In particular, no child run may borrow Kernel/framebuffer
                 // from this parent import callback's raw hook pointers.
-                if successful_create_process {
+                if let Some(publication) = launch_publication {
                     let stop = (|| -> Result<()> {
                         if raw_caller_pc == 0 {
                             return Err(Error::Backend(
-                                "CreateProcessW has no nonzero import return PC".to_owned(),
+                                "witnessed child launch has no nonzero import return PC".to_owned(),
                             ));
                         }
                         memory
                             .uc
                             .reg_write(RegisterMIPS::PC, u64::from(raw_caller_pc))
                             .map_err(|err| Error::Backend(format!(
-                                "stage CreateProcessW return PC: {err:?}"
+                                "stage witnessed child launch return PC: {err:?}"
                             )))?;
                         memory.uc.emu_stop().map_err(|err| {
-                            Error::Backend(format!("stop CreateProcessW native attempt: {err:?}"))
+                            Error::Backend(format!("stop witnessed child-launch native attempt: {err:?}"))
                         })
                     })();
                     match stop {
-                        Ok(()) => deferred_process_launch_hook.set(true),
+                        Ok(()) => deferred_process_launch_hook.set(Some(publication)),
                         Err(error) => {
                             *immediate_process_sync_error_hook.borrow_mut() = Some(error);
                             let _ = memory.uc.emu_stop();
@@ -15144,7 +15157,7 @@ impl UnicornMips {
         let mut deferred_quarantined_child_fault = false;
         let mut deferred_view_sync_error = None;
         #[cfg(test)]
-        if deferred_process_launch.get()
+        if deferred_process_launch.get().is_some()
             && self.test_rewrite_selected_context_before_deferred_launch
         {
             // Test-only reentrant same-birth metadata write after A stops.
@@ -15159,7 +15172,7 @@ impl UnicornMips {
             && native_hook_control_error.borrow().is_none()
             && immediate_process_sync_failure.is_none()
             && scheduler_block_access_failure.is_none()
-            && deferred_process_launch.get()
+            && deferred_process_launch.get().is_some()
             && pseudo_self_exit_intent.get().is_none()
         {
             let preflight = preflight_deferred_process_launch_context(
@@ -15173,10 +15186,15 @@ impl UnicornMips {
             deferred_launch_preflight_failed = preflight.is_err();
             deferred_launch_error = preflight
                 .and_then(|_| {
-                    // This is still the existing aggregate queue drain. The
-                    // parent stamp does not attribute older event/shell launches
-                    // to this CreateProcessW caller.
-                    run_pending_process_launches_with_custody(
+                    let publication = deferred_process_launch.get().ok_or_else(|| {
+                        Error::Backend(
+                            "deferred child lost its attempt-local publication witness".to_owned(),
+                        )
+                    })?;
+                    // The producer's exact publication is the only child
+                    // eligible under this stopped native caller. Do not infer
+                    // a batch from older queue entries or the return Boolean.
+                    run_witnessed_pending_process_launch_with_custody(
                         &mut uc,
                         kernel,
                         native_owner_pid,
@@ -15187,10 +15205,7 @@ impl UnicornMips {
                         &parked_child_processes,
                         custody.as_deref_mut(),
                         &mut deferred_quarantined_child_fault,
-                        #[cfg(test)]
-                        None,
-                        #[cfg(test)]
-                        None,
+                        publication,
                     )
                 })
                 .err();
@@ -20596,6 +20611,58 @@ fn preflight_deferred_process_launch_context(
 }
 
 #[cfg(feature = "unicorn")]
+fn checked_deferred_launch_publication(
+    module: Option<crate::emulator::imports::ImportModuleKind>,
+    ordinal: Option<u32>,
+    result: u32,
+    publication: Option<crate::ce::coredll::PendingLaunchPublication>,
+    caller_birth: Option<crate::ce::object::ThreadBirthKey>,
+    owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+    kernel: &CeKernel,
+) -> Result<Option<crate::ce::coredll::PendingLaunchPublication>> {
+    use crate::ce::coredll::PendingLaunchProducerKind;
+    use crate::emulator::imports::ImportModuleKind;
+
+    let is_create_process = module == Some(ImportModuleKind::Coredll)
+        && ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W);
+    let is_direct_shell = module == Some(ImportModuleKind::Coredll)
+        && ordinal == Some(crate::ce::coredll_ordinals::ORD_SHELL_EXECUTE_EX);
+    if is_create_process && result != 0 && publication.is_none() {
+        return Err(Error::Backend(
+            "CreateProcessW returned success without its exact publication witness".to_owned(),
+        ));
+    }
+    let Some(publication) = publication else {
+        return Ok(None);
+    };
+    if result == 0
+        || !matches!(
+            (publication.kind, is_create_process, is_direct_shell),
+            (PendingLaunchProducerKind::CreateProcess, true, false)
+                | (PendingLaunchProducerKind::DirectShell, false, true)
+        )
+    {
+        return Err(Error::Backend(
+            "native import publication witness disagrees with its return or route".to_owned(),
+        ));
+    }
+    let (Some(caller), Some(owner)) = (caller_birth, owner_birth) else {
+        return Err(Error::Backend(
+            "native launch publication has no exact caller or owner birth".to_owned(),
+        ));
+    };
+    if publication.caller_birth != Some(caller)
+        || publication.caller_process_birth != Some(owner)
+        || kernel.checked_guest_process_caller_for_birth(caller) != Some(owner)
+    {
+        return Err(Error::Backend(
+            "native launch publication lost its exact producer caller".to_owned(),
+        ));
+    }
+    Ok(Some(publication))
+}
+
+#[cfg(feature = "unicorn")]
 impl UnicornMips {
     /// Offer one exact event launch at a machine-owned host turn. The previous
     /// native slice has already synchronized its file views and closed its
@@ -20796,6 +20863,46 @@ fn run_pending_process_launches_with_custody<D>(
         launch_observer,
         #[cfg(test)]
         post_admission_observer,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn run_witnessed_pending_process_launch_with_custody<D>(
+    parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    parent_owner_pid: u32,
+    sealed_host_write_guard: &SealedHostWriteGuard,
+    framebuffer: &mut dyn Framebuffer,
+    limits: UnicornRunLimits,
+    dll_search_dirs: &[std::path::PathBuf],
+    parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    custody: Option<&mut CpuCustody>,
+    quarantined_child_fault: &mut bool,
+    publication: crate::ce::coredll::PendingLaunchPublication,
+) -> Result<()> {
+    let batch = kernel.reserve_pending_process_launch_witness(publication.locator)?;
+    let mut parent_queue = SharedPendingLaunchParentQueue(parked_child_processes);
+    run_pending_process_launch_batch_with_custody(
+        kernel,
+        framebuffer,
+        limits,
+        dll_search_dirs,
+        &mut parent_queue,
+        custody,
+        quarantined_child_fault,
+        batch,
+        |kernel| {
+            sync_file_mapping_views_from_unicorn_guarded(
+                parent_uc,
+                kernel,
+                parent_owner_pid,
+                sealed_host_write_guard,
+            )
+        },
+        #[cfg(test)]
+        None,
+        #[cfg(test)]
+        None,
     )
 }
 
@@ -82419,7 +82526,7 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn deferred_tail_drains_preexisting_event_launch_with_create_process_launch()
+    fn deferred_create_process_claims_only_its_child_and_leaves_older_event_queued()
     -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();
         let _cleanup = TestDirectoryCleanup(test_root.clone());
@@ -82459,10 +82566,16 @@ mod unicorn_tests {
             &super::AttemptObservation::Value(entry + 18 * 4)
         );
         assert_eq!(first.report.end_process_birth(), Some(parent_birth));
-        assert!(!kernel.has_pending_process_launches());
-        // The normal scheduler may select E, B or A after both children are
-        // admitted. Count original CPU owners across selected and parked slots,
-        // not only their final queue positions.
+        assert_eq!(
+            kernel.pending_process_launch_for_birth(event_birth),
+            Some(&event),
+            "A's CreateProcessW must not claim the older notification birth"
+        );
+        assert!(kernel.has_pending_process_launches());
+        assert!(kernel.handles.process_execution_live_by_birth(event_birth));
+        assert_eq!(kernel.is_wait_ready(event.process_handle, 1), Some(false));
+        // Rotation may select B or A after B is admitted. Count original CPU
+        // owners across selected and parked slots rather than their positions.
         let owned: Vec<_> = cpu
             .owned_process_launch
             .iter()
@@ -82477,7 +82590,7 @@ mod unicorn_tests {
             .copied()
             .filter(|launch| launch.process_birth == Some(event_birth))
             .collect();
-        assert_eq!(event_owned, [&event]);
+        assert!(event_owned.is_empty(), "E has not been admitted under A");
         let b_owned: Vec<_> = owned
             .iter()
             .copied()
@@ -82487,31 +82600,23 @@ mod unicorn_tests {
         let b = b_owned[0];
         assert_ne!(b.process_birth, Some(event_birth));
         let ops = kernel.recent_process_ops();
-        let event_resolved = ops
-            .iter()
-            .position(|record| {
-                record.op == "CreateProcessResolved" && record.process_id == Some(event.process_id)
-            })
-            .expect("older event launch resolved");
-        let b_resolved = ops
-            .iter()
-            .position(|record| {
-                record.op == "CreateProcessResolved" && record.process_id == Some(b.process_id)
-            })
-            .expect("later CreateProcessW launch resolved");
+        assert!(!ops.iter().any(|record| {
+            record.op == "CreateProcessResolved" && record.process_id == Some(event.process_id)
+        }));
         assert!(
-            event_resolved < b_resolved,
-            "aggregate drain keeps FIFO order"
+            ops.iter().any(|record| {
+                record.op == "CreateProcessResolved" && record.process_id == Some(b.process_id)
+            }),
+            "only the CreateProcessW birth is resolved in A's handoff"
         );
-        for launch in [&event, b] {
-            let birth = launch.process_birth.expect("exact queued birth");
-            assert!(kernel.handles.process_execution_live_by_birth(birth));
-            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
-            for op in ["CreateProcessResolved", "CreateProcessChildParked"] {
-                assert!(kernel.recent_process_ops().iter().any(|record| {
-                    record.op == op && record.process_id == Some(launch.process_id)
-                }));
-            }
+        let b_birth = b.process_birth.expect("exact CreateProcessW birth");
+        assert!(kernel.handles.process_execution_live_by_birth(b_birth));
+        assert_eq!(kernel.is_wait_ready(b.process_handle, 1), Some(false));
+        for op in ["CreateProcessResolved", "CreateProcessChildParked"] {
+            assert!(
+                ops.iter()
+                    .any(|record| { record.op == op && record.process_id == Some(b.process_id) })
+            );
         }
         assert!(!custody.has_any_custody());
         Ok(())

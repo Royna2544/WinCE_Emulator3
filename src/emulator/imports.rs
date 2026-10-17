@@ -4,7 +4,7 @@ use crate::{
     ce::{
         coredll::{
             CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllRawContext,
-            CoredllValue,
+            CoredllValue, PendingLaunchPublication,
         },
         kernel::CeKernel,
         ole,
@@ -48,6 +48,9 @@ pub struct ImportTrapTable {
 pub struct ImportTrapReturn {
     pub v0: u32,
     pub v1: Option<u32>,
+    /// Exact child published by this import invocation, not inferred from
+    /// its Boolean return or the mutable Kernel queue after dispatch.
+    pub(crate) publication: Option<PendingLaunchPublication>,
 }
 
 impl ImportTrapReturn {
@@ -55,11 +58,16 @@ impl ImportTrapReturn {
         Self {
             v0: value,
             v1: None,
+            publication: None,
         }
     }
 
     fn v0_v1(v0: u32, v1: u32) -> Self {
-        Self { v0, v1: Some(v1) }
+        Self {
+            v0,
+            v1: Some(v1),
+            publication: None,
+        }
     }
 }
 
@@ -233,17 +241,18 @@ impl ImportTrapTable {
                 let Some(ordinal) = trap.ordinal else {
                     return None;
                 };
-                dispatch_return_to_registers(
-                    CoredllExportTable::static_ordinals()
-                        .dispatch_raw_ordinal_with_framebuffer_args_and_context(
-                            kernel,
-                            memory,
-                            framebuffer,
-                            context,
-                            ordinal,
-                            args,
-                        ),
-                )?
+                let (dispatch, publication) = CoredllExportTable::static_ordinals()
+                    .dispatch_raw_ordinal_with_framebuffer_args_and_context_with_publication(
+                        kernel,
+                        memory,
+                        framebuffer,
+                        context,
+                        ordinal,
+                        args,
+                    );
+                let mut registers = dispatch_return_to_registers(dispatch)?;
+                registers.publication = publication;
+                registers
             }
             ImportModuleKind::Winsock | ImportModuleKind::Ole | ImportModuleKind::Toolhelp => {
                 ImportTrapReturn::v0(dispatch_external_stub_to_u32(
@@ -7135,7 +7144,8 @@ mod tests {
             ),
             Some(ImportTrapReturn {
                 v0: 16,
-                v1: Some(0)
+                v1: Some(0),
+                publication: None,
             })
         );
         assert_eq!(
@@ -7148,7 +7158,8 @@ mod tests {
             ),
             Some(ImportTrapReturn {
                 v0: (-10_i64) as u32,
-                v1: Some(u32::MAX)
+                v1: Some(u32::MAX),
+                publication: None,
             })
         );
     }
