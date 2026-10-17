@@ -2845,6 +2845,24 @@ at **2,220/0/9 ignored**, each across 19 blocks with unchanged source stamps
 and closed-log hashes in the receipt. No production behavior, app or writable
 mount was changed.
 
+## Connected port and unbound child custody (2026-10-17, executed source/test gate)
+
+The [five-file seal, development lineage and closed-log hashes](../../evidence/stage3-connected-port-20261017/validation.receipt.md)
+record one connected `MachineKernelPort` with short fallible loans through
+native setup/tail, hooks and recursive child execution, plus preallocated
+whole-tree retention for production `Some(custody)` child returns. Ordinary B
+made a witnessed second real-MIPS slice. Nested A→B→C stopped on a
+C-root/B-parked mismatch before classification and retained that tree as
+`UnverifiedStopped`, not a runnable B slot. Early and late queue conflicts
+and a fixed-stack native fault retained admitted B. The final source passed
+19-block release **2,228/0/9 ignored** and no-default **1,564/0/2 ignored**,
+plus Unicorn-only and CI desktop feature checks, with unchanged five-file
+hashes. A stable-source a13 test failure expected an obsolete second
+post-child observation; the corrected a14 test passed direct retained-tree
+assertions. This is not exact thread/leaf authority, checked post-B restore,
+general CPU-slot migration, in-session recovery or live-iNavi acceptance.
+No writable mount was used.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

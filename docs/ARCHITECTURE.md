@@ -170,7 +170,9 @@ machine state must be callback-scoped, fallible and tied to the current leaf
 permit; reentrant or busy access fails closed rather than borrowing an
 already-loaned object through a raw pointer. A checked parent-suspension token
 resumes only after the child is classified and its resource is in custody.
-The current raw Kernel/framebuffer hook pointers do not yet meet this target.
+The bounded connected port removed the named raw Kernel/framebuffer hook
+aliases and uses short fallible loans, but its process-scoped check does not
+yet issue an exact executing-leaf permit or checked parent-suspension token.
 
 A generic `with_cpu` payload loan does not authorize execution. Backend entry
 requires an exact active-leaf run permit; a generation-checked slot-loan and

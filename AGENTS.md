@@ -339,8 +339,19 @@ remain unproved. Status/debug report retained mapped-blob
 bytes, not measured RSS. The accepted-exit witness relies on the same Kernel
 used by the production caller; it is not independently machine-lineaged.
 Runnable/parked custody, public-run bypass removal, general private VM/view
-cleanup, the callback-scoped Kernel/framebuffer port and live-app proof remain
-open. The
+cleanup and live-app proof remained open at that Cut 3a seal. The later
+[connected port/custody cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
+removes named raw Kernel/framebuffer aliases with short fallible loans, and
+preallocates an unbound whole-tree holding cell before production
+`Some(custody)` child execution. Its final source passed release-feature
+**2,228/0/9 ignored** and no-default **1,564/0/2 ignored** across 19 blocks,
+plus Unicorn-only and CI desktop feature checks. Ordinary B executes a
+second slice; nested C-with-B stops typed and retains the returned tree as
+`UnverifiedStopped`, with A's private continuation poisoned. Tested early
+and late queue conflicts and a native fault retain admitted B. This does not
+provide exact executing-thread/leaf authority, runnable recovery, checked
+post-B restoration, exit-event fencing or public `custody=None` coverage;
+it is not full Step 2/O-T7 or live-app acceptance. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
 passes 171 source/build-chain controls and 83 runner guards; it requires a
 future fresh output-hash-stamped rebuild and does not authorize a run.

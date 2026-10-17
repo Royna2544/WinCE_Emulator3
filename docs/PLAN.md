@@ -255,14 +255,15 @@ not an implemented owner. Stage its connected source cut in this order:
    next guest instruction, not required B user-code execution. None of these
    bounded cuts settles O-T7, the callback-scoped port, checked post-B
    restoration, runnable CPU custody or live iNavi acceptance.
-2. Settle the callback-scoped machine-state port before claiming a sound
-   lease. Successful `CreateProcessW` now stops A's native attempt at its
-   staged return PC and runs B post-native, rather than through A's raw hook
-   pointers. Other raw hook aliases remain with unproved reentry safety, and the post-native helper still
-   holds a mutable Kernel reference across B's run. Neither a directory nor
-   a mutable Kernel/framebuffer loan may span B's run. Replace or narrowly
-   audit the remaining raw `kernel_ptr`/framebuffer reentry with
-   fallible, leaf-permit-qualified short loans, checked selected-process
+2. Complete callback-scoped machine-state authority before claiming a sound
+   lease. Successful `CreateProcessW` stops A's native attempt at its staged
+   return PC and runs B post-native. The later
+   [connected port/custody cut](../evidence/stage3-connected-port-20261017/validation.receipt.md)
+   removes the named raw `kernel_ptr`/`framebuffer_ptr` aliases and holds no
+   mutable Kernel/framebuffer loan across `emu_start` or B's nested run in
+   the reviewed production path. Its process-scoped entry check and
+   callback-scoped short loans are not an independently issued exact
+   executing-thread/leaf permit. Add that authority, checked selected-process
    restoration and an exit-transaction event fence. A second guest-executable
    permit or a panicking `RefCell` conflict is a failed control, not a yield.
    A [test-only real-MIPS fixed-stack witness](../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
@@ -279,10 +280,10 @@ not an implemented owner. Stage its connected source cut in this order:
    and no natural nested call was exercised. The current single native entry
    runs the import and block hooks sequentially, so do not manufacture a
    shared-flag import/block gate. This does not promote Step 2; audit reachable
-   raw-alias and host-callback loans, then finish the connected whole-attempt
-   port and modal partial-effects gates.
+   raw-alias and host-callback loans. The connected cut later removes the
+   named aliases, but modal partial-effects and exact leaf authority remain.
 
-   The current-source Step 2 inventory below is for `unicorn.rs` SHA-256
+   The historical pre-port Step 2 inventory below is for `unicorn.rs` SHA-256
    `FB855EEB177A42335A7EAC4BC9CDB56FE987E016EDFBA4E6D8149E837D92E381`.
    Counting whole-identifier use-lines after declarations at `:10204–10205`
    and before tests gives **112 `kernel_ptr`** and **9 `framebuffer_ptr`**
@@ -294,7 +295,7 @@ not an implemented owner. Stage its connected source cut in this order:
    that adapter still dereferences its raw Kernel/framebuffer fields at
    `:251–268`. Auxiliary trampoline/trace hooks have no named-alias uses.
 
-   | Reentry boundary | Current state lifetime and scope |
+   | Reentry boundary | State lifetime and scope at the historical pre-port seal |
    | --- | --- |
    | Native callbacks | The public/private wrapper `unicorn.rs:9346–9692` retains mutable Kernel/framebuffer references through `emu_start` at `:15051–15057`; code, import and memory callbacks still use raw aliases. The scheduler-block adapter is callback-local only. |
    | Post-native child and Event service | The ordinary child helper `unicorn.rs:20925–21424` holds real mutable state through B's guest run at `:21147–21160`, after A's native return but before its owner finishes. The neutral host-loop and monitor Event paths (`main.rs:393–441`, `:2783–2825`) enter that helper from closed native turns and also pass mutable state through the child run. |
@@ -312,38 +313,39 @@ not an implemented owner. Stage its connected source cut in this order:
    refuses a second same-host-thread guest-native entry at the start of the
    private attempt, before saved-CPU setup. Its preseeded-busy real-MIPS
    control verifies typed refusal and same-CPU retry; complete sealed release
-   and no-default suites pass. This does not remove the outer mutable Kernel/
-   framebuffer references across `emu_start`, protect another host thread, or
-   give the machine an exact leaf permit. A child's post-native first-touch
-   fault is a reachable alias witness to carry through the connected port;
-   Cut 3a's narrow CPU quarantine does not pass that port or full Step 3.
+   and no-default suites pass. At that seal it did not remove the outer
+   mutable Kernel/framebuffer references across `emu_start`, protect another
+   host thread, or give the machine an exact leaf permit. The later connected
+   port removes the named raw aliases and spans a child's post-native
+   first-touch fault, but still does not confer exact leaf authority or full
+   Step 3. Cut 3a's narrow CPU quarantine alone never passed that port.
    A later [test-only nested A→B→C observation](../evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
    found C selected and occupying the returned child CPU slot at B's
    post-child boundary. A B-only restore preflight is therefore not a safe
    preparatory shortcut; checked restoration and rotated-subtree custody
    belong in O-T7's connected slot/leaf cut.
-   The [enabled follow-on census](../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
-   preserves A/B/C payloads but reaches typed `NoAttempt` on the next call
-   because B is selected with C's CPU. Keep this fail-closed control enabled;
-   O-T7 acceptance must turn it into an executed exact-owner guest slice,
-   not suppress the preflight.
+   The historical [follow-on census](../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+   preserved A/B/C payloads but reached typed `NoAttempt` on the next call
+   because B was selected with C's CPU. The connected cut stops earlier and
+   retains the returned C-root/B-parked tree as unverified; it still cannot
+   execute B's next slice. O-T7 acceptance must turn that into an executed
+   exact-owner guest slice, not suppress the preflight.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
-   specifies one borrowed Kernel/framebuffer port for the entire native
-   attempt, fallible short loans tied to exact attempt/leaf authority, and a
-   checked selected-process/parent-suspension token. Implement its connected
-   signature migration through the public run wrapper, private native attempt,
-   **all** code/block/import/memory hooks and post-native child helper; the
-   callback teardown must end before the outer mutable references are reused.
-   No Kernel/framebuffer guard may span `emu_start` or B's nested run. A
-   memory-fault-only wrapper leaves the other raw hook aliases and is not an
-   accepted production port. In the corresponding connected cuts, prove busy
-   port refusal on reachable hook paths, framebuffer callback conflicts where
-   reachable, exact selected-birth/PID reuse, exit-event fencing and hook
-   finish/abort lifetime. Any
-   callback conflict must produce a typed stopped attempt, never guest API
-   success, an ordinary guest unmapped fault or a scheduling yield. Independent
-   review and executed feature-appropriate suites gate the port; even a green
-   port leaves O-T7 CPU custody open.
+   specifies one borrowed Kernel/framebuffer port for the native attempt,
+   fallible short loans tied to exact attempt/leaf authority, and a checked
+   selected-process/parent-suspension token. The bounded connected cut now
+   wires a process-scoped port through the public run wrapper, private native
+   attempt, **all** code/block/import/memory hooks and post-native child
+   helper, with typed busy refusal and no Kernel/framebuffer guard across
+   `emu_start` or B's nested run. This is not the full proposed contract:
+   entry verifies selected process birth, not the final executing thread;
+   callback thread/slice token values are self-compared rather than issued by
+   an independent leaf owner. Prove framebuffer callback conflicts where
+   reachable, exact selected-birth/PID reuse, checked post-B restoration,
+   exit-event fencing and hook finish/abort lifetime. Any conflict must stop
+   with a typed terminal outcome, never guest API success or a scheduling
+   yield. Independent review and executed feature-appropriate suites support
+   this bounded cut; O-T7 runnable custody remains open.
 3. Admit boot and child CPU payloads into one machine-owned slot directory;
    stage this rather than converting every parked path at once. A narrow
    [Cut 3a quarantine](subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-bounded-source-test-gate)
@@ -368,12 +370,23 @@ not an implemented owner. Stage its connected source cut in this order:
    **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
    feature checks, with six matching source hashes. Natural reachability
    and general error-path closure remain unproved.
+   A later [connected source/test gate](../evidence/stage3-connected-port-20261017/validation.receipt.md)
+   preallocates an unbound deposit ticket and private whole-tree holding cell
+   before a `Some(custody)` child runs. Its ordinary B executes a second
+   real-MIPS slice; a nested C-root/B-parked mismatch and tested early/late
+   queue conflicts retain the original CPU tree as `UnverifiedStopped`, with
+   zero abandoned unbound trees in those controls. A fixed-stack native fault
+   also retains B. This is preservation, not a runnable B locator or checked
+   parent-suspension transfer; public `custody=None` and other classifier/exit
+   paths remain outside the gate. The bounded release/no-default suites pass
+   on the exact five-file seal, not the full Step 3 contract.
    Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
-   **2,183/0/9 ignored** is development-only. This cut cannot claim a sound machine
-   lease, raw-alias safety or general private VM/view cleanup. Move runnable
-   and parked CPU paths one connected family at a
-   time after that; add the leaf permit when the first runnable slot lands.
+   **2,183/0/9 ignored** is development-only. Cut 3a alone could not claim a
+   sound machine lease, raw-alias safety or general private VM/view cleanup.
+   The later port removes named raw aliases, but not the leaf permit or
+   runnable/parked slot ownership. Move those CPU paths one connected family
+   at a time; add the leaf permit when the first runnable slot lands.
    For those later connected cuts, review private stable per-slot cells with short directory borrowing and
    closure-scoped fallible payload loans. Gate backend entry on the exact
    active leaf permit, and forbid slot retirement/reuse while any loan or

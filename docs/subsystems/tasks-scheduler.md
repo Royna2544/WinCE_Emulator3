@@ -639,11 +639,14 @@ reentry checks rather than panicking `RefCell` borrows, and return every lease
 to custody on all typed errors. An exposed cloneable pointer to a slot would
 not itself confer execution authority.
 
-The slot representation alone does **not** make current child execution a
-sound whole-machine lease. `run_with_unicorn_attempt` still holds
-`&mut CeKernel` across native entry and gives hooks a raw `kernel_ptr`; after
-native return, `run_pending_process_launches` still passes a mutable Kernel
-reference into the child run. The connected cut needs a single-thread,
+The slot representation alone does **not** make child execution a sound
+whole-machine lease. At the pre-port proposal seal,
+`run_with_unicorn_attempt` held `&mut CeKernel` across native entry and gave
+hooks a raw `kernel_ptr`; after native return,
+`run_pending_process_launches` passed a mutable Kernel reference into the
+child run. The later bounded connected cut removes those named raw hook
+aliases and uses short loans, but does not supply the exact executable leaf.
+The full contract still needs a single-thread,
 callback-scoped
 `MachineKernelPort`: each fallible `try_with_kernel` loan is short, carries the
 current leaf/task authority, and ends before `emu_start`, a nested child run,
@@ -682,9 +685,10 @@ request alone is not completion. The accepted-exit witness carries birth only,
 so production trusts the same Kernel instance used for preflight/completion;
 it is not an independent machine-lineage proof. The leaf permit, runnable
 locators and public-run
-bypass removal belong to subsequent connected cuts. The callback-scoped
-Kernel/framebuffer port remains separate Step 2 work; this quarantine does
-not make the current raw aliases sound.
+bypass removal belong to subsequent connected cuts. At the Cut 3a seal, the
+callback-scoped Kernel/framebuffer port remained separate Step 2 work;
+quarantine alone did not make the raw aliases sound. The later connected
+gate removes the named aliases but not the leaf permit.
 
 Under D-003's fresh-engine default, the quarantined payload and its release
 obligations are:
@@ -747,6 +751,20 @@ Its identical-source loopback-enabled rerun passed.
 
 ##### Callback-scoped machine-state port cut (proposed, not implemented)
 
+This heading names the **full target contract** below, not the status of
+every bounded component. The later
+[connected source/test gate](../../evidence/stage3-connected-port-20261017/validation.receipt.md)
+implements a borrowed per-attempt port with a selected-process-birth entry
+check and short fallible Kernel/framebuffer loans through native setup/tail,
+all hook families and the production recursive child helper. It removes the
+named raw hook aliases. Its synthetic held-loan conflict, ordinary B second
+slice, nested stopped-tree retention, queue conflicts and native-fault
+controls pass on one sealed source. It does **not** issue an independently
+checked executing-thread/leaf permit, check post-B restoration or fence exit
+events. Public/direct-fixture `custody=None` and runnable recovery remain
+open. Subsequent "current" wording and the table below describe the earlier
+pre-port proposal/seals unless a later gate is named explicitly.
+
 The first connected port cut changes the *whole native attempt's* access
 boundary, not only the missing-page hook. A candidate `MachineKernelPort<'m>`
 borrows the one Kernel and framebuffer together for the duration of an
@@ -788,10 +806,10 @@ ignored fixture. Its preserved receipt remains evidence, but current source
 has no active ignored fixture and the runnable/parked custody bug remains
 open.
 
-The connected signature changes, shown as responsibilities rather than
-compiled Rust APIs, are:
+The original proposed signature changes, shown as historical responsibilities
+rather than a current API inventory, were:
 
-| Current entry | Required private boundary |
+| Entry at the pre-port proposal seal | Required private boundary |
 | --- | --- |
 | `run_until_import_trap_with_framebuffer_limits_report(&mut self, &mut CeKernel, &mut dyn Framebuffer, limits)` | Keep a compatibility outer entry temporarily, but construct one port and pass it to a private `run_until_import_trap_with_port(&mut self, &MachineKernelPort, &AttemptAuthority, limits)`. The caller cannot use its two mutable references again until native hooks have closed. |
 | `run_with_unicorn` and `run_with_unicorn_attempt` with long-lived mutable Kernel/framebuffer arguments | Accept that same port and captured attempt authority. All code, scoped-code, block, import, pre/post-dispatch and memory-fault callbacks borrow through it, including the scheduler-block wait-resume path. One callback adapter converts a loan failure into `emu_stop` plus the attempt's typed terminal error; callbacks whose native signature returns `bool` must not silently turn conflict into `false` without the error record. |
@@ -864,8 +882,9 @@ drain, but the stamp is not a post-B restoration token and does not bind a
 cloned Kernel to machine/checkpoint lineage. The candidate checks the live
 owner/caller separately; the stamp itself does not prove execution-live
 ownership. Direct mutation through public backing objects is not fully
-stamped. The connected whole-attempt port, exact parent selection
-restoration, leaf authority and exit event fence above remain open.
+stamped. The later bounded port handles named raw aliases, but full
+thread/leaf authority, exact parent selection restoration and the exit event
+fence above remain open.
 
 ##### Deferred-launch selected-context pre-admission (bounded source/test gate)
 
@@ -1087,7 +1106,8 @@ A pre-CPU exact-birth claim/return cut in Kernel's existing pending-launch
 queue can be independently correct before this port. The earlier
 selected-context pre-admission seal still admitted mixed E+B; P0 later added
 in-place claims, P1 a fair Event turn, and bounded P2 limits A's handoff to
-its exact B. None supplies the connected callback-scoped port. A
+its exact B. None of those cuts supplied the connected callback-scoped port;
+the later bounded connected gate does. A
 memory-fault-only port cut cannot
 make the normal attempt sound while other raw hooks and the caller's mutable
 references remain. Conversely, a complete port can establish machine-state
@@ -1100,9 +1120,10 @@ ordinary real-MIPS focused green Cut 3a replacement with non-runnable
 quarantine, but that narrow directory is not the proposed runnable slot/lease
 contract. The unconnected loan-cell foundation was retired from active
 source. The selected-context pre-admission check is a narrow production
-consumer, but no connected callback-scoped port, checked post-B selector
-token or exit event fence described here is used by production native
-attempts today.
+consumer. At that historical seal no connected callback-scoped port, checked
+post-B selector token or exit event fence was used by production native
+attempts. The later bounded port supplies only the first of those, without
+the full thread/leaf contract.
 
 The historical 2026-10-17 pre-deferral read-only callback inventory is for
 `unicorn.rs` SHA-256
@@ -1138,53 +1159,57 @@ restartable from the scalar PC. Port all callback families under one checked
 machine-state loan/leaf contract; use this first-touch witness as its positive
 fault control, not as proof of the port.
 
-The [current-source pointer delta audit](../../evidence/stage3-machine-port-inventory-20261017/findings.md)
+The [historical pre-port pointer delta audit](../../evidence/stage3-machine-port-inventory-20261017/findings.md)
 is separate from the historical 133/10 inventory above. On the later
 `unicorn.rs` source, the [scheduler-block fence](../../evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
 replaced that callback's 19 direct Kernel and two separate framebuffer raw
 dereferences with one `SchedulerBlockStateLease` unsafe adapter. Its guard
 spans this callback only; the executed real-MIPS test **preseeded** busy and
-did not trigger natural nested reentry. Code/import/memory hooks still hold
-raw aliases, the outer mutable references span `emu_start`, and post-native
-A-to-B child execution still lacks the checked shared leaf. Source order
+did not trigger natural nested reentry. At that seal, code/import/memory
+hooks still held raw aliases, the outer mutable references spanned
+`emu_start`, and post-native A-to-B child execution lacked the checked
+shared leaf. Source order
 permits a modal restore to publish pixels after consuming a wait before a
 hypothetical nested fault is observed; this gate did not execute that case.
 This is not a sound machine-state loan or Step 2 acceptance. A later
 [source call-chain finding](../../evidence/stage3-machine-port-inventory-20261017/findings.md#current-importscheduler-call-chain-finding)
-found no natural import↔scheduler-block callback overlap in the current
-attempt: the block hook and import hook run sequentially under the sole
-production native `emu_start` (now at `unicorn.rs:14796`), neither hook starts a
+found no natural import↔scheduler-block callback overlap in that attempt:
+the block hook and import hook ran sequentially under the sole production
+native `emu_start` (then at `unicorn.rs:14796`), neither hook started a
 nested guest run, and successful `CreateProcessW` defers its child until the
 parent native run returns. The vendored Unicorn
 [`uc_emu_start` implementation](../../vendor/unicorn-engine-sys/uc.c#L1117)
 marks nested count/stop state ambiguous and warns about incorrect JIT state
 at `uc.c:1117–1139`. Do not add a synthetic shared import/block gate as a
-surrogate for natural overlap. The outer long-lived mutable Kernel and
-framebuffer references, other raw hook aliases and post-native child loan
-remain open; sequential hooks alone do not prove a sound whole-attempt port.
+surrogate for natural overlap. At that seal the outer long-lived mutable
+Kernel/framebuffer references, other raw aliases and post-native child loan
+remained open; the later connected port removes those named aliases but still
+lacks exact executing-leaf authority.
 
 The subsequent [bounded native-entry precondition](../../evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
 now refuses a second guest-native entry on the same host thread at the start
 of the private attempt, before saved-CPU setup. Its preseeded-busy real-MIPS
 control verifies typed refusal and same-CPU retry, and the sealed broad
 suites pass. It is not a machine-owned leaf permit, does not exclude another
-host thread, and does not remove the outer Kernel/framebuffer loans or the
-post-native child helper's alias boundary. The proposed port and O-T7 slot
-contract remain unimplemented.
+host thread, and at its seal did not remove the outer Kernel/framebuffer
+loans or the post-native child helper's alias boundary. The later bounded
+port closes those named alias routes; the full port/leaf and O-T7 slot
+contracts remain unimplemented.
 
 At that historical source seal, non-live-pump `CreateProcessW` ran the child
 immediately from the import hook at `:13569–13579`; its HLE dispatch loan had
 ended, but `run_pending_process_launches(&mut CeKernel)` retained a mutable
-Kernel loan across the child run. The current cut removed that immediate raw
+Kernel loan across the child run. The later deferred-launch cut removed that immediate raw
 hook call. After a successful import, both modes now write the API result,
 stage the parent's nonzero return PC, stop the native attempt and run pending
 launches from the post-native path. Non-live normal rotation can then select
-the child before the parent resumes. This closes that one in-hook alias route,
-but the post-native child helper still holds `&mut CeKernel` across B's run and
-the other hook raw aliases remain. Wrapping the entire child call in a short-
-loan API would still retain the loan, not implement the proposed port. The
-callback-scoped machine-state port, checked CPU slots and live-pump later-slice
-custody gate remain open; no sound machine lease is claimed.
+the child before the parent resumes. At that intermediate seal this closed
+one in-hook alias route, but the post-native child helper still held
+`&mut CeKernel` across B's run and other hooks still used raw aliases.
+Wrapping the whole child call in a short loan would not have been sound. The
+later connected port removes those named aliases and no loan spans B's run;
+checked CPU slots, exact leaf authority and live-pump later-slice custody
+remain open. No sound whole-machine lease is claimed.
 
 `ProcessBirthKey` currently has no machine lineage, and the monitor's clone
 path copies `UnicornMips` and `CeKernel` independently. Until one checkpoint
