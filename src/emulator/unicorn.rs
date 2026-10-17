@@ -15157,6 +15157,8 @@ impl UnicornMips {
                         &mut deferred_quarantined_child_fault,
                         #[cfg(test)]
                         None,
+                        #[cfg(test)]
+                        None,
                     )
                 })
                 .err();
@@ -20586,6 +20588,7 @@ fn run_pending_process_launches<D>(
         None,
         &mut quarantined_child_fault,
         None,
+        None,
     )
 }
 
@@ -20603,6 +20606,9 @@ fn run_pending_process_launches_with_custody<D>(
     quarantined_child_fault: &mut bool,
     #[cfg(test)] launch_observer: Option<
         &dyn Fn(&CeKernel, &crate::ce::kernel::PendingProcessLaunch),
+    >,
+    #[cfg(test)] post_admission_observer: Option<
+        &dyn Fn(&mut CeKernel, &crate::ce::kernel::PendingProcessLaunch),
     >,
 ) -> Result<()> {
     let Some(batch) = kernel.reserve_pending_process_launch_batch()? else {
@@ -20807,6 +20813,13 @@ fn run_pending_process_launches_with_custody<D>(
                 kernel.consume_pending_process_launch_claim(claim)?;
                 active_claim = None;
                 child_admitted = true;
+                #[cfg(test)]
+                if let Some(observer) = post_admission_observer {
+                    // A test may corrupt the canonical primary only after a
+                    // valid exact-birth claim and CPU admission. Production
+                    // has no hook at this boundary.
+                    observer(kernel, &launch);
+                }
                 let execution = if let Some(directory) = custody.as_deref_mut() {
                     child.run_until_import_trap_with_framebuffer_limits_report_with_custody(
                         kernel,
@@ -78980,6 +78993,8 @@ mod unicorn_tests {
         let later_birth = later.process_birth.expect("later birth");
         let observed_event = std::cell::Cell::new(false);
         let observed_child = std::cell::Cell::new(false);
+        let observed_admitted_event = std::cell::Cell::new(false);
+        let observed_admitted_child = std::cell::Cell::new(false);
         let observer =
             |kernel: &CeKernel, claimed: &crate::ce::kernel::PendingProcessLaunch| match claimed
                 .process_birth
@@ -79023,6 +79038,40 @@ mod unicorn_tests {
                 }
                 _ => {}
             };
+        let admission_observer =
+            |kernel: &mut CeKernel, admitted: &crate::ce::kernel::PendingProcessLaunch| {
+                match admitted.process_birth {
+                    Some(birth) if birth == event_birth => {
+                        assert!(!observed_admitted_event.replace(true));
+                        assert_eq!(kernel.pending_process_launch_for_birth(event_birth), None);
+                        assert_eq!(
+                            kernel.pending_process_launch_for_birth(child_birth),
+                            Some(&child)
+                        );
+                        assert_eq!(
+                            kernel.pending_process_launch_for_birth(later_birth),
+                            Some(&later)
+                        );
+                        assert!(
+                            kernel.has_pending_process_launches(),
+                            "B and C remain Kernel-visible just before E's native slice"
+                        );
+                    }
+                    Some(birth) if birth == child_birth => {
+                        assert!(!observed_admitted_child.replace(true));
+                        assert_eq!(kernel.pending_process_launch_for_birth(child_birth), None);
+                        assert_eq!(
+                            kernel.pending_process_launch_for_birth(later_birth),
+                            Some(&later)
+                        );
+                        assert!(
+                            kernel.has_pending_process_launches(),
+                            "C remains Kernel-visible just before B's native slice"
+                        );
+                    }
+                    _ => {}
+                }
+            };
         let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
         let guard = super::SealedHostWriteGuard::default();
@@ -79046,9 +79095,166 @@ mod unicorn_tests {
             None,
             &mut quarantined_child_fault,
             Some(&observer),
+            Some(&admission_observer),
         )?;
         assert!(observed_event.get() && observed_child.get());
+        assert!(observed_admitted_event.get() && observed_admitted_child.get());
         assert!(!quarantined_child_fault);
+        Ok(())
+    }
+
+    #[test]
+    fn pending_launch_claim_refuses_missing_or_reused_primary_before_cpu() -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        for name in ["stale-primary.exe", "sibling.exe"] {
+            std::fs::write(test_root.join(name), tiny_mips_spinner_pe()).unwrap();
+        }
+
+        for reused_tid in [false, true] {
+            let mut kernel = phase1_kernel("parent.exe")?;
+            kernel.set_process_module_host_path(parent_path.clone());
+            let parent_pid = kernel.current_process_id();
+            let stale = kernel.queue_process_launch(Some("stale-primary.exe".to_owned()), None);
+            let sibling = kernel.queue_process_launch(Some("sibling.exe".to_owned()), None);
+            let owner = stale.process_birth.expect("published process birth");
+            let sibling_birth = sibling.process_birth.expect("published sibling birth");
+            let primary = stale.primary_thread_birth.expect("published primary birth");
+            if reused_tid {
+                assert!(kernel.mark_guest_thread_exited(stale.thread_handle, 0x31));
+                assert!(kernel.close_handle(stale.thread_handle)?);
+                let worker_handle = kernel.handles.try_create_thread_in_birth(
+                    owner,
+                    stale.thread_id,
+                    0,
+                    0,
+                    false,
+                )?;
+                assert_ne!(
+                    kernel.handles.thread_birth_key_for_handle(worker_handle),
+                    Some(primary)
+                );
+            } else {
+                assert!(
+                    kernel
+                        .handles
+                        .discard_unpublished_thread(stale.thread_handle, stale.thread_id)
+                );
+                assert_eq!(kernel.handles.process_primary_thread_birth(owner), None);
+            }
+            let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+                .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+            let guard = super::SealedHostWriteGuard::default();
+            let parked = Rc::new(RefCell::new(VecDeque::new()));
+            let mut framebuffer = VirtualFramebuffer::default_primary()?;
+            super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
+            let error = super::run_pending_process_launches(
+                &mut parent_uc,
+                &mut kernel,
+                parent_pid,
+                &guard,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &[],
+                &parked,
+            )
+            .expect_err("an invalid original primary cannot claim a child CPU");
+            assert!(
+                matches!(&error, Error::Backend(detail) if detail.contains("canonical process or primary thread birth is stale")),
+                "missing/reused primary must fail at exact claim, not later: {error}"
+            );
+            assert_eq!(
+                super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take()),
+                None
+            );
+            assert!(parked.borrow().is_empty(), "no child CPU was admitted");
+            assert!(!kernel.recent_process_ops().iter().any(|record| {
+                record.process_id == Some(stale.process_id) && record.op == "CreateProcessResolved"
+            }));
+            for (launch, birth) in [(&stale, owner), (&sibling, sibling_birth)] {
+                assert!(kernel.handles.process_execution_live_by_birth(birth));
+                assert_eq!(
+                    kernel.process_exit_code(launch.process_handle),
+                    Some(crate::ce::kernel::STILL_ACTIVE)
+                );
+                assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+            }
+            assert_eq!(
+                kernel.take_pending_process_launches(),
+                vec![stale, sibling],
+                "a refused claim preserves the original queue order and births"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_pending_launch_batch_preserves_new_child_before_outer_siblings() -> crate::Result<()>
+    {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(
+            test_root.join("event.exe"),
+            tiny_mips_create_process_then_spin_pe(),
+        )
+        .unwrap();
+        for name in ["child.exe", "later.exe", "survivor.exe"] {
+            std::fs::write(test_root.join(name), tiny_mips_spinner_pe()).unwrap();
+        }
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path);
+        let parent_pid = kernel.current_process_id();
+        let event = kernel.queue_process_launch(Some("event.exe".to_owned()), None);
+        let child = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let later = kernel.queue_process_launch(Some("later.exe".to_owned()), None);
+        let mut parent_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("fixture native parent: {err:?}")))?;
+        let guard = super::SealedHostWriteGuard::default();
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+
+        super::run_pending_process_launches(
+            &mut parent_uc,
+            &mut kernel,
+            parent_pid,
+            &guard,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &[],
+            &parked,
+        )?;
+        let resolved: Vec<_> = kernel
+            .recent_process_ops()
+            .iter()
+            .filter(|record| record.op == "CreateProcessResolved")
+            .map(|record| record.process_id.expect("resolved child PID"))
+            .collect();
+        assert_eq!(resolved.len(), 4, "E, nested D, and outer B/C resolve once");
+        assert_eq!(resolved[0], event.process_id);
+        assert_eq!(resolved[2], child.process_id);
+        assert_eq!(resolved[3], later.process_id);
+        let nested_pid = resolved[1];
+        assert_ne!(nested_pid, event.process_id);
+        assert_ne!(nested_pid, child.process_id);
+        assert_ne!(nested_pid, later.process_id);
+        assert!(!kernel.has_pending_process_launches());
         Ok(())
     }
 
@@ -86892,54 +87098,58 @@ mod unicorn_tests {
         let primary = launch
             .primary_thread_birth
             .expect("canonical primary birth");
-        assert!(kernel.mark_guest_thread_exited(launch.thread_handle, 0x31));
-        assert_eq!(
-            kernel.guest_thread_exit_code(launch.thread_handle),
-            Some(0x31)
-        );
-        assert!(kernel.close_handle(launch.thread_handle)?);
-        assert!(!kernel.handles.contains_thread_birth(primary));
-
         // This is an intentionally synthetic stale/reuse safety state, not a
         // normal CE main-thread lifetime: a separate live worker makes a
         // whole-process exit visibly wrong, but this fixture does not give
-        // that worker an independently runnable CPU context.
+        // that worker an independently runnable CPU context. Create it only
+        // after the original launch passes its exact-birth admission gate.
         let survivor_tid = launch.thread_id.checked_add(1).expect("fixture worker TID");
-        let survivor_handle =
-            kernel
-                .handles
-                .try_create_thread_in_birth(owner, survivor_tid, 0, 0, false)?;
-        let survivor = kernel
-            .handles
-            .thread_birth_key_for_handle(survivor_handle)
-            .expect("independent live worker birth");
-        // The allocator normally advances; inject numeric reuse through the
-        // canonical birth API so the native child executes as a different Task.
-        let worker_handle =
-            kernel
-                .handles
-                .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)?;
-        let worker = kernel
-            .handles
-            .thread_birth_key_for_handle(worker_handle)
-            .expect("replacement worker birth");
-        assert_ne!(worker, primary);
-        assert_eq!(
-            kernel.handles.process_primary_thread_birth(owner),
-            Some(primary)
-        );
-        assert_eq!(
-            kernel.guest_thread_exit_code(survivor_handle),
-            Some(crate::ce::kernel::STILL_ACTIVE)
-        );
-
         let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
         let guard = super::SealedHostWriteGuard::default();
         let parked = Rc::new(RefCell::new(VecDeque::new()));
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let late_births = std::cell::Cell::new(None);
+        let post_admission =
+            |kernel: &mut CeKernel, admitted: &crate::ce::kernel::PendingProcessLaunch| {
+                assert_eq!(admitted, &launch);
+                assert!(late_births.get().is_none(), "one admitted child mutation");
+                assert_eq!(kernel.pending_process_launch_for_birth(owner), None);
+                assert!(kernel.mark_guest_thread_exited(launch.thread_handle, 0x31));
+                assert_eq!(
+                    kernel.guest_thread_exit_code(launch.thread_handle),
+                    Some(0x31)
+                );
+                assert!(kernel.close_handle(launch.thread_handle).unwrap());
+                assert!(!kernel.handles.contains_thread_birth(primary));
+                let survivor_handle = kernel
+                    .handles
+                    .try_create_thread_in_birth(owner, survivor_tid, 0, 0, false)
+                    .unwrap();
+                let survivor = kernel
+                    .handles
+                    .thread_birth_key_for_handle(survivor_handle)
+                    .expect("independent live worker birth");
+                // The allocator normally advances; inject numeric reuse
+                // through the canonical birth API after CPU admission.
+                let worker_handle = kernel
+                    .handles
+                    .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)
+                    .unwrap();
+                let worker = kernel
+                    .handles
+                    .thread_birth_key_for_handle(worker_handle)
+                    .expect("replacement worker birth");
+                assert_ne!(worker, primary);
+                assert_eq!(
+                    kernel.handles.process_primary_thread_birth(owner),
+                    Some(primary)
+                );
+                late_births.set(Some((survivor_handle, survivor, worker_handle, worker)));
+            };
+        let mut quarantined_child_fault = false;
         super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
-        let result = super::run_pending_process_launches(
+        let result = super::run_pending_process_launches_with_custody(
             &mut root_uc,
             &mut kernel,
             root_pid,
@@ -86953,6 +87163,17 @@ mod unicorn_tests {
             },
             &[],
             &parked,
+            None,
+            &mut quarantined_child_fault,
+            None,
+            Some(&post_admission),
+        );
+        let (survivor_handle, survivor, worker_handle, worker) =
+            late_births.get().expect("post-admission mutation ran once");
+        assert!(!quarantined_child_fault);
+        assert_eq!(
+            kernel.guest_thread_exit_code(survivor_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
         );
         let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
         assert_eq!(
@@ -87036,21 +87257,7 @@ mod unicorn_tests {
         // Synthetic interrupted-publish state: the launch still names the
         // original primary, but its unpublished alias/record was rolled back.
         // A same-TID worker can run; it cannot become process-exit authority.
-        assert!(
-            kernel
-                .handles
-                .discard_unpublished_thread(launch.thread_handle, launch.thread_id)
-        );
-        assert_eq!(kernel.handles.process_primary_thread_birth(owner), None);
-        let worker_handle =
-            kernel
-                .handles
-                .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)?;
-        let worker = kernel
-            .handles
-            .thread_birth_key_for_handle(worker_handle)
-            .expect("replacement worker birth");
-        assert_ne!(worker, original_primary);
+        // Inject this state after exact-birth child CPU admission.
 
         let mut root_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("fixture native root: {err:?}")))?;
@@ -87059,8 +87266,32 @@ mod unicorn_tests {
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
         let pixels_before = framebuffer.pixels().to_vec();
         let dirty_before = framebuffer.dirty_rects().to_vec();
+        let late_worker = std::cell::Cell::new(None);
+        let post_admission =
+            |kernel: &mut CeKernel, admitted: &crate::ce::kernel::PendingProcessLaunch| {
+                assert_eq!(admitted, &launch);
+                assert!(late_worker.get().is_none(), "one admitted child mutation");
+                assert_eq!(kernel.pending_process_launch_for_birth(owner), None);
+                assert!(
+                    kernel
+                        .handles
+                        .discard_unpublished_thread(launch.thread_handle, launch.thread_id)
+                );
+                assert_eq!(kernel.handles.process_primary_thread_birth(owner), None);
+                let worker_handle = kernel
+                    .handles
+                    .try_create_thread_in_birth(owner, launch.thread_id, 0, 0, false)
+                    .unwrap();
+                let worker = kernel
+                    .handles
+                    .thread_birth_key_for_handle(worker_handle)
+                    .expect("replacement worker birth");
+                assert_ne!(worker, original_primary);
+                late_worker.set(Some((worker_handle, worker)));
+            };
+        let mut quarantined_child_fault = false;
         super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.set(None));
-        let result = super::run_pending_process_launches(
+        let result = super::run_pending_process_launches_with_custody(
             &mut root_uc,
             &mut kernel,
             root_pid,
@@ -87074,7 +87305,13 @@ mod unicorn_tests {
             },
             &[],
             &parked,
+            None,
+            &mut quarantined_child_fault,
+            None,
+            Some(&post_admission),
         );
+        let (worker_handle, worker) = late_worker.get().expect("post-admission mutation ran once");
+        assert!(!quarantined_child_fault);
         let executed = super::TEST_NATIVE_EXIT_STUB_WITNESS.with(|witness| witness.take());
         assert_eq!(
             executed,
@@ -87168,6 +87405,7 @@ mod unicorn_tests {
             &parked,
             Some(&mut custody),
             &mut quarantined_child_fault,
+            None,
             None,
         )
         .expect_err("nested native entry must refuse B before its first slice");
