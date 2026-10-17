@@ -256,12 +256,23 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      need separate treatment before claiming complete provenance.
      The unconnected `MachineKernelPort` foundation now groups the existing
      Kernel/framebuffer behind fallible short loans and a first-terminal
-     latch; [a01 focused no-default and a02 focused release](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
-     each passed **3/0** on unchanged source. Broad and feature-matrix
-     checks are pending.
+     latch; [a01 focused no-default](evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
+     and [a02 focused release](evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
+     each passed **3/0** on unchanged source. A03 broad release passed 19
+     blocks **2,192/0/10 ignored** with stable source hashes despite backup
+     commits moving HEAD during the run
+     ([raw log](evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)).
+     This remains development evidence, not a Step 2 gate; broad no-default
+     and feature-matrix checks are pending.
      No production native attempt or hook uses it, so continue the connected
      public-wrapper, setup/hook/tail and child-helper migration above with
      attempt/leaf authority and callback-lifetime controls before Step 2.
+     The next connected cut must give the selected-context stamp a checked
+     production handoff consumer. The parked-publication red and receipt are
+     preserved as historical evidence; its test-only seam and ignored fixture
+     have now been retired from current `unicorn.rs`. Keep the runnable/parked
+     CPU-custody bug open and stage a new connected gate after the port,
+     rather than treating pre-retirement a03 as a passing custody control.
      The bounded [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-bounded-source-test-gate)
      [receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
      seals one source: a11 focused release **1/0**, 19-block a12 release

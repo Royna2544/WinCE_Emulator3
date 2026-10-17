@@ -223,7 +223,9 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       but its parked queue is empty and the final assertion finds zero
       machine-owned B CPU slots instead of one. The borrow is an artificial
       test conflict, not demonstrated natural reentry, live-pump behavior or
-      a mounted-app failure. Cut 3a holds non-runnable native-fault children,
+      a mounted-app failure. The one-shot seam and ignored fixture have since
+      been retired from current source; the receipt remains historical
+      evidence, not a fix. Cut 3a holds non-runnable native-fault children,
       not this runnable/parked publication case. Preserve B's original CPU
       through a connected O-T7 slot/leaf migration after the callback-scoped
       machine-state port, not a queue-only owner patch.

@@ -4,15 +4,25 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 unconnected machine-state port foundation (focused-only)
+## 2026-10-17 unconnected machine-state port foundation (development evidence)
 
 The new crate-private `MachineKernelPort` module holds the caller's Kernel and
 framebuffer in one fallible short-loan cell and latches the first typed
-terminal failure. The [partial validation receipt](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
-records a01 focused no-default and a02 focused release, each **3/0** (exit
-0): owned observation and loan release, nonpanicking nested cross-resource
+terminal failure. [A01 focused no-default](evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
+and [a02 focused release](evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
+each passed **3/0** (exit 0): owned observation and loan release,
+nonpanicking nested cross-resource
 refusal, and first-failure precedence. There is no separate compile-fail
-fixture. Broad and feature-matrix validation remain pending.
+fixture. [A03 broad release](evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)
+passed 19 blocks **2,192/0/10 ignored** (exit 0) with stable stamped
+source hashes; backup commits moved HEAD from `fa7de51a` to `a105546f`
+during the run. This is development validation only, not Step 2 acceptance.
+Broad no-default and feature-matrix checks remain pending. A03 is the
+pre-retirement suite: the parked-publication expected red was still ignored
+there. Its test-only seam and ignored fixture have since been removed from
+current `unicorn.rs`; that source file is SHA-256
+`B6C7FC7C89517F390D4309974F384B37B733EAC97B0250421F4DA03C984DC300`.
+The red receipt remains historical evidence, not a repaired custody path.
 
 This module has no production caller. Native attempts and hooks still use
 their prior Kernel/framebuffer paths; no attempt/leaf authority, hook
@@ -61,7 +71,9 @@ slots instead of one. The a01 fixture missed its intended expectation before
 this a02 witness. This forced borrow conflict does not establish natural
 reentry, a live-pump failure or an iNavi run. No production fix was made;
 Cut 3a's non-runnable native-fault quarantine does not cover a runnable B at
-the parked-publication boundary.
+the parked-publication boundary. The ignored test and its one-shot seam were
+later retired from current source while their patch and logs remain preserved;
+this does not close the runnable/parked CPU-custody bug.
 
 On the same test-only source, loopback-enabled a04 release passed 19 blocks
 **2,184/0/10 ignored**, a05 no-default passed 19 blocks **1,543/0/2
