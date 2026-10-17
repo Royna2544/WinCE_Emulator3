@@ -348,6 +348,16 @@ sequencer must not allow host/framebuffer reentry to mutate a queue during
 this transition. The current first-slice helper's terminal owner-loss branch
 does not yet satisfy this contract.
 
+The bounded public no-custody admission fence now refuses a pending child
+with typed `Backend` after local CPU/image setup but before consuming its
+exact launch claim, marking it admitted or executing guest child code
+([source/test gate](../evidence/stage3-no-custody-admission-20261017/validation.receipt.md)).
+The launch remains pending and the public parent's attempt is poisoned with
+no saved context. This is a machine-recovery hold, not a retryable pre-CPU
+load error or a proven same-session retry. It does not issue an exact leaf
+permit, turn the child into a runnable custody slot, or close other
+post-admission publication/exit paths.
+
 ## A4. Guest memory and publication
 
 VM is the single coherence authority. Retained host blobs and native RAM must

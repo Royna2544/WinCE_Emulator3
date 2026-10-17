@@ -377,9 +377,16 @@ not an implemented owner. Stage its connected source cut in this order:
    queue conflicts retain the original CPU tree as `UnverifiedStopped`, with
    zero abandoned unbound trees in those controls. A fixed-stack native fault
    also retains B. This is preservation, not a runnable B locator or checked
-   parent-suspension transfer; public `custody=None` and other classifier/exit
-   paths remain outside the gate. The bounded release/no-default suites pass
-   on the exact five-file seal, not the full Step 3 contract.
+   parent-suspension transfer; at that connected seal, public `custody=None`
+   and other classifier/exit paths remained outside the gate. The bounded
+   release/no-default suites pass on the exact five-file seal, not the full
+   Step 3 contract. The later bounded
+   [no-custody admission fence](../evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+   fails the tested public/direct pending-child path after local setup but
+   before claim consumption, CPU admission or guest child execution. It
+   retains the exact launch for machine-owned recovery while poisoning the
+   public parent's attempt; no same-session retry, runnable slot, checked
+   leaf authority or broader classifier/exit closure follows.
    Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
    **2,183/0/9 ignored** is development-only. Cut 3a alone could not claim a

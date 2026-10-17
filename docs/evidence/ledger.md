@@ -2474,9 +2474,10 @@ birth, state and retained mapped-blob bytes. These bytes are not a measured
 host RSS peak. The Kernel-minted exit witness carries exact birth only, so
 the production consumer relies on same-Kernel coupling, not a cross-machine
 lineage proof. General private VM and mapped-file-view exit cleanup remain
-separate [open bugs](../../KNOWN_BUGS.md). Runnable/parked custody, public-run
-bypass removal, the callback-scoped Kernel/framebuffer port, full O-T7 and
-live-app acceptance remain open.
+separate [open bugs](../../KNOWN_BUGS.md). At that Cut 3a seal, runnable/parked
+custody, public-run bypass removal, the callback-scoped Kernel/framebuffer
+port, full O-T7 and live-app acceptance remained open. Later connected and
+no-custody gates address only their named boundaries.
 
 The pre-seal a03 release broad **2,183/0/9 ignored** remains development
 evidence, not this final source gate. No app or writable-mount run was made.
@@ -2862,6 +2863,20 @@ post-child observation; the corrected a14 test passed direct retained-tree
 assertions. This is not exact thread/leaf authority, checked post-B restore,
 general CPU-slot migration, in-session recovery or live-iNavi acceptance.
 No writable mount was used.
+
+## Public no-custody child-admission fence (2026-10-17, bounded source/test gate)
+
+The [receipt](../../evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+records a bounded public-wrapper real-MIPS control and a direct-helper
+admission-observer control for `custody=None`. Local `UnicornMips` creation
+and PE/DLL setup can occur, but the path returns typed `Backend` before
+consuming the exact pending claim, marking the child admitted, or executing
+its guest code. The exact launch stays pending with its canonical birth
+execution-live and unsignaled. The public parent's attempt is poisoned and
+has no saved context, so the retained launch needs machine-owned recovery;
+same-session retry is not proven. This gate does not create a runnable slot,
+issue a leaf permit, repair post-B restoration or settle other classifier/
+exit paths. No iNavi or writable-mount run followed.
 
 ## Chat-project validation notes (not in this repository)
 

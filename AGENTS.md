@@ -352,6 +352,12 @@ and late queue conflicts and a native fault retain admitted B. This does not
 provide exact executing-thread/leaf authority, runnable recovery, checked
 post-B restoration, exit-event fencing or public `custody=None` coverage;
 it is not full Step 2/O-T7 or live-app acceptance. The
+[later public no-custody admission fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
+refuses a pending child's CPU admission with typed `Backend` after local
+image setup but before consuming its exact claim or executing guest child
+instructions. The launch remains pending for machine-owned recovery; the
+public parent's attempt is poisoned, not safely retryable in-session. This
+does not create a runnable custody slot or exact executing-leaf permit. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
 passes 171 source/build-chain controls and 83 runner guards; it requires a
 future fresh output-hash-stamped rebuild and does not authorize a run.
