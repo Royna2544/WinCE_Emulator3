@@ -4,6 +4,23 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 O-T7a outcome-coupled custody review fix (development-only)
+
+The [review-fix receipt](evidence/stage3-machine-directory-20261017/validation.review-fix.receipt.md)
+records focused `finish_attempt` controls: the actual backend result and
+attempt report, not a caller's requested runnable state, determine whether an
+admitted CPU remains runnable, parks, or is quarantined in its original slot.
+Errors, absent execution and unverified exit do not resume it; a bad parked
+locator also quarantines rather than stranding a lease. A bound reciprocal
+Send handoff refuses before native effects, and finishing that refusal
+quarantines the original CPU with its error retained. The 19-block stable-HEAD
+a35 debug rerun passed **2,258/0/9 ignored**, a34 release rerun
+**2,257/0/9 ignored**, and no-default **1,584/0/2 ignored**; final
+Unicorn-only and CI desktop checks exited 0. The earlier development snapshot
+below remains historical. Production host-turn selection and boxed-child
+re-boxing still need conversion; this is neither connected Cut 1, Cut 2 nor
+live-app acceptance. No iNavi or writable-mount run was made.
+
 ## 2026-10-17 O-T7a machine-directory groundwork (development-only snapshot)
 
 The [development receipt](evidence/stage3-machine-directory-20261017/validation.development.receipt.md)

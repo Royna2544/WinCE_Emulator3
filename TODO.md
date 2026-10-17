@@ -125,15 +125,19 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    [O-T7a development snapshot](evidence/stage3-machine-directory-20261017/validation.development.receipt.md)
    source-tests Kernel/directory lineage, admitted CPU cells and permits,
    clone/exit-witness refusal, a boxed-child admission fence and bound Send
-   handoff refusal. It is preparatory: no production boot/ordinary/Event/
-   monitor/rotation route uses a shared directory-owned selector. Next, in
-   order:
+   handoff refusal. The later
+   [outcome-coupled review fix](evidence/stage3-machine-directory-20261017/validation.review-fix.receipt.md)
+   keeps failed/unverified attempts and a bound Send refusal quarantined in
+   their exact slots; it does not wire the production host turn. Both are
+   preparatory: no production boot/ordinary/Event/monitor/rotation route uses
+   a shared directory-owned selector. Next, in order:
    - Complete O-T7a Cut 1 as a connected host-turn route. Have the process
      switch return a typed selection request; make one shared main selector
      validate and lease exact process/birth/slot/attempt authority for boot,
      ordinary A→B, witnessed A→B→C, Event, monitor and pre/post rotation.
-     Remove executable boxed-CPU paths only with checked locator migration
-     and preserve the strict checkpoint fence from boot. Cut 2 then updates
+     Remove executable boxed-CPU paths and post-child re-boxing only with
+     checked locator migration and preserve the strict checkpoint fence from
+     boot. Cut 2 then updates
      the directory permit at each verified/unverified intra-slice thread and
      frame transition before more guest execution. The development snapshot is
      neither connected Cut 1 nor Cut 2; no live run is authorized by it.
