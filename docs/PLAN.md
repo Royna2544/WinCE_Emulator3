@@ -236,12 +236,14 @@ not an implemented owner. Stage its connected source cut in this order:
    and new B under A's tail; this is an ownership repair, not creator
    attribution or a new service trigger. During-run queue visibility and an
    active-claim checkpoint save were not independently executed in this cut.
-   Stage [P1 event service](subsystems/tasks-scheduler.md#p1-independent-event-service-trigger-proposed-not-implemented)
-   next: tag each event-published entry with verified producer provenance and
-   add one fair, event-only in-place service opportunity per bounded host-loop
-   turn, independent of `CreateProcessW`. Require eventual exact-birth service
-   without inferring `NFY0:` before/after-return timing. Do not land the
-   witnessed gate before this trigger.
+   The [P1 Event-service source cut](subsystems/tasks-scheduler.md#p1-independent-event-service-trigger-focused-source-gate-broad-pending)
+   now tags each event-published entry with checked publisher provenance and
+   offers one oldest Event in place at a neutral bounded host-loop turn,
+   independent of `CreateProcessW`. Focused Kernel, real-MIPS, path,
+   raw-kernel, retry and host-loop controls pass; broad suites and final seal
+   are pending. Nested P0 E+B batches can still drain siblings under A. Do
+   not infer `NFY0:` return timing or accept debugger-stop, monitor or live
+   behavior from this gate. Complete P1 validation before the witnessed gate.
    Only then stage the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
    carry an attempt-local exact publication witness through the import
    boundary; claim only B after the selected-context preflight; and test mixed

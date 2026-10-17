@@ -2740,6 +2740,33 @@ was refused by the backing volume, so IOCTL handling and notification launch
 timing remain unknown. This identifies a concrete driver candidate, not a P1
 timing rule or a runtime service witness.
 
+## P1 independent Event service (2026-10-17, focused source cut; broad pending)
+
+The current source tags each notification Event descriptor with checked
+publisher thread/process births and retains the publisher's path base. A
+neutral host-loop offer selects one oldest unreserved Event by exact birth
+from Kernel's in-place queue, even without another `CreateProcessW`. It does
+not create a dummy native owner. A retryable pre-CPU error returns the same
+birth to its queue slot; ordinary B and unselected siblings remain queued.
+The nested P0 `CreateProcessW` path still admits its aggregate E+B batch, so
+this focused cut does not isolate a witnessed B or add Shell service.
+
+Stamped focused logs: [a04 Kernel 2/0](../../evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
+[a05 real-MIPS Event 2/0](../../evidence/stage3-event-trigger-p1-20261017/a05-guest-event-focused.raw.log),
+[a06 publisher-path 1/0](../../evidence/stage3-event-trigger-p1-20261017/a06-event-path-provenance.raw.log),
+[a07 raw-kernel 138/0](../../evidence/stage3-event-trigger-p1-20261017/a07-raw-kernel.raw.log),
+[a08 pre-CPU retry 1/0](../../evidence/stage3-event-trigger-p1-20261017/a08-event-retry.raw.log)
+and [a10 host-loop wiring 1/0](../../evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log).
+[A09](../../evidence/stage3-event-trigger-p1-20261017/a09-host-loop-wiring.raw.log)
+failed because the test harness propagated its expected uninitialized-CPU
+error before asserting it; a10 corrected that assertion, not production
+behavior. Broad release/no-default suites, feature checks and a final source
+seal remain pending. The requested debugger-stop and monitor paths, live
+iNavi, CPU/Task custody and CE `NFY0:` notification timing are not proved;
+the [NAND driver finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+is a binding candidate, not a timing witness. No app or writable mount was
+run for this source cut.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

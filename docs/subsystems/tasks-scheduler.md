@@ -938,47 +938,40 @@ evidence or a policy to extend. P0 does not establish Stage 3, O-T7, a
 callback-scoped port, runnable CPU custody or live-app acceptance. No app or
 writable mount was run.
 
-An independent fair event/notification trigger must follow P0 and precede the
-witnessed producer gate below. It must eventually service E by its own exact
-birth without requiring another process's child handoff, or narrowing that
-handoff to B would strand E. The [dumped `notify.dll`/hive binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
+The focused P1 cut follows P0 and precedes the witnessed producer gate below.
+The [dumped `notify.dll`/hive binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 identifies a concrete `NFY0:` driver candidate but does not settle
 before/after-IOCTL-return timing.
 
-##### P1 independent event-service trigger (proposed, not implemented)
+##### P1 independent event-service trigger (focused source gate; broad pending)
 
-First preserve a real-MIPS expected red: A calls `CeEventHasOccurred` and
-continues without a later `CreateProcessW`; its exact-birth event E remains
-queued across bounded slices. The green gate needs an Event origin on **each**
-published descriptor, including the captured publishing thread and process
-births as provenance, not E's owner. A missing/stale native caller must refuse
-before any event launch is published. Raw compatibility without an exact birth
-must be explicit and must not be silently promoted to native authority. The
-origin must survive fixture take/restore and cannot be reconstructed from a
-mutable selected PID or the last queued entry.
+The source now stores Event origin on each published descriptor: event ID and
+the checked publishing thread/process births are provenance, not the child
+owner. A missing or stale native caller refuses before event launch
+publication; raw compatibility is explicit. The origin and captured path base
+survive queue take/restore and later selected-process changes. At a neutral
+host-loop turn after the wall-clock cap check, the machine offers only the
+oldest unreserved Event by its original exact birth before completed-active
+handling. No native slice is open and no dummy owner is created.
+Ordinary B and unselected Event siblings remain in Kernel's queue. One Event
+is selected per neutral offer, but a nested P0 `CreateProcessW` batch can
+still drain older E, siblings and B under A's existing admission policy.
+Retryable pre-CPU failure releases the original Event in its queue slot.
 
-At a neutral host-loop turn after its wall-clock cap, offer one oldest
-unreserved Event entry for exact-birth service before the completed-active
-early break. The existing Kernel queue/claim token remains the sole owner;
-an Event-only reservation must leave ordinary B and all unselected siblings
-unreserved and queryable. Factor the current child runner so this neutral
-route uses the previous closed slice's persisted/synchronized state, never a
-dummy native owner or a callback-scoped Kernel/framebuffer loan. The current
-`CreateProcessW` tail still keeps its P0 E+B batch policy; if that tail has
-already consumed E, neutral service must not replay it. Do not service after
-a native error, requested debugger stop, invalid PC, active exit transaction,
-or exceeded cap. A retryable pre-CPU error returns E to the same queue slot
-without a tight same-turn retry; admitted CPU errors remain custody failures,
-not queue replay.
-
-The bounded acceptance needs standalone E eventual admission without B, two
-events in publication FIFO order, mixed E+B exactly once, stale publisher
-refusal, same-birth retry, completed-parent/idle-loop opportunity, and
-selected-context/parked-CPU ownership preserved on errors. The trigger's
-timing claim is only eventual host-loop service. The dumped `notify.dll`
-binding does not establish when the CE6 driver itself launches an app. P1
-does not confer witnessed B-only handoff, checked whole-machine selection
-relineage, the callback-scoped port, full Stage 3/O-T7, or live acceptance.
+Stamped focused logs passed [a04 Kernel **2/0**](../../evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
+[a05 real-MIPS Event **2/0**](../../evidence/stage3-event-trigger-p1-20261017/a05-guest-event-focused.raw.log),
+[a06 publisher-path **1/0**](../../evidence/stage3-event-trigger-p1-20261017/a06-event-path-provenance.raw.log),
+[a07 raw-kernel **138/0**](../../evidence/stage3-event-trigger-p1-20261017/a07-raw-kernel.raw.log),
+[a08 same-birth pre-CPU retry **1/0**](../../evidence/stage3-event-trigger-p1-20261017/a08-event-retry.raw.log)
+and [a10 real host-loop wiring **1/0**](../../evidence/stage3-event-trigger-p1-20261017/a10-host-loop-wiring-green.raw.log).
+A09 failed because its harness propagated an intentionally expected no-PE
+error; a10 corrected the assertion without a production fix. Broad suites,
+feature checks and the final source seal are pending. The controls do not
+establish requested debugger-stop/monitor paths, full selected-context or
+parked-CPU ownership on every error, independent Shell service, a witnessed
+B-only handoff, the callback-scoped port, full Stage 3/O-T7 or live iNavi.
+The timing claim is only eventual host-loop service; `NFY0:` driver behavior
+and CE before/after-IOCTL-return timing remain unknown.
 
 ##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
 
@@ -1020,16 +1013,17 @@ as an ignored red:
    its original live, unsignaled birth. Once CPU-admitted, B is not replayed
    as a pending launch; that error boundary remains a custody concern.
 
-Raw `CeEventHasOccurred` currently queues launches but has no independent
-service trigger. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+Raw `CeEventHasOccurred` had no independent service trigger at P0's seal; the
+focused P1 source now offers one Event at a neutral host turn, with broad
+validation pending. The same [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing; the
 [dumped driver binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
-identifies `notify.dll` but not its scheduling/return timing. The intervening fair
-eventual-service gate must claim those exact entries; it must not assert
-before- or after-IOCTL-return
-parity without handler/runtime evidence. This proposal does not implement
-O-T7, a connected callback-scoped Kernel/framebuffer port, checked post-B
-parent restoration, runnable/parked CPU custody, Stage 3/5 or live acceptance.
+identifies `notify.dll` but not its scheduling/return timing. The P1 eventual-
+service cut claims exact Event entries but must not assert before- or
+after-IOCTL-return parity without handler/runtime evidence. This proposal
+does not implement O-T7, a connected callback-scoped Kernel/framebuffer port,
+checked post-B parent restoration, runnable/parked CPU custody, Stage 3/5 or
+live acceptance.
 
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
 acceptance:
