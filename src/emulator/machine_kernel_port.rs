@@ -63,7 +63,10 @@ impl<'machine> MachineKernelPort<'machine> {
     /// The higher-ranked closure prevents a Kernel or framebuffer reference
     /// from escaping this loan. No guard may span `emu_start`, a nested child
     /// run, or a reentrant host callback. This is not yet a leaf-authority
-    /// check: the connected caller must supply that separately.
+    /// check: the connected caller must supply that separately. A closure may
+    /// already have mutated state when a nested access latches failure; the
+    /// terminal result prevents continuation but does not roll those effects
+    /// back. The connected exit/partial-effect fence must handle that case.
     pub(crate) fn try_with_state<R>(
         &self,
         operation: &'static str,
