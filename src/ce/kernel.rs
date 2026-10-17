@@ -1140,11 +1140,18 @@ pub(crate) struct PendingLaunchClaim {
 #[derive(Debug)]
 pub struct AcceptedProcessExit {
     birth: ProcessBirthKey,
+    cpu_machine_lineage: Option<u64>,
 }
 
 impl AcceptedProcessExit {
     pub fn birth(&self) -> ProcessBirthKey {
         self.birth
+    }
+
+    /// The live Kernel/CPU-directory pairing at witness issuance. `None` is
+    /// retained only for legacy Kernel exits that have no CPU binding.
+    pub fn cpu_machine_lineage(&self) -> Option<u64> {
+        self.cpu_machine_lineage
     }
 }
 
@@ -4127,6 +4134,15 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> Result<Option<AcceptedProcessExit>> {
+        // A clone copies numeric/incarnation births but does not inherit the
+        // original machine's CPU authority. Refuse before framebuffer, VM or
+        // canonical exit effects, even on the legacy unbound call path.
+        if self.requires_cpu_machine_relineage() {
+            return Err(Error::Backend(
+                CpuMachineLineageError::RequiresRelineage.to_string(),
+            ));
+        }
+        let cpu_machine_lineage = self.cpu_machine_lineage();
         // An original launch retains its exact birth even after both public
         // aliases close. Reject a delayed completion after PID/TID reuse
         // before it can touch windows, VM, or another process's workers.
@@ -4195,6 +4211,7 @@ impl CeKernel {
         });
         Ok(completed.then_some(AcceptedProcessExit {
             birth: exiting_birth,
+            cpu_machine_lineage,
         }))
     }
 
@@ -4208,6 +4225,13 @@ impl CeKernel {
         exit_code: u32,
         framebuffer: Option<&mut dyn Framebuffer>,
     ) -> Result<bool> {
+        // A cloned Kernel retains numeric births, but not this machine's CPU
+        // authority. Refuse before window restoration or canonical exit.
+        if self.requires_cpu_machine_relineage() {
+            return Err(Error::Backend(
+                CpuMachineLineageError::RequiresRelineage.to_string(),
+            ));
+        }
         if self.current_process_birth_key() != Some(expected_birth)
             || !self.handles.process_execution_live_by_birth(expected_birth)
             || self
@@ -8119,6 +8143,11 @@ impl CeKernel {
         process: ProcessBirthKey,
         exit_code: u32,
     ) -> bool {
+        // Direct pseudo-handle compatibility must not complete an exit from a
+        // snapshot whose CPU directory was deliberately not cloned.
+        if self.requires_cpu_machine_relineage() {
+            return false;
+        }
         // Preflight every fallible identity/state check before GWE teardown.
         // The &mut Kernel lease prevents a selector change before the exact
         // birth is signaled below.
@@ -8146,6 +8175,11 @@ impl CeKernel {
     }
 
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
+        // The real-handle request path is also an exit-state mutation. A
+        // cloned Kernel cannot issue it before whole-machine relineage.
+        if self.requires_cpu_machine_relineage() {
+            return false;
+        }
         if Self::is_current_process_pseudo_handle(handle) {
             // Compatibility for direct Kernel/host fixtures. Guest import and
             // decoded paths must use the caller-birth entry points above.
@@ -13567,6 +13601,179 @@ mod tests {
             })
         );
         assert_eq!(kernel.require_cpu_machine_lineage(original_lineage), Ok(()));
+    }
+
+    #[test]
+    fn cpu_machine_lineage_bound_exit_witness_carries_directory_provenance() -> Result<()> {
+        let mut kernel = CeKernel::boot(runtime_config_with_com7());
+        let directory = CpuCustody::new().expect("fresh CPU directory lineage");
+        let lineage = directory.machine_lineage();
+        kernel.bind_cpu_machine_lineage(lineage).unwrap();
+        let launch = kernel.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("exact child birth");
+
+        let accepted = kernel
+            .try_mark_process_launch_exited_with_witness(&launch, 0x34, None)?
+            .expect("exact child completion");
+        assert_eq!(accepted.birth(), birth);
+        assert_eq!(accepted.cpu_machine_lineage(), Some(lineage));
+        assert!(!kernel.handles.process_execution_live_by_birth(birth));
+
+        let mut legacy = CeKernel::boot(runtime_config_with_com7());
+        let legacy_launch = legacy.queue_process_launch(None, None);
+        let legacy_accepted = legacy
+            .try_mark_process_launch_exited_with_witness(&legacy_launch, 0x35, None)?
+            .expect("legacy exact child completion");
+        assert_eq!(legacy_accepted.cpu_machine_lineage(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn cpu_machine_lineage_clone_cannot_issue_exit_witness_or_commit_exit_effects() {
+        let mut original = CeKernel::boot(runtime_config_with_com7());
+        let directory = CpuCustody::new().expect("fresh CPU directory lineage");
+        original
+            .bind_cpu_machine_lineage(directory.machine_lineage())
+            .unwrap();
+        let launch = original.queue_process_launch(None, None);
+        let birth = launch.process_birth.expect("exact child birth");
+        let mut cloned = original.clone();
+
+        assert!(matches!(
+            cloned.try_mark_process_launch_exited_with_witness(&launch, 0x36, None),
+            Err(Error::Backend(reason)) if reason.contains("whole-machine relineage")
+        ));
+        assert!(cloned.handles.process_execution_live_by_birth(birth));
+        assert_eq!(
+            cloned.handles.process_signaled_by_id(birth.process_id()),
+            Some(false)
+        );
+        assert!(original.handles.process_execution_live_by_birth(birth));
+    }
+
+    #[test]
+    fn cpu_machine_lineage_clone_refuses_stopped_exit_before_window_or_task_effects() -> Result<()>
+    {
+        let mut original = CeKernel::boot(runtime_config_with_com7());
+        let root = original
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let hwnd = original.create_window_ex_w_with_rect(
+            1,
+            "CLONED_STOPPED_EXIT",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 4, 4),
+        );
+        let mut framebuffer = crate::ce::framebuffer::VirtualFramebuffer::new(
+            8,
+            8,
+            crate::ce::framebuffer::PixelFormat::Rgb565,
+        )?;
+        framebuffer.pixels_mut().fill(0x19);
+        assert!(original.capture_window_backing_store(hwnd, &framebuffer));
+        original
+            .bind_cpu_machine_lineage(
+                CpuCustody::new()
+                    .expect("fresh CPU directory")
+                    .machine_lineage(),
+            )
+            .unwrap();
+        let mut cloned = original.clone();
+        let backing_before = cloned.window_backing_stores[&hwnd].clone();
+        let state_before = cloned.current_process_state();
+        let selection_before = cloned.selected_process_context_stamp();
+        let message_count_before = cloned.recent_message_ops.len();
+        let process_count_before = cloned.recent_process_ops.len();
+        framebuffer.pixels_mut().fill(0xa7);
+        let pixels_before = framebuffer.snapshot().pixels;
+        let dirty_before = framebuffer.dirty_rects().to_vec();
+
+        assert!(matches!(
+            cloned.try_terminate_stopped_current_process_for_birth_with_framebuffer(
+                root,
+                0x71,
+                Some(&mut framebuffer),
+            ),
+            Err(Error::Backend(reason)) if reason.contains("whole-machine relineage")
+        ));
+        assert_eq!(cloned.current_process_state(), state_before);
+        assert_eq!(cloned.selected_process_context_stamp(), selection_before);
+        assert!(cloned.handles.process_execution_live_by_birth(root));
+        assert_eq!(
+            cloned.handles.process_signaled_by_id(root.process_id()),
+            Some(false)
+        );
+        assert!(cloned.gwe.is_window(hwnd));
+        assert_eq!(
+            cloned.window_backing_stores.get(&hwnd),
+            Some(&backing_before)
+        );
+        assert_eq!(cloned.recent_message_ops.len(), message_count_before);
+        assert_eq!(cloned.recent_process_ops.len(), process_count_before);
+        assert_eq!(framebuffer.pixels(), pixels_before.as_slice());
+        assert_eq!(framebuffer.dirty_rects(), dirty_before.as_slice());
+        assert!(original.handles.process_execution_live_by_birth(root));
+        Ok(())
+    }
+
+    #[test]
+    fn cpu_machine_lineage_clone_refuses_pseudo_and_real_handle_exit_mutations() -> Result<()> {
+        let mut original = CeKernel::boot(runtime_config_with_com7());
+        let root = original
+            .current_process_birth_key()
+            .expect("boot process birth");
+        let primary = original
+            .handles
+            .process_primary_thread_birth(root)
+            .expect("boot primary birth");
+        let hwnd = original.create_window_ex_w(1, "CLONED_PSEUDO_EXIT", "", None, 0, 0, 0);
+        let launch = original.queue_process_launch(None, None);
+        let child = launch.process_birth.expect("child process birth");
+        original
+            .bind_cpu_machine_lineage(
+                CpuCustody::new()
+                    .expect("fresh CPU directory")
+                    .machine_lineage(),
+            )
+            .unwrap();
+        let mut cloned = original.clone();
+        let state_before = cloned.current_process_state();
+        let selection_before = cloned.selected_process_context_stamp();
+        let message_count_before = cloned.recent_message_ops.len();
+        let process_count_before = cloned.recent_process_ops.len();
+
+        assert!(!cloned.terminate_current_process_for_caller_birth(primary, 0x72));
+        assert!(!cloned.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x73));
+        assert!(!cloned.terminate_process_for_caller_birth(primary, launch.process_handle, 0x74,));
+        assert!(!cloned.terminate_process(launch.process_handle, 0x75));
+        assert_eq!(cloned.current_process_state(), state_before);
+        assert_eq!(cloned.selected_process_context_stamp(), selection_before);
+        assert!(cloned.handles.process_execution_live_by_birth(root));
+        assert_eq!(
+            cloned.handles.process_signaled_by_id(root.process_id()),
+            Some(false)
+        );
+        assert!(cloned.gwe.is_window(hwnd));
+        assert_eq!(
+            cloned
+                .handles
+                .process_birth_key_for_handle(launch.process_handle),
+            Some(child)
+        );
+        assert_eq!(
+            cloned
+                .handles
+                .process_termination_requested_exit_code_by_birth(child),
+            None
+        );
+        assert_eq!(cloned.recent_message_ops.len(), message_count_before);
+        assert_eq!(cloned.recent_process_ops.len(), process_count_before);
+        assert!(original.handles.process_execution_live_by_birth(root));
+        Ok(())
     }
 
     #[test]
