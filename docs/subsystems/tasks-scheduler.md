@@ -765,21 +765,24 @@ must go through the same port while it exists. Merely wrapping the current
 long-lived `&mut CeKernel` while continuing to dereference `kernel_ptr` would
 retain the alias defect.
 
-An unconnected crate-private [foundation module](../../src/emulator/machine_kernel_port.rs)
-now holds the caller's Kernel and framebuffer in one `RefCell` state, offers
-fallible higher-ranked short loans, and latches the first typed terminal
-failure. [A01 focused no-default](../../evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
+An unconnected crate-private foundation module historically held the caller's
+Kernel and framebuffer in one `RefCell` state, offered fallible higher-ranked
+short loans, and latched the first typed terminal failure. It was removed
+from active source after review and remains recoverable through Git and its
+[development receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md).
+[A01 focused no-default](../../evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
 and [a02 focused release](../../evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
 each passed **3/0** on unchanged source. [A03 broad release](../../evidence/stage3-machine-port-foundation-20261017/a03-broad-release.raw.log)
 passed 19 blocks **2,192/0/10 ignored**; stamped source hashes stayed
 stable while backup commits moved HEAD from `fa7de51a` to `a105546f`.
-This is development validation, not Step 2 acceptance. It has no production consumer,
-attempt/leaf authority, callback teardown proof, selected-process
-restoration or event fence; broad no-default and feature-matrix checks are
-pending. The target API above includes authority that the foundation does
-not yet take. This source cut does not move any normal native attempt or
-hook across the boundary and cannot satisfy Step 2. The existing
-selected-context stamp still needs a production handoff consumer. The a03
+This is development validation, not Step 2 acceptance. The retired foundation
+had no production consumer, attempt/leaf authority, callback teardown proof,
+selected-process restoration or event fence; the a03 foundation seal did not
+include broad no-default or feature-matrix checks. The target API
+above includes authority that foundation never took. It did not move any
+normal native attempt or hook across the boundary. The selected-context
+stamp now has a narrower production pre-admission consumer below, not the
+connected handoff/restoration consumer required here. The a03
 suite predates retirement of the parked-publication red's test-only seam and
 ignored fixture. Its preserved receipt remains evidence, but current source
 has no active ignored fixture and the runnable/parked custody bug remains
@@ -836,12 +839,33 @@ each passed **5/0**; same-source [broad release a03](../../evidence/stage3-selec
 passed 19 blocks **2,189/0/10 ignored**; broad no-default a04 passed 19
 blocks **1,548/0/2 ignored**, and a05–a07 feature checks exited 0
 ([receipt](../../evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
-This stamp is
-not consumed by the production A→B handoff, is not a restoration token,
-and does not bind a cloned Kernel to machine/checkpoint lineage or prove
-execution-live ownership. Direct mutation through public backing objects
-is not fully stamped. The connected whole-attempt port, exact parent
-selection restoration, leaf authority and exit event fence above remain open.
+The focused pre-admission candidate below consumes this stamp before queue
+drain, but the stamp is not a post-B restoration token and does not bind a
+cloned Kernel to machine/checkpoint lineage. The candidate checks the live
+owner/caller separately; the stamp itself does not prove execution-live
+ownership. Direct mutation through public backing objects is not fully
+stamped. The connected whole-attempt port, exact parent selection
+restoration, leaf authority and exit event fence above remain open.
+
+##### Deferred-launch selected-context pre-admission (focused candidate)
+
+Immediately before A's native `emu_start`, the current source captures its
+selected-context stamp. If A stages deferred `CreateProcessW`, the post-native
+tail checks that stamp against the selected exact parent birth, verifies the
+stopped caller remains execution-live under that birth, and requires a
+nonzero staged return PC. A mismatch returns typed `Backend` before the
+existing aggregate pending-launch queue is drained or a child CPU is
+constructed. It is a stopped failure requiring A recovery, not a rollback or
+an ordinary A resume. A test-only real-MIPS A `CreateProcessW` plus a
+preexisting raw `CeEventHasOccurred` launch is red-to-green on a same-birth
+selected metadata rewrite: both original births remain queued in FIFO order,
+live and unresolved. An unchanged-context mixed control confirms the current
+aggregate drain still admits both in FIFO order; it does not attribute them
+to the `CreateProcessW` caller. Existing non-live and both-mode controls also
+pass focused tests. Broad validation remains pending. An exact-birth pending
+claim and fair trigger must later change that mixed control deliberately;
+this preflight does not supply the claim, a post-B restoration token,
+`ParentSuspension`, a connected port, Step 2/Stage 3 acceptance or live proof.
 
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
 acceptance:
@@ -872,7 +896,11 @@ acceptance:
 
 A pre-CPU exact-birth claim/return cut in Kernel's existing pending-launch
 queue can be independently correct before this port, and its retry/tail-order
-controls should precede nested execution. A memory-fault-only port cut cannot
+controls should precede nested execution. The focused pre-admission check
+above does not provide that claim: its unchanged-context mixed control still
+drains older event and new `CreateProcessW` launches together. A fair trigger
+must retain older work without silently admitting it as A's child. A
+memory-fault-only port cut cannot
 make the normal attempt sound while other raw hooks and the caller's mutable
 references remain. Conversely, a complete port can establish machine-state
 loan safety before runnable CPU slots, but by itself does not preserve an
@@ -882,9 +910,11 @@ The nonempty publication conflict still requires the connected O-T7 custody
 cut and active-leaf run gate. The earlier ignored native-fault red has an
 ordinary real-MIPS focused green Cut 3a replacement with non-runnable
 quarantine, but that narrow directory is not the proposed runnable slot/lease
-contract. Only the unconnected loan-cell foundation exists in source; no
-connected callback-scoped port, selector token or exit event fence described
-here is used by production native attempts today.
+contract. The unconnected loan-cell foundation was retired from active
+source. The selected-context pre-admission check is a narrow production
+consumer, but no connected callback-scoped port, checked post-B selector
+token or exit event fence described here is used by production native
+attempts today.
 
 The historical 2026-10-17 pre-deferral read-only callback inventory is for
 `unicorn.rs` SHA-256

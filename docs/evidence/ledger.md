@@ -2547,12 +2547,13 @@ A→B→A selection, missing birth, PID replacement through public
 `HandleTable` without a selector write, and permanent provenance poisoning
 on generation overflow.
 
-This is not a production restoration gate. No handoff consumer checks the
-stamp; cloned Kernel lineage, direct backing-object mutation, execution-live
-ownership, a callback-scoped port and an exact parent-suspension token remain
-open. No live iNavi or writable-mount run occurred.
+This seal was not a production restoration gate. Its later pre-admission
+consumer checks the stamp and exact live caller before queue drain only;
+post-B restoration, cloned Kernel lineage, direct backing-object mutation,
+a callback-scoped port and an exact parent-suspension token remain open.
+No live iNavi or writable-mount run occurred.
 
-## Unconnected machine-state port foundation (2026-10-17, development evidence)
+## Retired unconnected machine-state port foundation (2026-10-17, development evidence)
 
 The [partial receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
 preserves the a01 stamped `cargo test -j 1 machine_port_` attempt: three
@@ -2589,11 +2590,38 @@ exercise owned observation after loan release, nested cross-resource busy
 refusal without panic, and terminal precedence. There is no independent
 compile-fail fixture, production caller, attempt/leaf authority, native-hook
 or child-helper migration, callback teardown proof, selection restoration,
-event fence or CPU-custody effect. Broad no-default and feature-matrix
-checks remain pending; this is not Step 2 or live iNavi acceptance. The next
-connected cut needs a production consumer for the selected-context stamp;
-the parked red remains evidence to preserve; its ignored fixture is no
-longer active in current source. The runnable/parked custody bug stays open.
+event fence or CPU-custody effect. The a03 foundation seal did not include
+broad no-default or feature-matrix checks. The unconnected module was later
+removed from active source; Git and this evidence retain it. This is not
+Step 2 or live iNavi acceptance. The later pre-admission guard consumes the
+selected-context stamp narrowly, but the connected post-B handoff still needs a checked
+restoration token. The parked red remains evidence to preserve; its ignored
+fixture is no longer active in current source. Runnable/parked custody stays
+open.
+
+## Deferred-launch selected-context pre-admission (2026-10-17, focused candidate)
+
+Source captures A's selected-context stamp before native `emu_start`. The
+post-native deferred-launch preflight checks the same selected process birth
+and generation, an exact execution-live parent/caller and a nonzero staged
+return PC before the existing aggregate pending queue drain. A test-only
+real-MIPS A executes `CreateProcessW` after an older raw
+`CeEventHasOccurred` launch was queued. A same-birth selected metadata rewrite
+between native stop and the tail changed the stamp: the focused red-to-green
+control now receives typed `Backend` before either queued birth is drained or
+resolved; both stay live in original FIFO order. This is a stopped refusal
+requiring A recovery, not a rollback or ordinary resume. The unchanged-
+context mixed control confirms that the existing aggregate drain admits both
+launches in order; it does not attribute either to the current caller.
+Existing non-live and both-mode deferred-launch controls passed focused tests.
+Broad validation is pending. This is not an exact-birth pending claim, a
+connected `MachineKernelPort` or post-B restoration token, Step 2/Stage 3
+acceptance or live iNavi evidence. No app or writable mount was run. The next
+queue gate needs an exact-birth claim/return and a fair trigger, intentionally
+changing that mixed control. Separately, source review found that the raw
+`CreateProcessW` shim queues before four fallible `PROCESS_INFORMATION`
+writes; a failed write can return `FALSE` with a queued live child. No
+failing-write execution control is claimed yet.
 
 ## Chat-project validation notes (not in this repository)
 
