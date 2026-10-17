@@ -2735,10 +2735,14 @@ guest or writable mount was run for this gate.
 The user-supplied NAND dump contains `notify.dll` with `NFY_*` exports and a
 `default.hv` raw-text association of `PrefixNFY`, `Index`, and
 `DllNOTIFY.Dll`. The [bounded finding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
-records exact file hashes and the REA admission limit: deeper binary analysis
-was refused by the backing volume, so IOCTL handling and notification launch
-timing remain unknown. This identifies a concrete driver candidate, not a P1
-timing rule or a runtime service witness.
+records exact file hashes. REA decompiled a hash-identical temporary NTFS
+copy: the event IOCTL traverses notification records, writes properties and
+services alarm state; a separate worker thread also services that state.
+No direct `CreateProcessW` appears in the inspected IOCTL-to-record-write-to-alarm
+path; other callees and indirect callbacks remain unproved. Exact
+event-to-launch ownership and before/after-IOCTL-return
+timing remain unknown. The scratch copy was removed; the original NAND file
+was untouched. This is static evidence, not a P1 timing rule or runtime witness.
 
 ## P1 independent Event service (2026-10-17, bounded source/test gate)
 
@@ -2799,6 +2803,43 @@ or writable mount was run. A separate [NAND static follow-up](../../evidence/ce6
 identifies `notify.dll`'s event IOCTL arm but does not prove its launch path or
 before/after-return timing. Post-B selector restoration, full CPU custody,
 other Shell routes and Stage 3/O-T7 remain open.
+
+## Nested post-child selection observation (2026-10-17, test-only)
+
+The [focused receipt](../../evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+and [stamped a02 raw log](../../evidence/stage3-post-child-selection-observation-20261017/a02-real-mips-nested-selection.raw.log)
+execute guest MIPS A→B→C `CreateProcessW` calls. Immediately before B's
+helper restores A's saved selected fields, B's launch birth is PID
+66/incarnation 2, while Kernel's selected birth and the returned child CPU
+slot's owned launch birth are C, PID 67/incarnation 3. The focused a02 passed
+**1/0**, exit 0, with unchanged `unicorn.rs` SHA-256
+`3f3820fd7e5dbeaf6b0f3085386f9fb82fbb471aceef9f0a03b6d7c265e67c92`;
+closed log SHA-256 is
+`02973e5f251510fbd464f1e599be9ca11524e2d58968dc083e81ad424dfc8c97`.
+The retained a01 failed only a test's overstrict later-selector assertion.
+The observation rules out a B-only post-return guard as a general preparatory
+fix and moves checked restore/rotated-subtree custody to O-T7; it does not
+prove actual CPU loss, CE launch timing or live iNavi behavior. No production
+guard, broad suite, app run or writable mount was involved.
+
+## Nested CPU payload census and next-attempt refusal (2026-10-17, test-only)
+
+The [enabled real-MIPS receipt](../../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+and [a03 raw log](../../evidence/stage3-nested-cpu-census-20261017/a03-nested-census-green.raw.log)
+count physical CPU payloads recursively after A→B→C and one ordinary
+follow-on call. Both counts are exactly A/B/C = 1/1/1; B/C remain canonical
+live/unsignaled, their admitted launches are not pending, and Cut 3a has no
+reserved/quarantined slot. Kernel selected B while the active CPU payload
+owned C, so the follow-on call returned typed `Backend("child CPU does not own
+the selected live process birth")` before native entry, with `NoAttempt` and
+no attempt ID. Stable test-source SHA-256 was
+`fb855eeb177a42335a7eac4bc9cdb56fe987e016edfba4e6d8149e837d92e381`;
+a03 passed **1/0**, exit 0, and the closed log SHA-256 is
+`e776cad0ead4317602c199db746819f17e3985f49dc4835bca150e3122fff401`.
+The retained a02 red expected execution and documented the same typed
+refusal; a03 is an enabled current-behavior regression, not acceptance.
+This is reproducible selection/lease non-progress but not observed CPU loss.
+No production behavior, broad suite, app or writable mount was changed.
 
 ## Chat-project validation notes (not in this repository)
 

@@ -290,6 +290,16 @@ not an implemented owner. Stage its connected source cut in this order:
    give the machine an exact leaf permit. A child's post-native first-touch
    fault is a reachable alias witness to carry through the connected port;
    Cut 3a's narrow CPU quarantine does not pass that port or full Step 3.
+   A later [test-only nested A→B→C observation](../evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+   found C selected and occupying the returned child CPU slot at B's
+   post-child boundary. A B-only restore preflight is therefore not a safe
+   preparatory shortcut; checked restoration and rotated-subtree custody
+   belong in O-T7's connected slot/leaf cut.
+   The [enabled follow-on census](../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+   preserves A/B/C payloads but reaches typed `NoAttempt` on the next call
+   because B is selected with C's CPU. Keep this fail-closed control enabled;
+   O-T7 acceptance must turn it into an executed exact-owner guest slice,
+   not suppress the preflight.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the entire native
    attempt, fallible short loans tied to exact attempt/leaf authority, and a

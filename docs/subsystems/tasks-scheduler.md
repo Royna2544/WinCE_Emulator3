@@ -826,6 +826,26 @@ This token and the O-T7 `ParentSuspension` are one target handoff contract,
 not two independent selectors. A port-only cut can validate selection and
 non-overlapping native entry but cannot claim the slot/leaf/custody portion.
 
+A [test-only real-MIPS A→B→C observation](../../evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+reached the post-child boundary before A's blind restore: Kernel selected C
+and the returned child CPU slot owned C's launch, although the outer helper
+had claimed B. A later ordinary rotation selected B. A standalone guard that
+requires B to remain selected would reject this reached path; treating the
+returned C payload as B's reserved CPU would mislabel custody. Defer checked
+post-B restore and rotated-subtree transfer to the connected O-T7 slot/leaf
+cut. This fixture did not prove actual CPU loss or live-app behavior.
+
+The follow-on [enabled CPU census and refusal gate](../../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+recursively counted one original CPU payload for each live A/B/C birth after
+the nested launch and after one ordinary subsequent call. That call made no
+native attempt: Kernel selected B while the active payload owned C, so the
+exact-owner preflight returned typed `Backend`/`NoAttempt`. The outer helper
+had parked C's returned payload under B's metadata; present Cut 3a custody
+is empty and cannot transfer runnable B/C slots. This is an executed
+non-progress defect, not demonstrated CPU loss. O-T7 acceptance must retain
+both exact slots and permit the subsequent selected owner to execute; merely
+weakening the preflight or relabeling the payload would hide the mismatch.
+
 A preparatory crate-private `SelectedProcessContextStamp` now captures the
 selected canonical `ProcessBirthKey` and a checked generation; capture returns
 `None` without a registered birth. The nine selected-process metadata/state
