@@ -83148,9 +83148,16 @@ mod unicorn_tests {
                             "{phase}: only the boot CPU may lack a launch"
                         );
                         assert_eq!(
-                            payload.saved_context_thread_birth,
-                            Some(boot_primary),
-                            "{phase}: boot CPU needs its stopped exact-primary witness"
+                            payload.saved_context_thread_birth, None,
+                            "{phase}: terminal nested refusal does not publish A's continuation"
+                        );
+                        assert!(
+                            payload.private_slab_attempt_poisoned,
+                            "{phase}: A's original CPU wrapper is retained but requires restart"
+                        );
+                        assert!(
+                            payload.saved_context.is_none(),
+                            "{phase}: A must not resume after an unverified nested child return"
                         );
                         boot_birth
                     };
@@ -83262,6 +83269,11 @@ mod unicorn_tests {
         assert!(
             matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
             "first return is typed and retains the tree: {error}"
+        );
+        assert_eq!(
+            first.report.failure_operation(),
+            Some("private native post-run tail"),
+            "A remains a poisoned, non-resumable CPU after the nested refusal"
         );
         assert_eq!(first.report.start_process_birth(), Some(boot_birth));
         assert_eq!(
