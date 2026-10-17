@@ -101,9 +101,24 @@ struct PostChildSelectionObservation {
 }
 
 #[cfg(all(test, feature = "unicorn"))]
+#[derive(Debug)]
+enum RotatedChildSelectionChallenge {
+    WrongHostPath(std::path::PathBuf),
+    WrongModuleBase,
+    EntryOutsideImage,
+    WrongCommandLine(String),
+    WrongCurrentDirectory(String),
+}
+
+#[cfg(all(test, feature = "unicorn"))]
 thread_local! {
     static POST_CHILD_SELECTION_PROBE:
         std::cell::RefCell<Option<Vec<PostChildSelectionObservation>>> =
+        const { std::cell::RefCell::new(None) };
+    // One-shot negative-only challenge after an exact C-root/B-parked return.
+    // Production has no mutation at this boundary.
+    static ROTATED_CHILD_SELECTION_CHALLENGE:
+        std::cell::RefCell<Option<RotatedChildSelectionChallenge>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -21402,6 +21417,30 @@ where
                 && let Some(witness) = parent_witness
                 && let Some(leaf_birth) = verified_rotated_child_pair(&child, launch_birth, kernel)
             {
+                #[cfg(test)]
+                ROTATED_CHILD_SELECTION_CHALLENGE.with(|challenge| {
+                    let selected = challenge.borrow_mut().take();
+                    match selected {
+                        Some(RotatedChildSelectionChallenge::WrongHostPath(path)) => {
+                            kernel.set_process_module_host_path(path);
+                        }
+                        Some(RotatedChildSelectionChallenge::WrongModuleBase) => {
+                            kernel.set_process_module_base(
+                                kernel.process_module_base().wrapping_add(0x1000),
+                            );
+                        }
+                        Some(RotatedChildSelectionChallenge::EntryOutsideImage) => {
+                            child.entry = Some(0xf000_0000);
+                        }
+                        Some(RotatedChildSelectionChallenge::WrongCommandLine(command_line)) => {
+                            kernel.set_process_command_line(command_line);
+                        }
+                        Some(RotatedChildSelectionChallenge::WrongCurrentDirectory(directory)) => {
+                            kernel.set_process_current_directory(Some(directory));
+                        }
+                        None => {}
+                    }
+                });
                 let mut returned_cpu = Some(child);
                 let publication = (|| -> Result<()> {
                     let root = returned_cpu
@@ -21423,6 +21462,7 @@ where
                     let directory = custody.as_deref().ok_or_else(|| {
                         Error::Backend("rotated child lost machine CPU custody".to_owned())
                     })?;
+                    let retained_trees = directory.retained_tree_snapshots();
                     if witness.process_birth
                         != saved_process_birth.ok_or_else(|| {
                             Error::Backend("rotated child lost saved parent birth".to_owned())
@@ -21464,8 +21504,13 @@ where
                             (slot.birth == launch_birth || slot.birth == leaf_birth)
                                 && slot.key != key
                         })
-                        || directory
-                            .retained_tree_snapshots()
+                        || !retained_trees.iter().any(|tree| {
+                            tree.key == ticket_key
+                                && tree.origin_birth == launch_birth
+                                && tree.state
+                                    == crate::emulator::cpu_custody::RetainedTreeState::ReservedUnbound
+                        })
+                        || retained_trees
                             .iter()
                             .filter(|tree| {
                                 tree.origin_birth == launch_birth
@@ -21495,17 +21540,35 @@ where
                     let leaf_command_line = kernel.process_command_line().to_owned();
                     let leaf_current_directory =
                         kernel.process_current_directory().map(ToOwned::to_owned);
-                    // A closed slice can have moved its loader module list
-                    // into run-owned state; the executable mapping and entry
-                    // are the retained CPU's own image witness in that case.
-                    let retained_leaf_image = root.loaded_modules.iter().any(|module| {
-                        module.base == leaf_base
-                            && module.host_path.as_ref() == Some(&leaf_host_path)
-                    }) || (root.loaded_modules.is_empty()
-                        && root.memory.contains_range(leaf_base, 4)
-                        && root
-                            .entry
-                            .is_some_and(|entry| root.memory.contains_range(entry, 4)));
+                    let parked_origin = root
+                        .parked_child_processes
+                        .front()
+                        .expect("verified pair retains original B wrapper");
+                    let expected_leaf_directory = leaf_launch
+                        .current_directory
+                        .as_deref()
+                        .or(parked_origin.current_directory.as_deref());
+                    let expected_leaf_path = kernel
+                        .host_path_to_guest_mount(&leaf_host_path)
+                        .unwrap_or_else(|| leaf_host_path.to_string_lossy().replace('/', "\\"));
+                    // The PE loader stamps every main-image run with the
+                    // source path used for this exact CPU. Unlike the module
+                    // list, those retained runs survive a closed slice and
+                    // bind the selected C path to C's own header and entry.
+                    let leaf_image_label = format!("image:{}", leaf_host_path.display());
+                    let leaf_entry = root.entry;
+                    let retained_leaf_image = root
+                        .mapped_blobs
+                        .iter()
+                        .any(|blob| blob.name == leaf_image_label && blob.base == leaf_base)
+                        && leaf_entry.is_some_and(|entry| {
+                            root.mapped_blobs.iter().any(|blob| {
+                                let end = u64::from(blob.base) + blob.bytes.len() as u64;
+                                blob.name == leaf_image_label
+                                    && u64::from(entry) >= u64::from(blob.base)
+                                    && u64::from(entry) < end
+                            })
+                        });
                     let pending_cross_process_send = root
                         .last_debug
                         .as_ref()
@@ -21516,15 +21579,19 @@ where
                         || leaf_state.signaled
                         || root.entry_image_base != Some(leaf_base)
                         || !retained_leaf_image
+                        || leaf_path != expected_leaf_path
+                        || leaf_command_line != leaf_launch.command_line.as_deref().unwrap_or("")
+                        || leaf_current_directory.as_deref() != expected_leaf_directory
                         || pending_cross_process_send
                     {
                         return Err(Error::Backend(format!(
-                            "rotated child selected image or wait edge is not an exact leaf: state={leaf_state:?} birth={leaf_birth:?} selected_base=0x{leaf_base:08x} entry_base={:?} host_path={} retained_leaf_image={retained_leaf_image} modules={:?} pending_send={pending_cross_process_send}",
+                            "rotated child selected image or wait edge is not an exact leaf: state={leaf_state:?} birth={leaf_birth:?} selected_base=0x{leaf_base:08x} entry_base={:?} host_path={} retained_leaf_image={retained_leaf_image} image_labels={:?} pending_send={pending_cross_process_send}",
                             root.entry_image_base,
                             leaf_host_path.display(),
-                            root.loaded_modules
+                            root.mapped_blobs
                                 .iter()
-                                .map(|module| (module.base, module.host_path.as_ref()))
+                                .filter(|blob| blob.name.starts_with("image:"))
+                                .map(|blob| (blob.base, &blob.name))
                                 .collect::<Vec<_>>(),
                         )));
                     }
@@ -80421,6 +80488,23 @@ mod unicorn_tests {
         assert_ne!(nested_pid, event.process_id);
         assert_ne!(nested_pid, child.process_id);
         assert_ne!(nested_pid, later.process_id);
+        let nested_handle = kernel
+            .recent_process_ops()
+            .iter()
+            .find(|record| {
+                record.op == "CreateProcessWQueued" && record.process_id == Some(nested_pid)
+            })
+            .and_then(|record| record.process_handle)
+            .expect("nested D retained its original process handle");
+        let nested_birth = kernel
+            .handles
+            .process_birth_key_for_handle(nested_handle)
+            .expect("nested D retained its exact process birth");
+        let nested_primary = kernel
+            .handles
+            .process_primary_thread_birth(nested_birth)
+            .expect("nested D retained its primary thread birth");
+        let event_birth = event.process_birth.expect("original E process birth");
         assert_eq!(
             kernel.take_pending_process_launches(),
             vec![child, later],
@@ -80428,10 +80512,64 @@ mod unicorn_tests {
         );
         assert_eq!(custody.counts().unverified_stopped_trees, 1);
         assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        let retained = custody.retained_tree_snapshots();
         assert_eq!(
-            custody.retained_tree_snapshots()[0].origin_birth,
-            event.process_birth.unwrap()
+            retained.len(),
+            1,
+            "one whole nested tree remains in custody"
         );
+        assert_eq!(retained[0].origin_birth, event_birth);
+        custody
+            .with_retained_tree(retained[0].key, |tree| {
+                let root = tree
+                    .owned_process_launch
+                    .as_ref()
+                    .expect("returned root owns nested D's original CPU");
+                assert_eq!(root.process_birth, Some(nested_birth));
+                assert_eq!(root.process_handle, nested_handle);
+                assert_eq!(root.process_id, nested_pid);
+                assert_eq!(root.primary_thread_birth, Some(nested_primary));
+                assert_eq!(tree.saved_context_thread_birth, Some(nested_primary));
+                assert!(tree.saved_context.is_some(), "D's CPU context is retained");
+                assert!(tree.run_slice_generation > 0, "D executed guest MIPS");
+                assert_eq!(tree.parked_child_processes.len(), 1);
+                let parked_event = &tree.parked_child_processes[0];
+                assert_eq!(parked_event.process_state.process_id, event.process_id);
+                assert_eq!(parked_event.process_handle, Some(event.process_handle));
+                assert_eq!(parked_event.thread_handle, Some(event.thread_handle));
+                assert_eq!(parked_event.thread_id, event.thread_id);
+                assert_eq!(
+                    parked_event
+                        .cpu
+                        .owned_process_launch
+                        .as_ref()
+                        .and_then(|launch| launch.process_birth),
+                    Some(event_birth),
+                    "parked E remains its original CPU payload"
+                );
+                assert_eq!(
+                    parked_event.cpu.saved_context_thread_birth,
+                    event.primary_thread_birth
+                );
+                assert!(
+                    parked_event.cpu.saved_context.is_some(),
+                    "E's CPU context is retained"
+                );
+                assert!(parked_event.cpu.run_slice_generation > 0);
+                assert!(parked_event.cpu.parked_child_processes.is_empty());
+            })
+            .expect("whole nested tree remains in its unverified holding cell");
+        for (birth, handle) in [
+            (event_birth, event.process_handle),
+            (nested_birth, nested_handle),
+        ] {
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(
+                kernel.process_exit_code(handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(kernel.is_wait_ready(handle, 1), Some(false));
+        }
         assert!(!quarantined_child_fault);
         assert!(parked.borrow().is_empty());
         Ok(())
@@ -83474,8 +83612,15 @@ mod unicorn_tests {
         assert_eq!(b_return.selected_cpu_birth, Some(leaf_birth));
         assert_eq!(
             kernel.current_process_birth_key(),
-            Some(parent_birth),
-            "A's exact selection is restored after the observed C-root/B-parked boundary"
+            Some(child_birth),
+            "ordinary post-slice rotation selects B after A's exact restoration"
+        );
+        assert_eq!(
+            cpu.owned_process_launch
+                .as_ref()
+                .and_then(|owned| owned.process_birth),
+            Some(child_birth),
+            "the active CPU payload must own the post-slice B selection"
         );
         assert_eq!(custody.counts().reserved, 0);
         assert_eq!(custody.counts().unverified_stopped_trees, 0);
@@ -83838,6 +83983,221 @@ mod unicorn_tests {
             2,
             "later slices must not replay either guest CreateProcessW"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_real_mips_rotated_selection_mismatches_retain_exact_tree() -> crate::Result<()> {
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            WrongHostPath,
+            WrongModuleBase,
+            EntryOutsideImage,
+            WrongCommandLine,
+            WrongCurrentDirectory,
+        }
+
+        fn run_case(case: Case) -> crate::Result<()> {
+            eprintln!("ROTATED_SELECTION_NEGATIVE_CASE={case:?}");
+            struct OverrideReset;
+            impl Drop for OverrideReset {
+                fn drop(&mut self) {
+                    super::ROTATED_CHILD_SELECTION_CHALLENGE
+                        .with(|challenge| *challenge.borrow_mut() = None);
+                }
+            }
+
+            let test_root = create_process_timeout_test_root();
+            let _cleanup = TestDirectoryCleanup(test_root.clone());
+            std::fs::create_dir_all(&test_root).unwrap();
+            let parent_path = test_root.join("parent.exe");
+            let child_path = test_root.join("survivor.exe");
+            let leaf_path = test_root.join("leaf.exe");
+            let wrong_path = test_root.join("wrong-existing.exe");
+            std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+            let mut child_bytes = tiny_mips_create_process_then_spin_pe();
+            for (index, wide) in "leaf.exe"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .enumerate()
+            {
+                write_vec_u16(&mut child_bytes, 0x480 + index * 2, wide);
+            }
+            std::fs::write(&child_path, child_bytes).unwrap();
+            std::fs::write(&leaf_path, tiny_mips_spinner_pe()).unwrap();
+            std::fs::write(&wrong_path, tiny_mips_spinner_pe()).unwrap();
+            assert_ne!(wrong_path, leaf_path);
+            assert!(
+                wrong_path.is_file(),
+                "challenge path must exist on the host"
+            );
+
+            let challenge = match case {
+                Case::WrongHostPath => {
+                    super::RotatedChildSelectionChallenge::WrongHostPath(wrong_path.clone())
+                }
+                Case::WrongModuleBase => super::RotatedChildSelectionChallenge::WrongModuleBase,
+                Case::EntryOutsideImage => super::RotatedChildSelectionChallenge::EntryOutsideImage,
+                Case::WrongCommandLine => super::RotatedChildSelectionChallenge::WrongCommandLine(
+                    "unexpected-C-command-line".to_owned(),
+                ),
+                Case::WrongCurrentDirectory => {
+                    super::RotatedChildSelectionChallenge::WrongCurrentDirectory(
+                        "\\Test\\unexpected-C-current-directory".to_owned(),
+                    )
+                }
+            };
+            super::ROTATED_CHILD_SELECTION_CHALLENGE.with(|slot| {
+                assert!(slot.borrow().is_none());
+                *slot.borrow_mut() = Some(challenge);
+            });
+            let _override_reset = OverrideReset;
+
+            let mut kernel = phase1_kernel("parent.exe")?;
+            kernel.set_process_module_host_path(parent_path.clone());
+            let parent_birth = kernel.current_process_birth_key().expect("A birth");
+            let image = crate::pe::PeImage::inspect(&parent_path)?;
+            let mut cpu = super::UnicornMips::new()?;
+            cpu.load_pe_image(&image)?;
+            let mut custody = super::CpuCustody::new()
+                .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+            let mut framebuffer = VirtualFramebuffer::default_primary()?;
+            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &mut custody,
+            );
+            let error = attempt
+                .result
+                .expect_err("a mismatched selected C value must stop rotated publication");
+            assert!(
+                matches!(&error, Error::Backend(reason) if reason.contains("rotated child")),
+                "{case:?}: rotated-selection refusal is typed: {error}"
+            );
+            assert_eq!(attempt.report.start_process_birth(), Some(parent_birth));
+            super::ROTATED_CHILD_SELECTION_CHALLENGE.with(|challenge| {
+                assert!(
+                    challenge.borrow().is_none(),
+                    "{case:?}: rotated hook ran exactly once"
+                );
+            });
+
+            let queued: Vec<_> = kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .collect();
+            assert_eq!(
+                queued.len(),
+                2,
+                "A launched B and B launched C in guest MIPS"
+            );
+            let child_process_handle = queued[0].process_handle.expect("B process handle");
+            let leaf_process_handle = queued[1].process_handle.expect("C process handle");
+            let child_birth = kernel
+                .handles
+                .process_birth_key_for_handle(child_process_handle)
+                .expect("original B birth");
+            let leaf_birth = kernel
+                .handles
+                .process_birth_key_for_handle(leaf_process_handle)
+                .expect("original C birth");
+            let child_primary = kernel
+                .handles
+                .process_primary_thread_birth(child_birth)
+                .expect("B primary thread birth");
+            let leaf_primary = kernel
+                .handles
+                .process_primary_thread_birth(leaf_birth)
+                .expect("C primary thread birth");
+            assert_ne!(child_birth, leaf_birth);
+            assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+            assert_eq!(kernel.process_module_host_path(), Some(&parent_path));
+            assert!(
+                cpu.parked_child_processes.is_empty(),
+                "A has no runnable B/C queue"
+            );
+            assert!(
+                cpu.private_slab_attempt_poisoned,
+                "A cannot resume after refusal"
+            );
+
+            for (birth, handle) in [
+                (child_birth, child_process_handle),
+                (leaf_birth, leaf_process_handle),
+            ] {
+                assert!(kernel.handles.process_execution_live_by_birth(birth));
+                assert_eq!(
+                    kernel.process_exit_code(handle),
+                    Some(crate::ce::kernel::STILL_ACTIVE)
+                );
+                assert_eq!(kernel.is_wait_ready(handle, 1), Some(false));
+                assert!(kernel.pending_process_launch_for_birth(birth).is_none());
+            }
+            let counts = custody.counts();
+            assert_eq!(counts.reserved, 0);
+            assert_eq!(counts.quarantined, 0);
+            assert_eq!(counts.reserved_unbound_trees, 0);
+            assert_eq!(counts.unverified_stopped_trees, 1);
+            assert_eq!(counts.abandoned_unbound_trees, 0);
+            assert!(custody.snapshots().is_empty());
+            let retained = custody.retained_tree_snapshots();
+            assert_eq!(retained.len(), 1);
+            assert_eq!(retained[0].origin_birth, child_birth);
+            assert_eq!(
+                retained[0].state,
+                crate::emulator::cpu_custody::RetainedTreeState::UnverifiedStopped
+            );
+            custody
+                .with_retained_tree(retained[0].key, |tree| {
+                    let leaf_launch = tree.owned_process_launch.as_ref().expect("C root launch");
+                    assert_eq!(leaf_launch.process_birth, Some(leaf_birth));
+                    assert_eq!(leaf_launch.process_handle, leaf_process_handle);
+                    assert_eq!(leaf_launch.primary_thread_birth, Some(leaf_primary));
+                    assert_eq!(leaf_launch.thread_id, leaf_primary.thread_id());
+                    assert_eq!(tree.initial_thread_id, leaf_primary.thread_id());
+                    assert_eq!(tree.parked_child_processes.len(), 1);
+                    let parked_child = tree
+                        .parked_child_processes
+                        .front()
+                        .expect("original B parked");
+                    let child_launch = parked_child
+                        .cpu
+                        .owned_process_launch
+                        .as_ref()
+                        .expect("B parked launch");
+                    assert!(parked_child.cpu.parked_child_processes.is_empty());
+                    assert_eq!(child_launch.process_birth, Some(child_birth));
+                    assert_eq!(child_launch.process_handle, child_process_handle);
+                    assert_eq!(child_launch.primary_thread_birth, Some(child_primary));
+                    assert_eq!(child_launch.thread_id, child_primary.thread_id());
+                    assert_eq!(parked_child.process_handle, Some(child_process_handle));
+                    assert_eq!(parked_child.thread_handle, Some(child_launch.thread_handle));
+                    assert_eq!(parked_child.thread_id, child_primary.thread_id());
+                    assert_eq!(
+                        parked_child.cpu.initial_thread_id,
+                        child_primary.thread_id()
+                    );
+                })
+                .expect("whole C-root/B-parked CPU tree remains machine-owned");
+            Ok(())
+        }
+
+        for case in [
+            Case::WrongHostPath,
+            Case::WrongModuleBase,
+            Case::EntryOutsideImage,
+            Case::WrongCommandLine,
+            Case::WrongCurrentDirectory,
+        ] {
+            run_case(case)?;
+        }
         Ok(())
     }
 
