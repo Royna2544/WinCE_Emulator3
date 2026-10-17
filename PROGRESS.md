@@ -4,6 +4,31 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 bounded P0 in-place pending-launch ownership gate
+
+The post-native child runner now reserves its entry-time FIFO batch in
+`CeKernel` instead of removing the entire queue into a local `VecDeque`. Each
+child is claimed by its original process and primary-thread births; unattempted
+siblings remain in their original Kernel queue slots while another child is
+prepared or runs. A retryable pre-CPU error releases the exact claim and batch
+in place. Checked zero-slice completion or CPU admission consumes only that
+claim, so an admitted child cannot replay as a pending launch. The bounded
+[P0 receipt](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
+records the executed Kernel and runner controls, nested E→D before outer B/C
+order and unchanged-context E+B admission. Final-source 19-block no-default
+**1,555/0/2 ignored** and release-feature **2,202/0/9 ignored** suites passed;
+three feature checks exited 0 with stable source hashes. The observers check
+sibling visibility after claim and after CPU admission, immediately before
+the native slice. They do not independently probe a running child's queue or
+save a checkpoint during an active claim. Existing checkpoint refusal remains
+a separate source guard.
+
+P0 deliberately keeps the earlier aggregate *admission policy*: older event E
+and new B may both run under A's post-native handoff. Standalone event/Shell
+launches still have no independent fair trigger, and no producer-witnessed
+B-only isolation exists. This is not runnable CPU custody, the callback-scoped
+port, full Stage 3, or live-app acceptance. No app or writable mount was run.
+
 ## 2026-10-17 bounded ShellExecuteEx output gate
 
 After a raw direct-EXE `ShellExecuteExW` call queues one exact-birth child,
@@ -15,7 +40,8 @@ records an a01 expected red **0/1**, focused green **2/0**, raw-kernel
 hashes. This is an emulator consistency result, not CE invalid-pointer parity.
 Success-path `LastError=0`, undisclosed process-alias lifetime, the
 `TRUE`-before-loader gap and an independent exact-birth Shell trigger remain
-open. No app or writable mount was run.
+open. The later P0 gate changed queue ownership, not the Shell trigger. No app
+or writable mount was run.
 
 ## 2026-10-17 raw CreateProcessW output Boolean gate
 
@@ -29,16 +55,17 @@ passed **135/0**. The [sealed receipt](evidence/ce6-createprocess-output-contrac
 records 19-block A04 no-default **1,550/0/2 ignored** and A05 release-feature
 **2,194/0/9 ignored**; a06–a08 feature checks exited 0. The shim's existing
 success-path `LastError=0` is a known CE6 mismatch and was not validated by
-these new controls. Null-output handle-alias retirement, the
-`TRUE`-before-loader gap, and the deferred aggregate launch
-drain remain open. No app or writable mount was run.
+these new controls. Null-output handle-alias retirement and the
+`TRUE`-before-loader gap remain open; the later P0 gate replaced the local
+queue drain without changing which launches are admitted. No app or writable
+mount was run.
 
 ## 2026-10-17 bounded selected-context pre-admission gate
 
-The current source captures a selected-context stamp immediately before A's
+At this earlier seal, source captured a selected-context stamp before A's
 native `emu_start`. On a deferred `CreateProcessW` stop, it checks that stamp,
 the exact execution-live parent/caller births and a nonzero staged return PC
-before the existing aggregate pending-launch queue is drained. A test-only
+before the then-aggregate pending-launch queue was drained. A test-only
 real-MIPS control queues an older launch through raw `CeEventHasOccurred`,
 then makes A execute `CreateProcessW` and changes A's selected-context
 generation after native stop. The red-to-green control now returns
@@ -47,9 +74,9 @@ CPU; both retain their FIFO order. In the tested canonical/private A path,
 the refusal poisons A's saved continuation and requires recovery rather than
 rollback or resume; aliasless synthetic nonprivate attempts do not establish
 that poison or an exact `failure_operation` record.
-An unchanged-context mixed control confirms that the existing aggregate drain
-still admits both launches in order; the preflight does not attribute each
-launch to its creator. The final `unicorn.rs` source SHA-256 is
+An unchanged-context mixed control confirmed that both launches were admitted
+in order; the preflight did not attribute each launch to its creator. The
+final `unicorn.rs` source SHA-256 is
 `ED2A2AB693735794DB86DCC97E672DCB16AB5071C13EA0010D0A877E8393E2B8`.
 Its [sealed receipt](evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
 records a13 focused `deferred_` **17/0**, a14 no-default 19 blocks
@@ -57,8 +84,9 @@ records a13 focused `deferred_` **17/0**, a14 no-default 19 blocks
 a16 final parent-resume **1/0**, and a17–a19 feature checks exiting 0. Source
 hashes were stable; backup-only commits moved HEAD during a15. B is already
 queued inside raw `CreateProcessW` before the post-native caller-birth check;
-there is no independent event/shell launch trigger. This is not an exact-birth
-queue claim, checked post-B parent restoration, a connected
+there was no independent event/shell launch trigger. The later P0 gate adds
+in-place claims but retains this mixed admission. This earlier seal did not
+provide checked post-B parent restoration, a connected
 `MachineKernelPort`, Step 2 or Stage 3 acceptance, or a live-app result. No
 app or writable mount was run.
 

@@ -249,8 +249,8 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      feature checks exited 0 on unchanged source
      ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
      The [bounded pre-admission gate](evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
-     now consumes that stamp only before
-     the existing aggregate pending-launch drain: it checks A's selected
+     consumed that stamp, at its earlier seal, before
+     the then-aggregate pending-launch drain: it checks A's selected
      context, exact live parent/caller and nonzero staged PC. Its test-only
      real-MIPS A `CreateProcessW` plus older raw `CeEventHasOccurred` launch
      is red-to-green on a changed selected generation: typed refusal leaves
@@ -262,12 +262,19 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      release **2,192/0/9 ignored** over 19 blocks each; a16 parent-resume
      passed **1/0** and three feature checks exited 0. Unchanged-context
      mixed and existing non-live/both-mode controls pass. The mixed
-     control intentionally confirms that both launches still drain together;
+     control intentionally confirms that both launches are admitted together;
      creator attribution is not checked. Raw `CreateProcessW` has already
-     queued B before the post-native caller-birth check. Next make an
-     exact-birth pending claim/return plus an independent fair event/shell
-     trigger, then update that mixed control to require only the claimed
-     launch to run. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+     queued B before the post-native caller-birth check. The later bounded
+     [P0 in-place queue gate](evidence/stage3-pending-queue-p0-20261017/validation.receipt.md)
+     replaces the local take/drain with exact-birth claims and same-slot
+     pre-CPU return while preserving this E+B admission order. Its runner
+     observers see unattempted siblings after claim and post-admission, just
+     before the native slice, and a nested real-MIPS control preserves outer
+     sibling order; none is a live run.
+     Next stage P1's independent fair event/notification trigger so an older E
+     need not wait for another process's child handoff. Only then stage the
+     attempt-local producer witness and B-only handoff, deliberately updating
+     the mixed control. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
      passed A03 raw-kernel **135/0**, 19-block A04 no-default **1,550/0/2
      ignored**, A05 release-feature **2,194/0/9 ignored**, and a06–a08 feature
      checks exit 0. The separate [sealed Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
@@ -276,12 +283,13 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      raw-kernel **137/0**, 19-block no-default **1,552/0/2 ignored** and
      release **2,196/0/9 ignored**, with three feature checks exiting 0.
      It does not admit that child, prove bad-pointer CE parity or provide a
-     Shell trigger; keep the proposed exact-birth claim/producer gate next.
+     Shell trigger; keep P1 before the proposed producer-witness gate.
      The bounded [REA/Shell finding](evidence/ce6-rea-shell-trigger-20261017/findings.md)
      supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and
      a `CeEventHasOccurred`→`DeviceIoControl` boundary routed through `NFY0:`
      in local CE6 source; it does not establish notification launch timing or
-     implement the exact-birth trigger/claim above. Audit lifetime/retirement
+     implement the independent trigger or producer witness above. Audit
+     lifetime/retirement
      of process/thread aliases created when optional output is null or unwritable,
      and preserve the separate `TRUE`-before-loader gap. Output-copy failure
      is not permission to roll back an already-published child. The shim's
