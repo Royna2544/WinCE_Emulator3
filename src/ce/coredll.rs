@@ -34756,26 +34756,23 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         launch.current_directory,
         Some(n_show),
     );
-    if !write_optional_u32(
+    // The child is already a live, exact-birth Kernel launch. A fault in an
+    // output field cannot turn that published launch into a failed call.
+    let _ = write_optional_u32(
         kernel,
         memory,
         thread_id,
         info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
         launch.hinst_app,
-    ) {
-        return false;
-    }
-    if fmask & SEE_MASK_NOCLOSEPROCESS != 0
-        && cb_size >= SHELLEXECUTEINFO_HPROCESS_OFFSET + 4
-        && !write_optional_u32(
+    );
+    if fmask & SEE_MASK_NOCLOSEPROCESS != 0 && cb_size >= SHELLEXECUTEINFO_HPROCESS_OFFSET + 4 {
+        let _ = write_optional_u32(
             kernel,
             memory,
             thread_id,
             info_ptr.wrapping_add(SHELLEXECUTEINFO_HPROCESS_OFFSET),
             queued.process_handle,
-        )
-    {
-        return false;
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
