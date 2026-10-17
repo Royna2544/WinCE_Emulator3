@@ -930,15 +930,16 @@ and no active-claim checkpoint save was executed; the existing checkpoint
 refusal checks pending-launch and canonical Task presence. These are bounded
 source/test facts, not broader custody or runtime acceptance.
 
-P0 deliberately preserves the previous admission set and order: older event
+At its seal, P0 deliberately preserved the previous admission set and order: older event
 E and new B may both be admitted under A's post-native tail. It adds no creator
 attribution, attempt-local producer witness or independent Shell/notification
-trigger. E-under-A remains a documented compatibility limit, not CE timing
-evidence or a policy to extend. P0 does not establish Stage 3, O-T7, a
+trigger. The later bounded P1/P2 cuts below supersede that admission policy;
+the historical E-under-A result is not CE timing evidence or a policy to extend.
+P0 does not establish Stage 3, O-T7, a
 callback-scoped port, runnable CPU custody or live-app acceptance. No app or
 writable mount was run.
 
-The bounded P1 gate follows P0 and precedes the witnessed producer gate below.
+The bounded P1 gate followed P0 and preceded the witnessed producer gate below.
 The [dumped `notify.dll`/hive binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
 identifies a concrete `NFY0:` driver candidate but does not settle
 before/after-IOCTL-return timing.
@@ -954,8 +955,8 @@ host-loop turn after the wall-clock cap check, the machine offers only the
 oldest unreserved Event by its original exact birth before completed-active
 handling. No native slice is open and no dummy owner is created.
 Ordinary B and unselected Event siblings remain in Kernel's queue. One Event
-is selected per neutral offer, but a nested P0 `CreateProcessW` batch can
-still drain older E, siblings and B under A's existing admission policy.
+is selected per neutral offer, but a nested `CreateProcessW` batch at P1's
+seal could still drain older E, siblings and B under its admission policy.
 Retryable pre-CPU failure releases the original Event in its queue slot.
 
 Stamped focused logs passed [a04 Kernel **2/0**](../../evidence/stage3-event-trigger-p1-20261017/a04-pending-event-focused.raw.log),
@@ -970,63 +971,66 @@ error; a10 corrected the assertion without a production fix. The bounded
 records 19-block a11 no-default **1,558/0/2 ignored** and a12 release-feature
 **2,210/0/9 ignored** suites, with a13–a15 feature checks at exit 0; counted
 source remained unchanged through those runs and matches seal commit
-`ce2a4e7d`. A12's HEAD moved across docs/backup commits only. The controls do
-not establish requested debugger-stop/monitor paths, full selected-context or
+`ce2a4e7d`. A12's HEAD moved across docs/backup commits only. At the P1 seal,
+these controls did not establish requested debugger-stop/monitor paths, full selected-context or
 parked-CPU ownership on every error, independent Shell service, a witnessed
 B-only handoff, the callback-scoped port, full Stage 3/O-T7 or live iNavi.
 The timing claim is only eventual host-loop service; `NFY0:` driver behavior
 and CE before/after-IOCTL-return timing remain unknown.
 
-##### Exact-birth pending-launch producer and claim gate (proposed, not implemented)
+##### Exact-birth pending-launch producer and claim gate (bounded source-test gate)
 
-The owning state stays in `CeKernel`'s existing pending-launch queue: each
-original entry retains its exact process/primary-thread births and a checked,
-in-place claim phase/token. For this single-child `CreateProcessW`/direct-Shell
-cut, the producer must pass an attempt-local exact publication witness through
-dispatch to the post-native consumer;
-`TRUE`, an ordinal, a mutable selected PID or the last queue entry cannot
-identify B after nested publication. Do not add a second pending-owner vector.
-Claim/release/consume only the witnessed entry, after the selected-context
-preflight; a stale or duplicate claim refuses without touching siblings.
-For the witnessed path, the consumer claims B in place and must not call
-`take_pending_process_launches`; no unattempted entry leaves Kernel's queue.
+The owning state remains `CeKernel`'s pending-launch queue. A successful native
+`CreateProcessW` or original non-shortcut direct `.exe` `ShellExecuteExW`
+publication carries an attempt-local exact locator and caller/owner births
+through dispatch. After the selected-context preflight and native closure, the
+consumer reserves and claims **only that B** in its original Kernel queue slot.
+The return Boolean, ordinal, selected PID and newest queue entry do not stand
+in for a producer witness. Stale or duplicate locator claims refuse without
+consuming siblings. No second pending-owner vector was introduced.
 
-Write these controls test-first within the same sealed source cut; none lands
-as an ignored red:
+The combined [source seal and receipt](../../evidence/stage3-launch-handoff-p2-combined-20261017/validation.receipt.md)
+cover these bounded shapes:
 
-1. For an original non-shortcut direct `.exe` `ShellExecuteEx` branch, the
-   resolver must preserve that route distinction (it currently merges a
-   `.lnk` target with direct `.exe`). Service only its exact B after the native
-   attempt closes. The [dumped-COREDLL branch and local CE6 source](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
-   establish one reachable Shell-to-`CreateProcessW` branch and support a
-   loader-completion boundary, not exhaustive route coverage. Require the
-   emulator's B loader/admission to resolve before A's next guest instruction;
-   do not require B to execute user code or exit first.
-2. With an older notification E queued before B, A's `CreateProcessW` or
-   eligible Shell handoff claims only B. E retains its exact birth and FIFO
-   position and stays visible to Kernel while B is claimed and running: an
-   exact-birth queue query still finds E, `has_pending_process_launches`
-   remains true, and a monitor checkpoint save refuses. A changed
-   parent-context stamp leaves both unclaimed and live.
-3. At the queue level, a claimed B1 must not hide a newly published B2 from
-   B2's own claim or consume an unrelated C; after both exact claims resolve,
-   remaining E/C keep their order. Do not treat this as executed nested
-   `emu_start` or a leaf-permit/reentry proof.
-4. A retryable pre-CPU path/PE/setup error releases B **in place**, keeping
-   its original position among E/C and any subsequently published tail, with
-   its original live, unsignaled birth. Once CPU-admitted, B is not replayed
-   as a pending launch; that error boundary remains a custody concern.
+1. A raw Shell route control distinguishes original direct `.exe` from `.lnk`
+   and association resolutions; only direct `.exe` emits the witness. A
+   real-MIPS Shell ordinal-480 call stops A at its nonzero return PC and admits
+   its exact B before another A guest instruction. The [dumped-COREDLL branch
+   and local CE6 source](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+   support this first loader boundary, not exhaustive route coverage or
+   required B user-code execution before A resumes.
+2. Real-MIPS `CreateProcessW` and direct-Shell E-before-B controls admit B,
+   leaving E at its original exact birth in Kernel's queue; the earlier mixed
+   E+B characterization was converted, not ignored. A changed A
+   selected-context stamp refuses before either claim. The controls do not
+   independently inspect the queue inside B's native slice or execute an
+   active-claim checkpoint save; the existing checkpoint guard still refuses
+   pending-launch/canonical-Task state.
+3. A Kernel B1/B2 control proves independent exact claims and E/C FIFO
+   preservation. This is not executed nested `emu_start` or a leaf permit.
+4. A bad-PE pre-CPU refusal releases B in place among E/C. Repairing the file
+   admits that same B birth on retry, without a new publication; an admitted
+   CPU is not replayed as pending work.
+
+The monitor now offers one queued Event at a closed-native boundary on an
+ordinary `continue`, including when the selected CPU has completed. A bounded
+real-MIPS return fixture exposed completed-owner native re-entry; the monitor
+now switches to a parked process or stops cleanly before another CPU attempt.
+`stop_pc`/`until` deliberately suppresses the Event offer: E remains queued
+and checkpoint save refuses until a later ordinary `continue`. A completed
+parent plus runnable Event child, beyond the existing handoff controls, was
+not separately executed as one monitor fixture.
 
 Raw `CeEventHasOccurred` had no independent service trigger at P0's seal; the
 bounded P1 gate now offers one Event at a neutral host turn. The same
 [REA finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
 shows a COREDLL `DeviceIoControl` call and local CE6 `NFY0:` routing; the
 [dumped driver binding](../../evidence/ce6-rea-nfy0-20261017/findings.md)
-identifies `notify.dll` but not its scheduling/return timing. The P1 eventual-
-service cut claims exact Event entries but must not assert before- or
-after-IOCTL-return parity without handler/runtime evidence. This proposal
-does not implement O-T7, a connected callback-scoped Kernel/framebuffer port,
-checked post-B parent restoration, runnable/parked CPU custody, Stage 3/5 or
+identifies `notify.dll` and a static IOCTL arm, but not its launch/return
+timing. These cuts must not assert before- or after-IOCTL-return parity without
+handler/runtime evidence. They do not implement O-T7, a connected
+callback-scoped Kernel/framebuffer port, checked post-B parent restoration,
+runnable/parked CPU custody, Stage 3/5 or
 live acceptance.
 
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
@@ -1057,11 +1061,10 @@ acceptance:
    release and no-default gates separate where feature boundaries differ.
 
 A pre-CPU exact-birth claim/return cut in Kernel's existing pending-launch
-queue can be independently correct before this port, and its retry/tail-order
-controls should precede nested execution. The bounded pre-admission check
-above does not provide that claim: its unchanged-context mixed control still
-drains older event and new `CreateProcessW` launches together. A fair trigger
-must retain older work without silently admitting it as A's child. A
+queue can be independently correct before this port. The earlier
+selected-context pre-admission seal still admitted mixed E+B; P0 later added
+in-place claims, P1 a fair Event turn, and bounded P2 limits A's handoff to
+its exact B. None supplies the connected callback-scoped port. A
 memory-fault-only port cut cannot
 make the normal attempt sound while other raw hooks and the caller's mutable
 references remain. Conversely, a complete port can establish machine-state

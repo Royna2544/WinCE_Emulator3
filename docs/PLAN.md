@@ -232,8 +232,8 @@ not an implemented owner. Stage its connected source cut in this order:
    now replaces the aggregate take/local-drain loop with exact-birth claims in
    Kernel's original queue. Its executed controls cover claim-time sibling
    visibility, nested batch order, stale/duplicate claims and same-slot pre-CPU
-   retry. The current admission set and order remain, including older event E
-   and new B under A's tail; this is an ownership repair, not creator
+   retry. At P0's seal the admission set and order still included older event E
+   and new B under A's tail; that was an ownership repair, not creator
    attribution or a new service trigger. During-run queue visibility and an
    active-claim checkpoint save were not independently executed in this cut.
    The [bounded P1 Event-service gate](subsystems/tasks-scheduler.md#p1-independent-event-service-trigger-bounded-source-test-gate)
@@ -242,17 +242,19 @@ not an implemented owner. Stage its connected source cut in this order:
    independent of `CreateProcessW`. Focused Kernel, real-MIPS, path,
    raw-kernel, retry and host-loop controls pass; the [P1 receipt](../evidence/stage3-event-trigger-p1-20261017/validation.receipt.md)
    seals 19-block no-default **1,558/0/2 ignored**, release-feature
-   **2,210/0/9 ignored**, and three feature checks at exit 0. Nested P0 E+B
-   batches can still drain siblings under A. Do not infer `NFY0:` return
-   timing or accept debugger-stop, monitor or live
-   behavior from this gate. Next stage the [proposed producer/claim gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-proposed-not-implemented):
-   carry an attempt-local exact publication witness through the import
-   boundary; claim only B after the selected-context preflight; and test mixed
-   E/B isolation, nested sibling visibility and pre-CPU retry order. A first
-   Shell trigger is limited to an original, non-shortcut direct `.exe` branch.
-   Its evidenced boundary is loader completion/admission before the parent
-   resumes, not a required first child instruction. None of these bounded
-   cuts settles O-T7, the callback-scoped port or runnable CPU custody.
+   **2,210/0/9 ignored**, and three feature checks at exit 0. At that P1
+   seal, nested P0 E+B batches could still drain siblings under A; it proved
+   neither `NFY0:` return timing nor monitor/live behavior. The later
+   [bounded combined monitor/P2 producer gate](subsystems/tasks-scheduler.md#exact-birth-pending-launch-producer-and-claim-gate-bounded-source-test-gate)
+   carries an attempt-local exact publication witness through the import
+   boundary and claims only B after selected-context preflight. Its real-MIPS
+   `CreateProcessW` and original direct-`.exe` Shell controls leave older E
+   queued; Kernel B1/B2 and same-birth bad-PE retry controls pass. An ordinary
+   monitor `continue` offers Event work, while `stop_pc` deliberately leaves
+   it queued. The evidenced Shell boundary is B loader/admission before A's
+   next guest instruction, not required B user-code execution. None of these
+   bounded cuts settles O-T7, the callback-scoped port, checked post-B
+   restoration, runnable CPU custody or live iNavi acceptance.
 2. Settle the callback-scoped machine-state port before claiming a sound
    lease. Successful `CreateProcessW` now stops A's native attempt at its
    staged return PC and runs B post-native, rather than through A's raw hook
