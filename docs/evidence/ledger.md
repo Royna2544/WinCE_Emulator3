@@ -2481,6 +2481,101 @@ live-app acceptance remain open.
 The pre-seal a03 release broad **2,183/0/9 ignored** remains development
 evidence, not this final source gate. No app or writable-mount run was made.
 
+## Post-native Parked publication custody expected red (2026-10-17, test-only)
+
+The [bounded receipt](../../evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+preserves a01's fixture-expectation miss and the a02 stamped, focused ignored
+test. A02's closed raw log has SHA-256
+`CF1BDE452EA360E0C747C19968AF34897B9AA5D43D5D4C978FF551F9C74354E3`
+and `unicorn.rs` SHA-256
+`C5F6A48CDEE38DA122EAC8960BD84E3F5A900BAE628CFD6995A4AC48BBD3EF38`.
+Real guest A executes `CreateProcessW`; the post-native B CPU executes
+fixed-stack `SW`/`LW`, with the stored value verified, and classifies
+`Parked`. Only at B's publication, a
+test-only framebuffer gate holds the parent parked queue's read borrow.
+Production returns typed `Backend`, while B stays exact-birth Kernel-live,
+unsignaled and wait-unready. The final expected-red assertion fails at zero
+machine-owned B slots versus one; the legacy parked queue is also empty.
+This is a forced queue conflict, not natural reentry, a live-pump result or
+a live iNavi failure. No production ownership code changed. Cut 3a's
+non-runnable fault quarantine does not repair this runnable/parked boundary;
+full custody remains behind the connected callback-scoped port and leaf
+permit. No app or writable mount was run.
+The same-source loopback-enabled a04 release suite passed 19 blocks,
+**2,184/0/10 ignored**; a05 no-default passed 19 blocks,
+**1,543/0/2 ignored**; three feature checks a06–a08 exited 0. A03's
+sandboxed release attempt had 45 failures concentrated in socket/remote
+tests with multiple explicit Windows `10013` errors; a04's identical command
+passed when loopback was permitted, supporting an environment explanation.
+The receipt preserves all closed log hashes and matching source stamps.
+
+## Selected-process context provenance stamp (2026-10-17, bounded source/test gate)
+
+The [stamped a01 no-default attempt](../../evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log)
+ran `cargo test --lib selected_process_context_stamp -j 1` and passed
+**5/0**; its closed raw log is SHA-256
+`6BCFB4A9F3B33E1F969DDA24CBB636D515BB5EDE5C026556EA4CA5DC44FDBBFC`.
+The [a02 focused release attempt](../../evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log)
+also passed **5/0** (closed log SHA-256
+`67CF6AC0A92F6DFC3B936E21A90DC445228B8EA9F072C20D7A7D5AA02AB2C05B`).
+The [a03 broad release attempt](../../evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log)
+passed 19 blocks **2,189/0/10 ignored** (closed log SHA-256
+`1282B80FDF2A1167F0CE615EFE51A9BC146A0DCA66E4B1AE50974506924B2F91`).
+The [a04 broad no-default attempt](../../evidence/stage3-selector-context-stamp-20261017/a04-broad-no-default.raw.log)
+passed 19 blocks **1,548/0/2 ignored** (closed log SHA-256
+`293D8AFBB084E13299B1AC07485BC30C0D8CA529CF89899E0C77B53D99ADB9FC`).
+Feature checks [a05 unicorn](../../evidence/stage3-selector-context-stamp-20261017/a05-check-unicorn.raw.log),
+[a06 unicorn+desktop](../../evidence/stage3-selector-context-stamp-20261017/a06-check-unicorn-desktop.raw.log)
+and [a07 normal](../../evidence/stage3-selector-context-stamp-20261017/a07-check-normal.raw.log)
+each exited 0; their closed log SHA-256 hashes are respectively
+`199CFABD789039B0C455AF38CFF40DDB9212BEF53819C0D66E08747D5BF4E6F5`,
+`C0AF659B29D372E9864EECFCBD6D368DD3EDB5B01EB4428DDD002C2D342FF8BB`
+and `D350DD19458E334DB248E052DCC3D4125FA2F3CAA8D855F91DBA689728648F7E`.
+`kernel.rs` was SHA-256
+`756636D2866FD8F6C656591EED66D7BFB5D97F61FCE46809A17E45D1D890B1D6`
+before and after all seven attempts, with unchanged hashes for the six other
+stamped source files. The [validation receipt](../../evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)
+ties them to one source seal. The source-only gate introduces a crate-private stamp
+of selected canonical birth plus checked generation. Tests cover all selected
+metadata/state setters, accepted versus refused exit compatibility writes,
+A→B→A selection, missing birth, PID replacement through public
+`HandleTable` without a selector write, and permanent provenance poisoning
+on generation overflow.
+
+This is not a production restoration gate. No handoff consumer checks the
+stamp; cloned Kernel lineage, direct backing-object mutation, execution-live
+ownership, a callback-scoped port and an exact parent-suspension token remain
+open. No live iNavi or writable-mount run occurred.
+
+## Unconnected machine-state port foundation (2026-10-17, partial focused gate)
+
+The [partial receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
+preserves the a01 stamped `cargo test -j 1 machine_port_` attempt: three
+library tests passed, zero failed, exit 0; other binaries were filtered.
+The closed [raw log](../../evidence/stage3-machine-port-foundation-20261017/a01-focused-no-default.raw.log)
+has SHA-256 `5F9C070161500EC44AF98EBE5CCEF995A7EC501E98644D07C355AA02A337EEC5`.
+The same-source [a02 focused release log](../../evidence/stage3-machine-port-foundation-20261017/a02-focused-release.raw.log)
+records `cargo test --release --features unicorn,trace,win32-desktop --lib
+machine_port -j 1`: **3/0/0**, exit 0, SHA-256
+`4964F7C55C4E1D94B2A5FB2AB867952C8BBC3C7187FF889BD6BE9EA02352DFB9`.
+Before/after source hashes matched for the new
+`src/emulator/machine_kernel_port.rs`
+(`89DACB64AFA8ACAC394E8CF9DC809D649E1D81D2A7164888F1B7D3E9332BA2F0`),
+`src/emulator/mod.rs`
+(`200E384F3E7138A9A39E9F1FF6160AED69B411FEF12AB09E689E8CCB945E48BB`),
+and unchanged Kernel/Unicorn
+files. The preserved combined source patch has SHA-256
+`B9695971CE6233ACEB7140E58FC8DCF10362549B4FBE97EA14C9617345691A55`.
+
+The source only introduces a crate-private joint Kernel/framebuffer loan
+cell, typed busy/attempt failure and first-terminal latch. The focused tests
+exercise owned observation after loan release, nested cross-resource busy
+refusal without panic, and terminal precedence. There is no independent
+compile-fail fixture, production caller, attempt/leaf authority, native-hook
+or child-helper migration, callback teardown proof, selection restoration,
+event fence or CPU-custody effect. Broad and feature-matrix checks
+remain pending; this is not Step 2 or live iNavi acceptance.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

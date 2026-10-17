@@ -721,6 +721,30 @@ Neither this witness nor the directory proves
 the Step 2 port, complete view/VM cleanup, full O-T7 leaf authority, measured
 RSS retention or live-app acceptance. No app or writable-mount run was made.
 
+##### Parked-publication custody expected red (test-only)
+
+The [bounded expected-red receipt](../../evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+records real-MIPS A `CreateProcessW` followed by B's post-native first slice.
+B executes fixed-stack `SW`/`LW`, with the stored value verified, then
+classifies `Parked`. A test-only
+framebuffer gate holds the parent parked-queue read borrow only during B's
+publication. A02 returns typed `Backend`; B stays exact-birth Kernel-live,
+unsignaled and wait-unready, but the parent queue is empty and the final
+assertion finds zero B machine-custody slots rather than one. A01 missed the
+fixture's intended expectation; a02 is the executed red. The artificial
+borrow does not prove natural callback reentry, live-pump exposure or an
+iNavi failure. Cut 3a quarantines non-runnable admitted-child errors only.
+This witness supports the connected O-T7 contract above: after the Step 2
+callback-scoped port, an admitted runnable/parked CPU must remain in machine
+custody through fallible publication. Its execution requires the checked
+leaf permit.
+It does not justify adding a second queue owner or claiming a queue-only fix.
+The same-source loopback-enabled release suite passed **2,184/0/10 ignored**
+and no-default passed **1,543/0/2 ignored** across 19 blocks each; three
+feature checks exited 0. The first sandboxed release attempt had 45 failures
+concentrated in socket/remote tests; multiple traces show Windows `10013`.
+Its identical-source loopback-enabled rerun passed.
+
 ##### Callback-scoped machine-state port cut (proposed, not implemented)
 
 The first connected port cut changes the *whole native attempt's* access
@@ -740,6 +764,18 @@ scheduler yield. All direct setup, callback and tail Kernel/framebuffer use
 must go through the same port while it exists. Merely wrapping the current
 long-lived `&mut CeKernel` while continuing to dereference `kernel_ptr` would
 retain the alias defect.
+
+An unconnected crate-private [foundation module](../../src/emulator/machine_kernel_port.rs)
+now holds the caller's Kernel and framebuffer in one `RefCell` state, offers
+fallible higher-ranked short loans, and latches the first typed terminal
+failure. Its [partial receipt](../../evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
+records a01 focused no-default and a02 focused release, each **3/0** on
+unchanged source. It has no production consumer,
+attempt/leaf authority, callback teardown proof, selected-process
+restoration or event fence; broad and feature-matrix checks are
+pending. The target API above includes authority that the foundation does
+not yet take. This source cut does not move any normal native attempt or
+hook across the boundary and cannot satisfy Step 2.
 
 The connected signature changes, shown as responsibilities rather than
 compiled Rust APIs, are:
@@ -778,6 +814,26 @@ drop may latch a stopped failure, but cannot claim successful restoration.
 This token and the O-T7 `ParentSuspension` are one target handoff contract,
 not two independent selectors. A port-only cut can validate selection and
 non-overlapping native entry but cannot claim the slot/leaf/custody portion.
+
+A preparatory crate-private `SelectedProcessContextStamp` now captures the
+selected canonical `ProcessBirthKey` and a checked generation; capture returns
+`None` without a registered birth. The nine selected-process metadata/state
+setters and the two accepted exit compatibility writes advance the generation
+before changing selected state. A failed exit preflight does not advance it.
+Comparison re-resolves birth each time because the public `HandleTable` can
+replace a PID without a setter. Overflow poisons capture permanently instead
+of wrapping. Focused [no-default a01](../../evidence/stage3-selector-context-stamp-20261017/a01-focused-no-default.raw.log)
+and [release a02](../../evidence/stage3-selector-context-stamp-20261017/a02-focused-release.raw.log)
+each passed **5/0**; same-source [broad release a03](../../evidence/stage3-selector-context-stamp-20261017/a03-broad-release.raw.log)
+passed 19 blocks **2,189/0/10 ignored**; broad no-default a04 passed 19
+blocks **1,548/0/2 ignored**, and a05–a07 feature checks exited 0
+([receipt](../../evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
+This stamp is
+not consumed by the production A→B handoff, is not a restoration token,
+and does not bind a cloned Kernel to machine/checkpoint lineage or prove
+execution-live ownership. Direct mutation through public backing objects
+is not fully stamped. The connected whole-attempt port, exact parent
+selection restoration, leaf authority and exit event fence above remain open.
 
 Test-first acceptance for this port is narrower than CPU-custody or Stage 4
 acceptance:
@@ -818,8 +874,9 @@ The nonempty publication conflict still requires the connected O-T7 custody
 cut and active-leaf run gate. The earlier ignored native-fault red has an
 ordinary real-MIPS focused green Cut 3a replacement with non-runnable
 quarantine, but that narrow directory is not the proposed runnable slot/lease
-contract. No callback port, selector token or exit event fence described here
-exists in production source today.
+contract. Only the unconnected loan-cell foundation exists in source; no
+connected callback-scoped port, selector token or exit event fence described
+here is used by production native attempts today.
 
 The historical 2026-10-17 pre-deferral read-only callback inventory is for
 `unicorn.rs` SHA-256
