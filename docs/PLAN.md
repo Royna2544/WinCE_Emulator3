@@ -263,8 +263,10 @@ not an implemented owner. Stage its connected source cut in this order:
    mutable Kernel/framebuffer loan across `emu_start` or B's nested run in
    the reviewed production path. Its process-scoped entry check and
    callback-scoped short loans are not an independently issued exact
-   executing-thread/leaf permit. Add that authority, checked selected-process
-   restoration and an exit-transaction event fence. A second guest-executable
+   executing-thread/leaf permit. Step 3 first adds independently issued
+   process/slot/attempt authority, then exact intra-slice thread/frame leaf
+   authority; checked selected-process restoration and an exit-transaction
+   event fence remain required. A second guest-executable
    permit or a panicking `RefCell` conflict is a failed control, not a yield.
    A [test-only real-MIPS fixed-stack witness](../evidence/stage3-live-pump-fixed-stack-hook-20261017/validation.receipt.md)
    covers the live-pump memory-fault route in both explicit-PC/global-hook
@@ -405,13 +407,16 @@ not an implemented owner. Stage its connected source cut in this order:
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
    **2,183/0/9 ignored** is development-only. Cut 3a alone could not claim a
    sound machine lease, raw-alias safety or general private VM/view cleanup.
-   The later port removes named raw aliases, but not the leaf permit or
-   runnable/parked slot ownership. Move those CPU paths one connected family
-   at a time; add the leaf permit when the first runnable slot lands.
-   For those later connected cuts, review private stable per-slot cells with short directory borrowing and
-   closure-scoped fallible payload loans. Gate backend entry on the exact
-   active leaf permit, and forbid slot retirement/reuse while any loan or
-   permit exists; a private `Rc` clone is not that gate. A checked
+   The later port removes named raw aliases, but not directory-issued run
+   authority or runnable/parked slot ownership. Move those CPU paths in a
+   connected first cut with a process-scoped attempt permit; exact
+   thread/frame leaf updates are a separate second cut.
+   For those later connected cuts, review private stable per-slot cells with
+   short directory borrowing and closure-scoped fallible payload loans. Gate
+   backend entry on the
+   directory-issued process permit in Cut 1, then the exact active
+   thread/frame leaf in Cut 2; forbid slot retirement/reuse while any loan or
+   permit exists. A private `Rc` clone is not that gate. A checked
    `ParentSuspension` revokes A's executable permit while its staged return
    context is pinned; the directory then issues a distinct birth-bound B
    permit. B runs only after A's native attempt closes at the deferred
@@ -438,25 +443,29 @@ not an implemented owner. Stage its connected source cut in this order:
    implies a successful guest exit or automatic retry. An accepted exact
    exit ends it as `Retired` only after all permits/loans have ended.
    No failed attempt may leave an unowned or indefinitely `Leased` payload.
-   The machine-owned directory/leaf authority alone issues
-   and consumes a permit for a selected slot, exact thread birth, optional
-   frame key/version and attempt generation; `SuspendedForChild` pins the
-   parent's return context while the child owns the leaf. `MachineKernelPort`
-   must check that issued permit against the live Kernel's machine binding:
-   copied `CeKernel` birth keys are not independent lineage proof, and a
-   clone/checkpoint cannot execute under the old permit without explicit
-   whole-machine relineage. Pair the live Kernel's lineage with the
-   directory's once at machine creation; neither permit issuance nor use
-   may proceed unless both still match the pair. A `CeKernel` clone must
-   receive a fresh or poisoned, non-executable lineage, never an
-   automatically derived `Clone` copy of the live value. Control both
-   mismatches (cloned Kernel +
-   original directory; original Kernel + fresh directory) as typed
-   pre-effect refusals. Every intra-slice `set_verified` transition
-   must obtain a checked, fallible permit update before more guest execution,
-   register changes or wait consumption, failing terminally on refusal.
-   `set_unverified` must revoke or block the leaf on the same boundary;
-   neither operation may mint authority from the selected thread cell.
+   **Cut 1 — connected process authority.** The machine-owned directory
+   alone issues and consumes an exclusive process-scoped permit keyed by its
+   lineage, exact process birth, slot key/generation and attempt generation;
+   `SuspendedForChild` pins A's staged return while its permit is revoked and
+   a distinct B permit is issued. `MachineKernelPort` checks that issued
+   permit against the live Kernel's machine binding on every backend entry
+   and callback. Pair the live Kernel's lineage with the directory's once at
+   machine creation, before boot's first instruction; copied `CeKernel`
+   numeric/incarnation births do not prove lineage. A clone must receive a
+   fresh or poisoned non-executable lineage, never an automatically copied
+   live binding. Control both mismatches (cloned Kernel + original directory;
+   original Kernel + fresh directory), and a wrong-process/slot/attempt exit
+   witness, as typed pre-effect refusals. Existing exact thread-birth guards
+   remain; they are not directory-issued executing-leaf proof in Cut 1.
+
+   **Cut 2 — intra-slice leaf authority.** The same directory-issued permit
+   gains exact executing thread birth and applicable frame key/version.
+   Every `set_verified` transition must obtain a checked, fallible update
+   before further guest execution, register changes or wait consumption;
+   `set_unverified` revokes or blocks that leaf on the same boundary. Neither
+   operation may mint authority from the selected thread cell. A refused
+   update stops terminally with the CPU still in custody. This is a separate
+   source/test gate, not an inferred result of Cut 1's birth checks.
    Before CPU construction, Kernel's exact pending-launch claim owns the
    launch, not a CPU. Admit each constructed B/C payload into its own
    exact-birth slot before its first guest instruction; a failed admission
@@ -466,34 +475,40 @@ not an implemented owner. Stage its connected source cut in this order:
    Neither a local variable nor `parked_child_processes` may own an admitted
    CPU. Resolve the run's `Leased` phase and publish cross-process locator
    edges atomically after classification.
-   The first connected source/test cut migrates boot A and verified child
-   publication for both ordinary A→B and the already-green witnessed
-   A→B→C path together. B and C each enter their own slots before running;
-   the shared destination and both main/monitor selectors issue exact
-   directory permits. Fence `activate_parked_process` for directory-owned
-   births and every unported public/direct or neutral Event execution path
-   before effects. Keep the old two-node decomposition only as a checked
-   import if an already-existing tree can still reach it; remove it if no
-   producer remains. The paired red and fix must cover ordinary A→B and
-   the A→B→C directory/progress census, B's next-slice primary-thread
-   permit, a pre-native-entry custody witness for each child, bypass
-   refusal and from-boot checkpoint refusal. Preserve the
-   green rotated progress, queue-conflict and zero-abandoned-tree controls.
-   An ordinary-only slot while rotated execution still uses boxed CPUs is
-   preparatory, not connected custody. Migrate `Completed` locator append
-   next, then modal and wait families. Full O-T7 still needs remaining
-   active/park/switch, exit/prune/hoist, monitor/checkpoint and owner paths
-   under the same authority. With boot A in custody, the strict checkpoint
-   guard refuses save/restore from boot; rewind remains unavailable until
+   Cut 1 migrates boot A and verified child publication for both ordinary
+   A→B and the already-green witnessed A→B→C path together. B and C each
+   enter their own slots before running. Normal, neutral Event and monitor
+   offers, main and monitor selectors, and pre/post rotation use one shared
+   directory destination and process/slot/attempt permit check; an unported
+   execution route refuses before guest or exit effects. Fence
+   `activate_parked_process` for directory-owned births. Keep the old
+   two-node decomposition only as a checked import if an already-existing
+   tree can still reach it; remove it if no producer remains. The paired red
+   and fix must cover ordinary A→B and A→B→C directory/progress censuses,
+   B's next-slice process/slot permit with its existing exact primary-birth
+   check, pre-native-entry custody witnesses for both children, wrong-lineage
+   clone and exit-witness refusals, bypass refusal and from-boot checkpoint
+   refusal. Preserve green rotated progress, queue-conflict and
+   zero-abandoned-tree controls, including pre/post rotation selection.
+   An ordinary-only slot while rotated or Event/monitor execution still uses
+   boxed CPUs is preparatory, not connected custody. Cut 2 follows Cut 1;
+   migrate `Completed` locator append, then modal and wait families under
+   the same authority in separately tested cuts. Full O-T7 still needs
+   general exit/prune/hoist, wait and recovery paths. With boot A in custody,
+   the strict checkpoint guard refuses save/restore from boot; rewind remains
+   unavailable until
    whole-machine relineage. This is not an implemented slot API or live-app
    acceptance.
    Keep a claimed launch in Kernel's original queue until admission/checked
    completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive
    parked CPU boxes and active/displaced/ready references to checked locators
-   together. Migrate the post-native parent/child lease, any remaining nested
-   callback path, `Completed`, run-state drain/return, process switch
-   and both main-loop/CPU-loop selector call sites before claiming custody.
+   together on the Cut 1 routes. Migrate the post-native parent/child lease,
+   run-state drain/return, process switch and both main-loop/CPU-loop
+   selector call sites before claiming connected process custody. Current
+   `CreateProcessW` has no nested in-callback guest entry; any future such
+   route requires a separate source/test gate. `Completed` and other
+   unported paths must refuse before effects until migrated.
    Keep existing scheduling policy pending Stage 5; do not add a parallel
    pending-owner vector or use a queue borrow as the resource owner.
 4. Make every exit/prune path preflight exact-birth survivors and reserve the

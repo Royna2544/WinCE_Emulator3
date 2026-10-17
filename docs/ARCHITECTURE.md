@@ -161,40 +161,57 @@ without moving the only owner into an unprotected local variable. This is a
 target contract, not a description of the current parked queues.
 
 The current `CreateProcessW` child runs at a deferred post-native handoff:
-A's native attempt has closed, its staged return context remains pinned,
-and A's executable permit is revoked before B receives a separate one. A's
-per-slot payload loan may remain on the outer post-native call stack, but no
+A's native attempt has closed and its staged return context remains held.
+Under the proposed Cut 1, A's executable process permit is revoked before B
+receives a separate one. A's per-slot payload loan may remain on the outer
+post-native call stack, but no
 mutable custody directory or topology, Kernel, Task/frame or framebuffer
 loan may span B's run. The native-entry precondition refuses a second guest
 entry from A's live callback; any future in-callback child route requires a
 separate source/test gate. Hook access to machine state must be
-callback-scoped, fallible and tied to the current leaf permit; reentrant or
-busy access fails closed rather than borrowing an already-loaned object
-through a raw pointer. A checked parent-suspension hold ends only after the
+callback-scoped, fallible and tied to current directory-issued run authority;
+reentrant or busy access fails closed rather than borrowing an already-loaned
+object through a raw pointer. A checked parent-suspension hold ends only after the
 child is classified and its resource is in custody.
 The bounded connected port removed the named raw Kernel/framebuffer hook
 aliases and uses short fallible loans, but its process-scoped check does not
 yet issue an exact executing-leaf permit or checked parent-suspension token.
 
 A generic `with_cpu` payload loan does not authorize execution. Backend entry
-requires an exact active-leaf run permit; a generation-checked slot-loan and
-retire latch must refuse slot retirement or reuse while any payload loan or
-run permit is outstanding. A private stable per-slot cell alone cannot enforce
+requires a directory-issued run permit; the final contract requires its exact
+active thread/frame leaf. A generation-checked slot-loan and retire latch
+must refuse slot retirement or reuse while any payload loan or run permit is
+outstanding. A private stable per-slot cell alone cannot enforce
 that lifetime rule. The proposed callback-scoped machine-state boundary also
 does not, by itself, prove every existing pending-return `RefCell` safe.
 
 The target machine binds its live Kernel instance to the CPU directory's
-machine lineage once, before any guest instruction. The directory issues an
-attempt-scoped leaf permit only after that pair, the exact slot generation,
-process/thread birth and applicable frame/version validate. The port checks
-the issued permit; it cannot mint one from mutable process selection or a
-thread cell. A cloned Kernel with copied numeric/incarnation births must not
-inherit the live binding through `Clone`; a clone is non-executable until an
-explicit whole-machine relineage. A mismatched Kernel/directory pair refuses
-before effects. Parent suspension revokes A's executable leaf while B runs,
-and checked thread changes update or revoke the leaf before another guest
-instruction. These are target contracts, not current `CeKernel`/`CpuCustody`
-APIs.
+machine lineage once, before any guest instruction. The first connected
+authority cut owns boot and admitted child CPU payloads in exact process-birth
+slots. Its directory issues an exclusive process-scoped attempt permit only
+after the Kernel/directory lineage pair, selected process birth, slot key and
+generation, and attempt generation validate. `MachineKernelPort` checks that
+issued permit for normal, neutral Event and monitor entry and both sides of
+rotation; it cannot mint one from mutable process selection. Existing exact
+thread-birth guards remain required, but they are not proof of a directory-
+issued executing thread/frame leaf. Admission precedes the first guest
+instruction, and an exit witness with a mismatched process/slot/attempt
+refuses before effects. A cloned Kernel with copied numeric/incarnation births
+must not inherit the live binding through `Clone`; a clone is non-executable
+until explicit whole-machine relineage. A mismatched Kernel/directory pair
+refuses before effects. Parent suspension revokes A's executable process
+permit while B runs; the directory issues a distinct B permit rather than
+transferring A's. The first cut includes boot, ordinary A→B and witnessed
+rotated A→B→C ownership/selection together; unported routes refuse before
+effects. It does not claim full thread/frame leaf authority.
+
+The second authority cut adds the exact executing-thread and applicable
+frame/version leaf to that same directory permit. Every intra-slice
+`set_verified` must obtain a checked, fallible leaf update before further
+guest execution, register effects or wait consumption; `set_unverified`
+revokes or blocks the leaf at the same boundary. Neither may derive authority
+from a mutable selected-thread cell. These staged contracts are targets, not
+current `CeKernel`/`CpuCustody` APIs or evidence that either cut passed.
 
 Custody phase is not canonical Task or wait state. For a verified slot, an
 attempt ends its `Leased` phase as derived runnable/parked eligibility, typed
@@ -362,9 +379,10 @@ before a CPU exists resolves as either an explicit CE creation failure with
 no CPU or a retryable error with the exact pending launch retained; neither
 may orphan an admitted child. After admission, a refused exit, native error
 or publication conflict leaves the exact CPU tree in custody and reports a
-stopped/terminal outcome. The current deferred child handoff pins the
-parent's staged return after its native attempt has closed; B takes a
-distinct exclusive permit, and A can be reissued one only after B is
+stopped/terminal outcome. The current deferred child handoff retains the
+parent's staged return after its native attempt has closed. Under the target
+custody contract, B takes a distinct exclusive process permit and A can be
+reissued one only after B is
 classified and safely in custody, without a mutable frame/queue borrow
 across B's run. The
 machine cannot leave Kernel execution live while dropping its only CPU owner.

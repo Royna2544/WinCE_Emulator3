@@ -543,6 +543,10 @@ The [common anchor](../ARCHITECTURE.md#a1-machine-authority) defines the
 machine/slot/permit contract, and [PLAN Step 3](../PLAN.md) stages O-T7a.
 Here, canonical HandleTable Task/frame state and Scheduler-derived wait/ready
 indexes remain authoritative; a CPU slot or parked locator is not a Task.
+That plan splits authority by level: Cut 1 connects process-birth CPU custody,
+selection and directory-issued process/slot/attempt permits; Cut 2 adds
+intra-slice exact thread/frame leaf updates. Neither cut is implemented by
+this candidate text. Existing thread-birth guards are not a directory leaf.
 
 One implementable *candidate*, not a selected Rust API, is a private directory
 of stable `Rc<CpuSlot>` cells. A slot has immutable key/process-birth metadata,
@@ -579,22 +583,24 @@ TID or queue position is never sufficient. Exactly one machine-wide run lease
 may execute guest instructions; every admitted slot is reachable from custody
 even when it is not runnable or its queue locator is being rewritten.
 
-Executable access needs a distinct `with_run_cpu(&RunPermit, closure)` gate
-that checks the permit is the active leaf for the exact slot/task/frame. A
-general `with_cpu` loan cannot expose an unmediated backend `run` method;
+Executable access needs a distinct `with_run_cpu(&RunPermit, closure)` gate.
+Cut 1 checks the directory-issued process birth, slot generation and attempt;
+Cut 2 additionally checks the active exact thread/frame leaf. A general
+`with_cpu` loan cannot expose an unmediated backend `run` method;
 the current public `UnicornMips::run_until_*` surface must be hidden behind
 the machine gate in a connected implementation. A private `Rc` clone or
 mutable payload reference never grants execution authority by itself.
 
-The candidate machine run permit is a checked *leaf* token, distinct from a
-backend native-engine lease. `suspend_parent_for_child` revokes A's executable
-permit and issues a scoped `ParentSuspension`; the directory issues a
-distinct exact-birth B permit as the one executable leaf. For current
+The candidate machine run permit is distinct from a backend native-engine
+lease. `suspend_parent_for_child` revokes A's executable process permit and
+issues a scoped `ParentSuspension`; the directory issues a distinct
+exact-process-birth B permit as the one executable owner. For current
 `CreateProcessW`, A's native attempt has already stopped with its
 import-return PC staged; its CPU and return context remain pinned until B is
-classified. A may receive a new permit only after exact birth/frame
-revalidation. The current native-entry precondition refuses another guest
-entry from A's live callback. Any future route that pauses A's `emu_start` in
+classified. A may receive a new permit only after exact process-birth/slot
+revalidation; Cut 2 additionally revalidates its thread/frame leaf. The
+current native-entry precondition refuses another guest entry from A's live
+callback. Any future route that pauses A's `emu_start` in
 a callback needs a separate source/test gate and must still revoke A's permit
 before issuing B's. Nested B→C repeats revocation and separate issuance;
 no directory, parent queue or canonical Task borrow spans the child run. A typed
@@ -606,10 +612,11 @@ details and checked recovery remain explicit operations, not `Drop` success.
 
 The proposed operations are `reserve_launch` (exact-birth pending claim and
 capacity), `admit_cpu` (put the newly constructed payload in its slot before
-fallible DLL load or native entry), `begin_run`/`finish_run` (validated
-task/frame lease and typed stop), `suspend_parent_for_child` (revoke A's
-permit and separately issue B's at deferred `CreateProcessW`; another nested
-run would require its own route gate), `prepare_exit_exact` and
+native entry), `begin_run`/`finish_run` (validated Cut 1 process/slot/attempt
+lease and typed stop, refined by Cut 2's exact task/frame leaf),
+`suspend_parent_for_child` (revoke A's permit and separately issue B's at
+deferred `CreateProcessW`; another nested run would require its own route
+gate), `prepare_exit_exact` and
 `commit_exit` (preflight/reserve before Kernel effects, then infallible
 original-locator splice), and `quarantine_exact`/`retire_exact` (never infer
 retirement from queue absence). These names describe responsibilities, not
@@ -635,14 +642,18 @@ because their public PID/TID sets overlap. In particular, an already-exited
 launch A cannot dispose the returned CPU until that CPU's **own** slot birth
 is verified as A: a first-slice handoff may have selected still-live B.
 
-This is a connected ownership cut, not a first-slice-only queue patch.
-`run_pending_process_launches`, import-return stop/staging and post-native
-launch,
-`Completed` and first-slice exit, `persist_run_state*`, all park/activate/
-switch/rotate selectors, duplicate/exit pruning and survivor hoists, the
-`main.rs` CPU loop and monitor checkpoint boundary must use the same slot
-contract. The current `UnicornMips` recursively contains boxed
-`ParkedProcess.cpu` owners, so that recursive owner field must become checked
+Cut 1 is connected process ownership, not a first-slice-only queue patch:
+boot, ordinary and witnessed A→B→C admission, normal and neutral Event
+offers, monitor entry, and pre/post rotation selection must use the same
+directory and `MachineKernelPort` process permit. Clone/directory mismatch,
+wrong-slot/attempt exit witnesses and unported execution routes refuse before
+effects. Its boot slot makes checkpoint save/restore refuse from boot until
+whole-machine relineage. Cut 2 then updates exact thread/frame permits at
+every intra-slice `set_verified`/`set_unverified` boundary. `Completed`,
+modal/wait, general exit/prune/hoist and recovery routes remain separately
+gated; neither cut alone is the full O-T7 contract. The current `UnicornMips`
+recursively contains boxed `ParkedProcess.cpu` owners, so that recursive
+owner field must become checked
 locators as part of this cut. The two existing rotation-policy sites may
 retain their present policy until Stage 5, but cannot bypass custody or the
 canonical Task/Frame checks. A conventional long-lived `&mut CpuCustody`
@@ -663,7 +674,8 @@ aliases and uses short loans, but does not supply the exact executable leaf.
 The full contract still needs a single-thread,
 callback-scoped
 `MachineKernelPort`: each fallible `try_with_kernel` loan is short, carries the
-current leaf/task authority, and ends before `emu_start`, a nested child run,
+current Cut 1 process permit and, after Cut 2, exact leaf/task authority,
+and ends before `emu_start`, a nested child run,
 or a reentrant host callback. Multi-step operations retain exact claims and
 checked versions rather than an open Kernel borrow. Parent/child selected
 process compatibility state is restored by a checked scoped token, never used
@@ -853,7 +865,8 @@ not the current blind save/set/restore of module fields and
 `CurrentProcessState`. It captures the parent's exact birth, selected-state
 version and staged nonzero return context, then selects B under a short loan
 and relinquishes that loan before B's native entry. The parent's executable
-leaf must be suspended while B owns the sole leaf; once O-T7 slots land, B
+process permit must be revoked while B owns the sole run permit; Cut 2
+refines both permits to exact thread/frame leaves. Once O-T7 slots land, B
 must be classified into durable custody before the token may resume A.
 Restoration checks the original parent birth and selection lineage rather
 than accepting a reused PID or whichever process was selected last. Token
