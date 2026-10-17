@@ -247,6 +247,7 @@ pub enum CpuCustodyError {
     OutstandingCpuHandle,
     HandleCountExhausted,
     MissingCpu,
+    CpuAlreadyBound,
     UnsealedQuarantine,
     KernelLineage(CpuMachineLineageError),
     StaleParentProcess,
@@ -282,6 +283,7 @@ impl fmt::Display for CpuCustodyError {
             Self::OutstandingCpuHandle => "CPU slot still has a payload handle",
             Self::HandleCountExhausted => "CPU slot handle count exhausted",
             Self::MissingCpu => "CPU custody slot has no payload",
+            Self::CpuAlreadyBound => "CPU payload already has a custody binding",
             Self::UnsealedQuarantine => "CPU quarantine payload has not closed its active loan",
             Self::KernelLineage(error) => return write!(f, "CPU Kernel lineage rejected: {error}"),
             Self::StaleParentProcess => "suspended parent process birth is no longer live/selected",
@@ -315,11 +317,19 @@ impl CpuLeafVerifier {
         self.authority.machine_lineage
     }
 
+    pub(crate) fn is_live(&self) -> bool {
+        self.authority.alive.get()
+    }
+
     /// Observe the currently directory-issued token without granting a new
     /// lease. The machine port captures this value at native entry and must
     /// revalidate the same value on every callback.
     pub(crate) fn current_permit(&self) -> Option<CpuLeafPermit> {
-        self.authority.alive.get().then(|| self.authority.active.get()).flatten()
+        self.authority
+            .alive
+            .get()
+            .then(|| self.authority.active.get())
+            .flatten()
     }
 
     pub fn validate(
@@ -412,6 +422,11 @@ struct AdmittedCpuLoan<'a> {
 
 impl Drop for AdmittedCpuLoan<'_> {
     fn drop(&mut self) {
+        if std::thread::panicking() && self.cell.phase.get() == CpuAdmittedPhase::Leased {
+            self.cell.phase.set(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::UnresolvedLeaf,
+            ));
+        }
         self.cell.seal_borrowed_if_quarantined(&mut self.payload);
     }
 }
@@ -841,6 +856,8 @@ impl CpuCustody {
         birth: ProcessBirthKey,
         cpu: UnicornMips,
     ) -> Result<(), (CpuCustodyError, UnicornMips)> {
+        #[cfg(feature = "unicorn")]
+        let verifier = self.leaf_verifier();
         let slot = match self.slot_mut(key) {
             Ok(slot) => slot,
             Err(error) => return Err((error, cpu)),
@@ -858,6 +875,12 @@ impl CpuCustody {
         };
         if payload.is_some() {
             return Err((CpuCustodyError::NotReserved, cpu));
+        }
+        #[cfg(feature = "unicorn")]
+        let mut cpu = cpu;
+        #[cfg(feature = "unicorn")]
+        if let Err(error) = cpu.bind_cpu_custody(key, birth, verifier) {
+            return Err((error, cpu));
         }
         *payload = Some(cpu);
         drop(payload);
@@ -1172,19 +1195,71 @@ impl CpuCustody {
         }
     }
 
-    /// Terminal transfer only after Kernel has minted an accepted exact-birth
-    /// completion witness. The caller may hoist foreign descendants, then drop
-    /// this original CPU; an error leaves the slot and payload untouched.
+    /// Legacy terminal transfer after Kernel has minted an accepted exact-birth
+    /// completion witness. An explicitly bound witness must name this directory;
+    /// an unbound witness is retained only for the pre-directory production
+    /// route. Bound callers must use `retire_with_bound_accepted_exit` instead.
+    /// An error leaves the slot and payload untouched.
     pub(crate) fn retire_with_accepted_exit(
         &mut self,
         key: CpuCustodyKey,
         accepted_exit: AcceptedProcessExit,
     ) -> Result<UnicornMips, CpuCustodyError> {
-        let slot = self.slot_mut(key)?;
+        self.retire_quarantined_with_witness(key, accepted_exit, false)
+            .map_err(|(error, _witness)| error)
+    }
+
+    /// Connected terminal transfer. A live Kernel/directory pair and a witness
+    /// issued while that pair was bound are both required. Every refusal returns
+    /// the unique, non-Clone witness so the caller can resolve a held resource
+    /// conflict without asking Kernel to commit the same exit twice.
+    pub(crate) fn retire_with_bound_accepted_exit(
+        &mut self,
+        kernel: &CeKernel,
+        key: CpuCustodyKey,
+        accepted_exit: AcceptedProcessExit,
+    ) -> Result<UnicornMips, (CpuCustodyError, AcceptedProcessExit)> {
+        if let Err(error) = kernel.require_cpu_machine_lineage(self.machine_lineage) {
+            return Err((CpuCustodyError::KernelLineage(error), accepted_exit));
+        }
+        self.retire_quarantined_with_witness(key, accepted_exit, true)
+    }
+
+    fn retire_quarantined_with_witness(
+        &mut self,
+        key: CpuCustodyKey,
+        accepted_exit: AcceptedProcessExit,
+        require_bound_witness: bool,
+    ) -> Result<UnicornMips, (CpuCustodyError, AcceptedProcessExit)> {
+        match accepted_exit.cpu_machine_lineage() {
+            Some(lineage) if lineage == self.machine_lineage => {}
+            Some(lineage) => {
+                return Err((
+                    CpuCustodyError::KernelLineage(CpuMachineLineageError::WrongMachine {
+                        bound: lineage,
+                        requested: self.machine_lineage,
+                    }),
+                    accepted_exit,
+                ));
+            }
+            None if require_bound_witness => {
+                return Err((
+                    CpuCustodyError::KernelLineage(CpuMachineLineageError::Unbound),
+                    accepted_exit,
+                ));
+            }
+            None => {}
+        }
+        let slot = match self.slot_mut(key) {
+            Ok(slot) => slot,
+            Err(error) => return Err((error, accepted_exit)),
+        };
         match &slot.state {
             SlotState::Quarantined { birth, .. } if *birth == accepted_exit.birth() => {}
-            SlotState::Quarantined { .. } => return Err(CpuCustodyError::WrongBirth),
-            _ => return Err(CpuCustodyError::NotQuarantined),
+            SlotState::Quarantined { .. } => {
+                return Err((CpuCustodyError::WrongBirth, accepted_exit));
+            }
+            _ => return Err((CpuCustodyError::NotQuarantined, accepted_exit)),
         }
         match std::mem::replace(&mut slot.state, SlotState::Vacant) {
             SlotState::Quarantined { cpu, .. } => Ok(cpu),
@@ -1200,6 +1275,24 @@ impl CpuCustody {
         key: CpuCustodyKey,
         accepted_exit: AcceptedProcessExit,
     ) -> Result<UnicornMips, (CpuCustodyError, AcceptedProcessExit)> {
+        match accepted_exit.cpu_machine_lineage() {
+            Some(lineage) if lineage == self.machine_lineage => {}
+            Some(lineage) => {
+                return Err((
+                    CpuCustodyError::KernelLineage(CpuMachineLineageError::WrongMachine {
+                        bound: lineage,
+                        requested: self.machine_lineage,
+                    }),
+                    accepted_exit,
+                ));
+            }
+            None => {
+                return Err((
+                    CpuCustodyError::KernelLineage(CpuMachineLineageError::Unbound),
+                    accepted_exit,
+                ));
+            }
+        }
         let cell = match self.admitted_cell(key, accepted_exit.birth()) {
             Ok(cell) => Rc::clone(cell),
             Err(error) => return Err((error, accepted_exit)),
@@ -1641,8 +1734,19 @@ mod tests {
 
     #[test]
     fn suspended_parent_loan_allows_child_but_not_old_parent_reentry() {
-        let ((birth_a, thread_a), (birth_b, thread_b)) = births_with_threads();
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch_a = kernel.queue_process_launch(Some("\\Test\\parent-a.exe".to_owned()), None);
+        let launch_b = kernel.queue_process_launch(Some("\\Test\\child-b.exe".to_owned()), None);
+        let birth_a = launch_a.process_birth.unwrap();
+        let thread_a = launch_a.primary_thread_birth.unwrap();
+        let birth_b = launch_b.process_birth.unwrap();
+        let thread_b = launch_b.primary_thread_birth.unwrap();
         let mut custody = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
         let key_a = custody.reserve(birth_a).unwrap();
         let key_b = custody.reserve(birth_b).unwrap();
         custody
@@ -1668,12 +1772,14 @@ mod tests {
                     handle_a.with_cpu_mut(old_a, |_| ()),
                     Err(CpuCustodyError::WrongAttempt)
                 );
+                kernel.set_current_process_id(launch_b.process_id);
                 assert_eq!(handle_b.with_cpu_mut(permit_b, |_| 7), Ok(7));
                 custody
                     .finish_leaf(&mut leaf_b, CpuLeaseEnd::Runnable)
                     .unwrap();
                 drop(leaf_b);
-                custody.resume_parent(&mut parent).unwrap();
+                kernel.set_current_process_id(launch_a.process_id);
+                custody.resume_parent(&mut parent, &kernel).unwrap();
             })
             .unwrap();
         drop(leaf_a);
@@ -1693,6 +1799,57 @@ mod tests {
         drop(resumed);
         drop(handle_b);
         drop(handle_a);
+    }
+
+    #[test]
+    fn suspended_parent_rejects_reused_thread_birth_before_runnable() {
+        use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
+
+        let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let launch = kernel.queue_process_launch(Some("\\Test\\stale-parent.exe".to_owned()), None);
+        let birth = launch.process_birth.unwrap();
+        let original_thread = launch.primary_thread_birth.unwrap();
+        let mut custody = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let mut leaf = custody
+            .issue_leaf(key, birth, original_thread, None)
+            .unwrap();
+        let mut suspension = custody.suspend_for_child(&mut leaf).unwrap();
+        drop(leaf);
+        kernel.set_current_process_id(launch.process_id);
+        assert!(kernel.mark_guest_thread_exited_by_birth(original_thread, 0x21));
+        kernel.close_handle(launch.thread_handle).unwrap();
+        kernel
+            .handles
+            .try_create_thread_in_birth(birth, original_thread.thread_id(), 0x4000, 0, false)
+            .unwrap();
+        assert_ne!(
+            kernel
+                .handles
+                .thread_birth_key_by_id(original_thread.thread_id()),
+            Some(original_thread)
+        );
+        assert_eq!(
+            custody.resume_parent(&mut suspension, &kernel),
+            Err(CpuCustodyError::StaleParentThread)
+        );
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::SuspendedForChild)
+        );
+        drop(suspension);
+        assert_eq!(
+            custody.admitted_phase(key, birth),
+            Ok(CpuAdmittedPhase::Quarantined(
+                CpuQuarantineReason::UnresolvedParentSuspension
+            ))
+        );
     }
 
     #[test]
@@ -1759,10 +1916,14 @@ mod tests {
         use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
 
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
-        let launch = kernel.queue_process_launch(Some("\\Test\\admitted-fault.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\admitted-fault.exe".to_owned()), None);
         let birth = launch.process_birth.unwrap();
         let thread = launch.primary_thread_birth.unwrap();
         let mut custody = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
         let key = custody.reserve(birth).unwrap();
         custody
             .admit_reserved(key, birth, UnicornMips::new().unwrap())
@@ -1791,12 +1952,29 @@ mod tests {
                 accepted
             })
             .unwrap();
-        assert!(cell.quarantine_sealed.get(), "loan drop must seal original CPU");
+        assert!(
+            cell.quarantine_sealed.get(),
+            "loan drop must seal original CPU"
+        );
         assert_eq!(
             custody.with_quarantined(key, birth, |cpu| cpu.has_saved_context()),
             Ok(false)
         );
         drop(lease);
+        let mut unbound_kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
+        let unbound_launch = unbound_kernel
+            .queue_process_launch(Some("\\Test\\unbound-witness.exe".to_owned()), None);
+        let unbound_witness = unbound_kernel
+            .try_mark_process_launch_exited_with_witness(&unbound_launch, 0x30, None)
+            .unwrap()
+            .unwrap();
+        let (error, _unbound_witness) = custody
+            .retire_admitted_with_accepted_exit(key, unbound_witness)
+            .unwrap_err();
+        assert_eq!(
+            error,
+            CpuCustodyError::KernelLineage(CpuMachineLineageError::Unbound)
+        );
         let (error, accepted) = custody
             .retire_admitted_with_accepted_exit(key, accepted)
             .unwrap_err();
@@ -1813,10 +1991,14 @@ mod tests {
         use crate::{ce::kernel::CeKernel, config::RuntimeConfig};
 
         let mut kernel = CeKernel::boot(RuntimeConfig::load_default().unwrap());
-        let launch = kernel.queue_process_launch(Some("\\Test\\unresolved-leaf.exe".to_owned()), None);
+        let launch =
+            kernel.queue_process_launch(Some("\\Test\\unresolved-leaf.exe".to_owned()), None);
         let birth = launch.process_birth.unwrap();
         let thread = launch.primary_thread_birth.unwrap();
         let mut custody = CpuCustody::new().unwrap();
+        kernel
+            .bind_cpu_machine_lineage(custody.machine_lineage())
+            .unwrap();
         let key = custody.reserve(birth).unwrap();
         custody
             .admit_reserved(key, birth, UnicornMips::new().unwrap())
@@ -1851,6 +2033,36 @@ mod tests {
             .retire_admitted_with_accepted_exit(key, accepted)
             .unwrap();
         assert!(!custody.has_any_custody());
+    }
+
+    #[test]
+    fn panicking_admitted_cpu_loan_seals_before_unwind_returns() {
+        let ((birth, thread), _) = births_with_threads();
+        let mut custody = CpuCustody::new().unwrap();
+        let key = custody.reserve(birth).unwrap();
+        custody
+            .admit_reserved(key, birth, UnicornMips::new().unwrap())
+            .unwrap();
+        let handle = custody.acquire_cpu_handle(key, birth).unwrap();
+        let lease = custody.issue_leaf(key, birth, thread, None).unwrap();
+        let permit = lease.permit();
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = handle.with_cpu_mut(permit, |_cpu| -> () {
+                panic!("intentional admitted CPU loan failure")
+            });
+        }));
+        assert!(panic.is_err());
+        let cell = custody.admitted_cell(key, birth).unwrap();
+        assert!(cell.quarantine_sealed.get());
+        assert_eq!(
+            cell.phase.get(),
+            CpuAdmittedPhase::Quarantined(CpuQuarantineReason::UnresolvedLeaf)
+        );
+        drop(lease);
+        assert_eq!(
+            handle.with_cpu_mut(permit, |_| ()),
+            Err(CpuCustodyError::StalePermit)
+        );
     }
 
     #[test]

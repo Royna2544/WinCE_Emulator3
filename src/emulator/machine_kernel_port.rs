@@ -136,14 +136,23 @@ impl<'machine> MachineKernelPort<'machine> {
         operation: &'static str,
     ) -> Result<(), MachinePortFailure> {
         match &self.leaf_verifier {
-            Some(verifier) => kernel
-                .require_cpu_machine_lineage(verifier.machine_lineage())
-                .map_err(|reason| {
-                    self.record_terminal(MachinePortFailure::CpuMachineBinding {
+            Some(verifier) => {
+                kernel
+                    .require_cpu_machine_lineage(verifier.machine_lineage())
+                    .map_err(|reason| {
+                        self.record_terminal(MachinePortFailure::CpuMachineBinding {
+                            operation,
+                            reason,
+                        })
+                    })?;
+                if !verifier.is_live() {
+                    return Err(self.record_terminal(MachinePortFailure::CpuLeaf {
                         operation,
-                        reason,
-                    })
-                }),
+                        reason: CpuCustodyError::WrongMachine,
+                    }));
+                }
+                Ok(())
+            }
             None if kernel.requires_cpu_machine_relineage() => {
                 Err(self.record_terminal(MachinePortFailure::CpuMachineBinding {
                     operation,
@@ -267,6 +276,9 @@ impl<'machine> MachineKernelPort<'machine> {
             return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
         }
         let state = self.try_loan(operation)?;
+        if state.kernel().current_process_birth_key() != authority.process_birth {
+            return Err(self.record_terminal(MachinePortFailure::WrongAttempt { operation }));
+        }
         self.check_cpu_leaf(authority, operation)?;
         Ok(state)
     }

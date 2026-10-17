@@ -20,6 +20,8 @@ use super::cpu_mips::{
 };
 use super::machine_kernel_port::MachineKernelPort;
 #[cfg(feature = "unicorn")]
+use super::cpu_custody::{CpuCustodyError, CpuCustodyKey, CpuLeafVerifier};
+#[cfg(feature = "unicorn")]
 use super::machine_kernel_port::{AttemptAuthority, MachineStateLoan};
 #[cfg(feature = "unicorn")]
 use super::native_engine::{NativeMappingPins, ProcessNativeEngine};
@@ -141,6 +143,113 @@ impl NativeGuestExecutionGuard {
 impl Drop for NativeGuestExecutionGuard {
     fn drop(&mut self) {
         NATIVE_ENTRY_ACTIVE.with(|active| active.set(false));
+    }
+}
+
+/// A CPU payload may be cloned for diagnostics or checkpoint preparation, but
+/// copying the native wrapper must never copy its directory execution right.
+/// Legacy unbound fixtures keep their old clone behavior until the remaining
+/// public routes are migrated behind the machine-owned directory.
+#[cfg(feature = "unicorn")]
+#[derive(Debug)]
+enum CpuExecutionBinding {
+    LegacyUnbound,
+    Directory {
+        key: CpuCustodyKey,
+        birth: crate::ce::object::ProcessBirthKey,
+        verifier: CpuLeafVerifier,
+    },
+    PoisonedClone,
+}
+
+#[cfg(feature = "unicorn")]
+impl Clone for CpuExecutionBinding {
+    fn clone(&self) -> Self {
+        match self {
+            Self::LegacyUnbound => Self::LegacyUnbound,
+            Self::Directory { .. } | Self::PoisonedClone => Self::PoisonedClone,
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+impl CpuExecutionBinding {
+    fn bind(
+        &mut self,
+        key: CpuCustodyKey,
+        birth: crate::ce::object::ProcessBirthKey,
+        verifier: CpuLeafVerifier,
+    ) -> std::result::Result<(), CpuCustodyError> {
+        if key.machine_lineage() != verifier.machine_lineage() {
+            return Err(CpuCustodyError::WrongMachine);
+        }
+        if !matches!(&*self, Self::LegacyUnbound) {
+            return Err(CpuCustodyError::CpuAlreadyBound);
+        }
+        *self = Self::Directory {
+            key,
+            birth,
+            verifier,
+        };
+        Ok(())
+    }
+
+    /// This is checked on the original payload, not on a cloneable handle.
+    /// In particular, A's long-lived mutable payload loan cannot execute
+    /// while a separately issued B permit is the directory's current leaf.
+    fn verify_native_entry(
+        &self,
+        kernel: &CeKernel,
+        thread_id: u32,
+        thread_birth: Option<crate::ce::object::ThreadBirthKey>,
+    ) -> Result<()> {
+        match self {
+            Self::LegacyUnbound => {
+                if kernel.cpu_machine_lineage().is_some()
+                    || kernel.requires_cpu_machine_relineage()
+                {
+                    return Err(Error::Backend(
+                        "unbound CPU cannot execute in a CPU-directory machine".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::PoisonedClone => Err(Error::Backend(
+                "cloned CPU custody payload cannot execute".to_owned(),
+            )),
+            Self::Directory {
+                key,
+                birth,
+                verifier,
+            } => {
+                kernel
+                    .require_cpu_machine_lineage(key.machine_lineage())
+                    .map_err(|error| Error::Backend(error.to_string()))?;
+                if kernel.current_process_birth_key() != Some(*birth) {
+                    return Err(Error::Backend(
+                        "CPU custody payload differs from selected process birth".to_owned(),
+                    ));
+                }
+                let permit = verifier.current_permit().ok_or_else(|| {
+                    Error::Backend("CPU custody payload has no active execution leaf".to_owned())
+                })?;
+                verifier
+                    .validate(permit, *key, *birth, permit.thread_birth(), permit.frame())
+                    .map_err(|error| Error::Backend(error.to_string()))?;
+                if permit.thread_birth().thread_id() != thread_id
+                    || thread_birth != Some(permit.thread_birth())
+                    || kernel.handles.thread_birth_key_by_id(thread_id)
+                        != Some(permit.thread_birth())
+                    || kernel.handles.live_thread_creation_owner_by_id(thread_id) != Some(*birth)
+                {
+                    return Err(Error::Backend(
+                        "CPU custody execution leaf differs from the exact live thread birth"
+                            .to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -288,6 +397,8 @@ impl Drop for SchedulerBlockStateLease<'_, '_> {
 
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
+    #[cfg(feature = "unicorn")]
+    cpu_execution_binding: CpuExecutionBinding,
     #[cfg(feature = "unicorn")]
     native_engine: ProcessNativeEngine<
         (
@@ -2411,6 +2522,8 @@ impl UnicornMips {
     pub fn new() -> Result<Self> {
         Ok(Self {
             #[cfg(feature = "unicorn")]
+            cpu_execution_binding: CpuExecutionBinding::LegacyUnbound,
+            #[cfg(feature = "unicorn")]
             native_engine: ProcessNativeEngine::new(
                 unicorn_engine::unicorn_const::Arch::MIPS,
                 unicorn_engine::unicorn_const::Mode::MIPS32
@@ -2527,6 +2640,19 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             saved_worker_exit_birth: None,
         })
+    }
+
+    /// Called once by an exact-birth reserved slot while it holds the empty
+    /// payload cell exclusively. A clone or a CPU already in another slot is
+    /// never eligible for admission, even if it carries identical guest bytes.
+    #[cfg(feature = "unicorn")]
+    pub(crate) fn bind_cpu_custody(
+        &mut self,
+        key: CpuCustodyKey,
+        birth: crate::ce::object::ProcessBirthKey,
+        verifier: CpuLeafVerifier,
+    ) -> std::result::Result<(), CpuCustodyError> {
+        self.cpu_execution_binding.bind(key, birth, verifier)
     }
 
     pub fn map_region(
@@ -8747,6 +8873,11 @@ impl UnicornMips {
             thread_id: representative_thread_id,
             cpu: Box::new(UnicornMips {
                 #[cfg(feature = "unicorn")]
+                cpu_execution_binding: std::mem::replace(
+                    &mut self.cpu_execution_binding,
+                    CpuExecutionBinding::LegacyUnbound,
+                ),
+                #[cfg(feature = "unicorn")]
                 native_engine: std::mem::replace(
                     &mut self.native_engine,
                     ProcessNativeEngine::new(
@@ -9443,6 +9574,18 @@ impl UnicornMips {
         };
         let (kernel, framebuffer) = preflight_state.split_mut();
         self.last_native_slice_outcome = NativeSliceOutcome::NoAttempt;
+        #[cfg(feature = "unicorn")]
+        if let Err(error) = self.cpu_execution_binding.verify_native_entry(
+            kernel,
+            self.current_thread_id,
+            kernel.handles.thread_birth_key_by_id(self.current_thread_id),
+        ) {
+            report.failure_operation = Some("CPU custody execution preflight");
+            return AttemptExecution {
+                report,
+                result: Err(error),
+            };
+        }
         if self.writable_main_image.is_some() {
             report.failure_operation = Some("unmigrated writable-image run boundary");
             return AttemptExecution {
@@ -15133,6 +15276,14 @@ impl UnicornMips {
         // selected Kernel context. Child setup intentionally changes this
         // stamp later, so capture it once at the primary native boundary.
         let pre_native_selected_context = kernel.selected_process_context_stamp();
+        if let Err(error) = self.cpu_execution_binding.verify_native_entry(
+            kernel,
+            current_thread_id.get().0,
+            current_thread_id.get().1,
+        ) {
+            report.failure_operation = Some("CPU custody before native guest entry");
+            pre_entry_try!(Err::<(), Error>(error));
+        }
         drop(setup_state);
         let port_attempt_guard = pre_entry_try!(
             port.enter_attempt(port_authority, "enter native guest attempt")
@@ -16570,6 +16721,7 @@ impl UnicornMips {
 impl super::cpu::CpuBackend for UnicornMips {
     fn new() -> crate::error::Result<Self> {
         Ok(Self {
+            cpu_execution_binding: CpuExecutionBinding::LegacyUnbound,
             native_engine: ProcessNativeEngine::new(
                 unicorn_engine::unicorn_const::Arch::MIPS,
                 unicorn_engine::unicorn_const::Mode::MIPS32
@@ -73069,6 +73221,101 @@ mod unicorn_tests {
         let subsequent = super::NativeGuestExecutionGuard::enter()
             .expect("sequential native entry after the outer run");
         drop(subsequent);
+    }
+
+    fn bound_boot_cpu_fixture() -> crate::Result<(
+        CeKernel,
+        super::CpuCustody,
+        crate::emulator::cpu_custody::CpuSlotHandle,
+        crate::emulator::cpu_custody::CpuLeafLease,
+    )> {
+        let mut kernel = phase1_kernel("bound-cpu-fixture.exe")?;
+        let mut directory = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let birth = kernel.current_process_birth_key().expect("boot process birth");
+        let thread = kernel
+            .handles
+            .process_primary_thread_birth(birth)
+            .expect("boot primary thread birth");
+        kernel
+            .bind_cpu_machine_lineage(directory.machine_lineage())
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let key = directory
+            .reserve(birth)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        directory
+            .admit_reserved(key, birth, super::UnicornMips::new()?)
+            .map_err(|(error, _cpu)| Error::Backend(error.to_string()))?;
+        let leaf = directory
+            .issue_leaf(key, birth, thread, None)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let handle = directory
+            .acquire_cpu_handle(key, birth)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        Ok((kernel, directory, handle, leaf))
+    }
+
+    #[test]
+    fn cloned_admitted_cpu_cannot_execute_with_original_valid_leaf() -> crate::Result<()> {
+        let (mut kernel, mut directory, handle, mut leaf) = bound_boot_cpu_fixture()?;
+        let permit = leaf.permit();
+        let mut clone = handle
+            .with_cpu_mut(permit, |original| original.clone())
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let refused = clone.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits::default(),
+            &mut directory,
+        );
+        assert!(matches!(
+            refused.result,
+            Err(Error::Backend(ref message)) if message.contains("cloned CPU custody payload")
+        ));
+        assert_eq!(refused.report.attempt_id(), None);
+        assert_eq!(
+            refused.report.failure_operation(),
+            Some("CPU custody execution preflight")
+        );
+        assert_eq!(clone.native_engine_identity_for_test(), None);
+        assert_eq!(directory.leaf_verifier().current_permit(), Some(permit));
+        handle
+            .with_cpu_mut(permit, |_original| ())
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        directory
+            .finish_leaf(&mut leaf, crate::emulator::cpu_custody::CpuLeaseEnd::Runnable)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        Ok(())
+    }
+
+    #[test]
+    fn unbound_cpu_cannot_execute_under_bound_kernel_and_directory() -> crate::Result<()> {
+        let (mut kernel, mut directory, _handle, mut leaf) = bound_boot_cpu_fixture()?;
+        let permit = leaf.permit();
+        let mut unbound = super::UnicornMips::new()?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let refused = unbound.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits::default(),
+            &mut directory,
+        );
+        assert!(matches!(
+            refused.result,
+            Err(Error::Backend(ref message)) if message.contains("unbound CPU cannot execute")
+        ));
+        assert_eq!(refused.report.attempt_id(), None);
+        assert_eq!(
+            refused.report.failure_operation(),
+            Some("CPU custody execution preflight")
+        );
+        assert_eq!(unbound.native_engine_identity_for_test(), None);
+        assert_eq!(directory.leaf_verifier().current_permit(), Some(permit));
+        directory
+            .finish_leaf(&mut leaf, crate::emulator::cpu_custody::CpuLeaseEnd::Runnable)
+            .map_err(|error| Error::Backend(error.to_string()))?;
+        Ok(())
     }
 
     #[test]
