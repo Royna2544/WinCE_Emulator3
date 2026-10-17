@@ -2649,7 +2649,7 @@ Separately, source review at that earlier seal found that the raw
 writes; a failed write can return `FALSE` with a queued live child. No
 failing-write execution control is claimed yet.
 
-## CE6-directed CreateProcessW output Boolean cut (2026-10-17, validation in progress)
+## CE6-directed CreateProcessW output Boolean cut (2026-10-17, executed)
 
 The raw shim now accepts null `PROCESS_INFORMATION` and does not turn a failed
 output copy into `FALSE` after an exact child birth has been published. New raw
@@ -2659,8 +2659,11 @@ rollback is promised for earlier copied words. The
 [A03 raw-kernel log](../../evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
 records **135/0** and the
 [A04 no-default log](../../evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
-records 19 blocks **1,550/0/2 ignored**. Release A05 and the final receipt/
-source seal are pending; do not count this as a completed broad gate yet.
+records 19 blocks **1,550/0/2 ignored**. The
+[sealed receipt](../../evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+also records A05 release-feature 19 blocks **2,194/0/9 ignored** and a06–a08
+feature checks exiting 0, with unchanged stamped source hashes. This closes
+the bounded raw output-Boolean source/test gate, not full process semantics.
 
 The existing success-path `LastError=0` is a known CE6 mismatch and was not
 validated by the new controls. A null or unwritable output can leave allocated
@@ -2669,6 +2672,12 @@ unproved. Raw `TRUE` still precedes loader/CPU admission. The post-native
 aggregate queue drain still admits older event/Shell launches without creator
 attribution and has no independent trigger for them. This cut is not a
 callback-scoped port, exact-birth launch claim, live-app or writable-mount run.
+
+The bounded [REA/Shell finding](../../evidence/ce6-rea-shell-trigger-20261017/findings.md)
+supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and a
+`CeEventHasOccurred`→`DeviceIoControl` boundary routed through `NFY0:` in
+local CE6 source. It neither establishes notification launch timing nor
+implements the emulator's exact-birth service trigger/claim.
 
 ## Chat-project validation notes (not in this repository)
 

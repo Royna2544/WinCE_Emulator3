@@ -883,10 +883,11 @@ The separate raw `CreateProcessW` output-Boolean cut treats
 birth is published even if a later output word cannot be copied. The bounded
 [A03 raw-kernel](../../evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
 passed **135/0** and [A04 no-default](../../evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
-passed 19 blocks **1,550/0/2 ignored**; release A05 and the final source seal
-are pending. Earlier output words may remain written; no guest-byte rollback
-is promised. The shim's forced success-path `LastError=0` is a known CE6
-mismatch, not a result of this gate. Null/unwritable output can leave
+passed 19 blocks **1,550/0/2 ignored**. The [sealed receipt](../../evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+also records A05 release-feature **2,194/0/9 ignored** over 19 blocks and
+a06–a08 feature checks exiting 0. Earlier output words may remain written; no
+guest-byte rollback is promised. The shim's forced success-path `LastError=0`
+is a known CE6 mismatch, not a result of this gate. Null/unwritable output can leave
 process/thread aliases undisclosed to the guest, and their lifetime after
 accepted exit is unproved. `TRUE` still precedes loader/CPU admission, and the
 deferred aggregate drain still has no creator attribution or independent
