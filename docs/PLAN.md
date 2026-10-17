@@ -415,6 +415,68 @@ not an implemented owner. Stage its connected source cut in this order:
    `ParentSuspension` transfers the one executable leaf permit A→B while A's
    staged return context is pinned; a different nested path may still pause
    A's native callback. B is classified into custody before A may resume.
+   The **design-only O-T7a contract** specifies a directory key of
+   machine lineage/index/checked generation and one exact process birth's
+   process-local CPU payload per admitted slot, with its same-process thread
+   contexts inside that payload. A cross-process parked child is a checked
+   locator edge, never another boxed CPU owner inside the slot. The initial
+   migration admits one slot per birth; any later same-process custody fork
+   must admit a distinct identified payload, not clone one CPU, and receive
+   separate review. A no-witness mixed tree stays in a separate unbound
+   whole-tree hold, not an exact-birth slot. Slot conditions describe
+   custody only: `Reserved` before admission, `Runnable` → `Leased` for an
+   attempt, then `Runnable`, `Parked` with a checked wait locator,
+   `Quarantined` or `Retired`. `Runnable`/`Parked` are cached eligibility,
+   not lifecycle/wait truth; canonical Task/frame and Scheduler remain
+   authoritative. A successful attempt ends `Leased` as `Runnable` or
+   `Parked` with a checked wait locator. A post-admission native fault or
+   terminal port/`RecoveryRequired` outcome ends it as non-runnable
+   `Quarantined` with a typed reason and the original CPU retained; neither
+   implies a successful guest exit or automatic retry. An accepted exact
+   exit ends it as `Retired` only after all permits/loans have ended.
+   No failed attempt may leave an unowned or indefinitely `Leased` payload.
+   The machine-owned directory/leaf authority alone issues
+   and consumes a permit for a selected slot, exact thread birth, optional
+   frame key/version and attempt generation; `SuspendedForChild` pins the
+   parent's return context while the child owns the leaf. `MachineKernelPort`
+   must check that issued permit against the live Kernel's machine binding:
+   copied `CeKernel` birth keys are not independent lineage proof, and a
+   clone/checkpoint cannot execute under the old permit without explicit
+   whole-machine relineage. Pair the live Kernel's lineage with the
+   directory's once at machine creation; neither permit issuance nor use
+   may proceed unless both still match the pair. A `CeKernel` clone must
+   receive a fresh or poisoned, non-executable lineage, never an
+   automatically derived `Clone` copy of the live value. Control both
+   mismatches (cloned Kernel +
+   original directory; original Kernel + fresh directory) as typed
+   pre-effect refusals. Every intra-slice `set_verified` transition
+   must obtain a checked, fallible permit update before more guest execution,
+   register changes or wait consumption, failing terminally on refusal.
+   `set_unverified` must revoke or block the leaf on the same boundary;
+   neither operation may mint authority from the selected thread cell.
+   No admitted CPU may have two owners.
+   After review, migrate ordinary verified-child publication first, the
+   witnessed rotated pair second, `Completed` append with parked-tree
+   locators third, then modal and wait families. The first connected
+   source/test cut must include its red and fix together: an ordinary
+   real-MIPS A→B control requires A's boot CPU and B's original CPU in the
+   same machine directory, each in exactly one birth-bound slot, with B
+   `Runnable` under canonical revalidation, absent as a CPU box from
+   `parked_child_processes`, and B's next slice under a directory-issued
+   primary-thread permit. Merely putting B in a slot while A stays an
+   external CPU owner is preparatory, not connected custody. Retain
+   rotated-pair, queue-conflict, checkpoint refusal and
+   zero-abandoned-unbound-tree controls. Fence every unported execution
+   bypass in that gate, including public/direct and neutral Event child
+   paths; connect the normal drain and both selectors for its supported
+   shape. Full O-T7 still needs active/park/switch, exit/prune/hoist,
+   monitor/checkpoint and all remaining owner paths under the same
+   authority. Because boot A would live in custody, the current strict
+   checkpoint lineage guard will refuse monitor save/restore from boot;
+   update checkpoint controls to expect that refusal explicitly. Rewind
+   remains unavailable until whole-machine relineage lands. This staged
+   contract is not an implemented slot API or
+   live-app acceptance.
    Keep a claimed launch in Kernel's original queue until admission/checked
    completion, and reserve
    slot capacity before moving a constructed payload. Convert recursive
