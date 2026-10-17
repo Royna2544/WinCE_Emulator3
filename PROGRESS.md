@@ -4,6 +4,42 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 connected port and unbound child custody source/test gate
+
+The [bounded receipt](evidence/stage3-connected-port-20261017/validation.receipt.md)
+seals five source files and a reproducible patch. Final-source focused nested
+controls passed **1/0** each; 19-block release-feature tests passed
+**2,228/0/9 ignored**, no-default tests **1,564/0/2 ignored**, and the
+Unicorn-only and CI desktop feature checks exited 0, all with unchanged
+source hashes. The stable-source a13 development failure was a stale
+two-observation assertion: the new mismatch guard stops before the second
+probe. A14 checks the retained tree directly. No live iNavi or writable-mount
+run was made.
+
+The connected `MachineKernelPort` now carries fallible short Kernel/framebuffer
+loans through native setup/tail, the code/block/import/memory hooks and the
+recursive child path; no named `kernel_ptr`/`framebuffer_ptr` uses remain in
+`unicorn.rs`. A synthetic held-loan callback gives a typed terminal refusal
+before effects; natural hook reentry was not exercised. On the production
+`Some(custody)` child path, an unbound ticket and holding cell are reserved
+before execution. A conflicting/error tree is deposited there before
+classification; an ordinary verified B cancels the ticket and proceeds. B
+executes a second real-MIPS slice. Nested A→B→C instead stops when the
+returned C-root/B-parked tree conflicts with B's origin, retaining that tree
+as `UnverifiedStopped`; A's original CPU wrapper remains but its private
+continuation is poisoned. Early and late queue conflicts and a fixed-stack
+native fault retain admitted B; the tested controls show zero abandoned
+unbound trees. Recursive mapped-blob bytes include parked descendants, not
+host RSS.
+
+This is not full Step 2 or O-T7: port entry checks selected process birth,
+not an independently authorized executing thread/leaf; public/direct-fixture
+`custody=None` still bypasses the holding cell. Unverified trees are stopped,
+not runnable recovery. Checked post-B restoration, an exit-event fence,
+whole-machine checkpoint relineage and live-app acceptance remain open. The
+earlier nested observation and census below describe their historical seals,
+not the new guarded outcome.
+
 ## 2026-10-17 nested post-child selection observation (test-only)
 
 A [focused real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)

@@ -105,9 +105,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    that C payload under B's reservation; carry checked selection restoration
    and the rotated subtree into O-T7's slot/leaf design. The follow-on
    [enabled CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
-   now reproduces exact-owner `NoAttempt` non-progress with all three CPUs
-   retained; the connected port and slot/leaf cut must convert its next
-   call to an executed exact-owner guest slice. Next, in order:
+   reproduced exact-owner `NoAttempt` non-progress with all three CPUs
+   retained at its earlier seal. The later
+   [connected cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
+   instead retains the mismatched C-root/B-parked tree as stopped and returns
+   typed terminal error before classification; it does not execute the next
+   B slice or provide in-session recovery. Next, in order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
      [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
@@ -139,10 +142,12 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Continue the [machine-owned custody design](docs/subsystems/tasks-scheduler.md#next-custody-and-reachability-design-gate-proposed-not-implemented)
      and [O-T7](docs/DECISIONS.md) consumer inventory: a
      [test-only direct-MIPS held-queue expected red](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
-     now reaches post-native B `Parked` publication and shows that a typed
-     queue conflict drops its only CPU owner while B remains Kernel-live and
-     unsignaled. The artificial read borrow is not natural reentry or a
-     live-pump result. The earlier ordinary
+     reached post-native B `Parked` publication at its earlier seal and showed
+     a typed queue conflict dropping its only CPU owner while B remained
+     Kernel-live and unsignaled. The later connected `Some(custody)` early and
+     late conflict controls retain B's CPU, but other publication and public
+     no-custody paths remain open. The artificial read borrow is not natural
+     reentry or a live-pump result. The earlier ordinary
      post-admission first-slice error was separately narrowed by Cut 3a
      quarantine. At its earlier source seal, the
      [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
@@ -193,9 +198,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      seals focused **1/0**, 19-block release **2,162/0/11 ignored**, and
      no-default **1,532/0/3 ignored**. Next separately test nonempty
      descendant publication, later-slice A→B survival and live-pump
-     reachability. Nonempty queue
-     borrow/reservation conflict currently reports terminal post-effect CPU
-     ownership loss, not a recoverable hold.
+     reachability. The nonempty `Completed`/`Exited` queue conflict belongs to
+     an earlier seal and remains unproven on the connected route. The bounded
+     connected `Some(custody)` **Parked** early/late conflict controls retain
+     B's CPU as non-runnable, not as a recoverable execution slot.
      [Attempt 18](evidence/stage3-createprocess-deferred-20261017/attempt18-current-native-fault-red.raw.log)
      first showed the admitted child's ordinary native fault losing its sole
      CPU owner. [Final-source attempt 07](evidence/stage3-completed-borrow-20261017/attempt07-current-native-fault-red.raw.log)
@@ -219,37 +225,35 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      default hookless/count-limited modes (focused **2/0**, release
      **2,164/0/11 ignored**, no-default **1,532/0/3 ignored**). It attributes
      the page commit to the production memory-fault route by source
-     exclusivity, not an independent callback counter. Use that route to
-     stage reentry/loan contract controls for the connected machine-state port;
-     an isolated fault-hook `RefCell` wrapper cannot be sound while the native
-     call retains `&mut CeKernel` and the other raw hooks bypass it. The raw
-     pointer and reentry boundaries remain unchanged; narrow non-runnable
-     Cut 3a custody does not make this a port. The first accepted
-     port cut must span native setup, all hook families, post-native teardown
-     and deferred child handoff with no loan held across reentry; a one-hook
-     fault test alone is diagnostic, not O-T7 acceptance. The
-     [current-source Step 2 inventory](docs/PLAN.md) counts 112 remaining
+     exclusivity, not an independent callback counter. At that earlier seal,
+     an isolated fault-hook `RefCell` wrapper could not be sound while the
+     native call retained `&mut CeKernel` and the other raw hooks bypassed it.
+     The later [connected port source/test gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
+     removes named raw aliases across native setup/tail, all hook families
+     and the recursive child path, with short fallible loans and no loan
+     across guest reentry. It still lacks exact thread/leaf authority,
+     checked post-B restoration and an exit-event fence; it is not full Step 2
+     or O-T7 acceptance. The
+     [historical pre-port Step 2 inventory](docs/PLAN.md) counted 112
      Kernel and nine framebuffer named-alias use-lines on the sealed
      `FB855EEB…92E381` source, plus the live host, monitor, child, exit and
      presentation boundaries. The earlier [pointer delta audit](evidence/stage3-machine-port-inventory-20261017/findings.md)
      belongs to its older source and includes a then-native-fault CPU-drop
-     path; both are inventory, not a port implementation.
+     path; both are historical inventory, not the connected implementation.
      The [bounded scheduler-block fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
      routes that callback's 19 Kernel and two framebuffer dereferences
      through one guarded raw adapter and rejects a preseeded busy service
      point. Its fresh per-attempt flag is shared by no other hook family.
-     Current source has one native entry, sequential import/block hooks and
-     deferred child execution; there is no natural overlap to justify a
-     synthetic shared-flag gate. The subsequent
+     The earlier source had one native entry, sequential import/block hooks
+     and deferred child execution; there was no natural overlap to justify
+     a synthetic shared-flag gate. The subsequent
      [native-entry precondition](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
      refuses a second same-host-thread native entry before private CPU setup;
      its forced-busy control retries on the same CPU, and sealed broad suites
      pass. It is neither natural reentry nor a machine-owned leaf permit.
-     Audit reachable raw-alias/host-callback loans, including the post-native
-     child helper's Kernel loan and a child's first-touch memory fault.
-     Preserve whole-attempt setup/tail, selected-birth, modal partial-effects,
-     A-to-B handoff and full CPU-custody gates; do not count either
-     guard as the connected port.
+     Continue to audit host-callback lifetime, selected-birth/leaf authority,
+     modal partial effects, A-to-B handoff and full runnable CPU custody;
+     the old busy flag and entry guard alone were not the connected port.
      The preparatory crate-private selected-context stamp pairs canonical
      birth with a checked generation. Focused no-default and release attempts
      each passed **5/0**; same-source broad release passed 19 blocks
@@ -317,19 +321,17 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      and preserve the separate `TRUE`-before-loader gap. Output-copy failure
      is not permission to roll back an already-published child. The shim's
      success-path `LastError=0` remains a known CE6 mismatch outside this gate.
-     The unconnected `MachineKernelPort` foundation passed historical
-     [development tests](evidence/stage3-machine-port-foundation-20261017/validation.receipt.md)
-     but has been removed from active source; Git and evidence preserve it.
-     Continue the connected public-wrapper, setup/hook/tail and child-helper
-     migration with attempt/leaf authority, callback lifetime, checked
-     post-B restoration and exit-event fencing before Step 2. The focused
-     pre-admission guard is neither that port nor a parent-suspension token;
-     public backing-object mutation and cloned Kernel lineage remain open.
-     The parked-publication red and receipt are
-     preserved as historical evidence; its test-only seam and ignored fixture
-     have now been retired from current `unicorn.rs`. Keep the runnable/parked
-     CPU-custody bug open and stage a new connected gate after the port,
-     rather than treating pre-retirement a03 as a passing custody control.
+     The [connected port and custody gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
+     now passes a bounded source/test seal. Next authenticate the final
+     executing thread and exact leaf permit (including handoff), check
+     post-B selection restoration and exit-event fencing, and remove or
+     fence the public/direct-fixture `custody=None` bypass. Convert retained
+     unverified and legacy runnable/parked trees into checked executable
+     slots with exact locator migration, then prove later-slice progress and
+     recovery/relineage. The historical parked-publication red is preserved;
+     current tested `Some(custody)` conflicts retain B but do not provide a
+     runnable hold or close every child/exit path. Public backing-object
+     mutation and cloned Kernel lineage remain open.
      The bounded [Cut 3a](docs/subsystems/tasks-scheduler.md#cut-3a-quarantine-resource-lifetime-bounded-source-test-gate)
      [receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
      seals one source: a11 focused release **1/0**, 19-block a12 release
@@ -367,9 +369,10 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      be reported as a mapping-sync failure.
      Keep the original direct-helper red as historical evidence. The new
      Parked-publication red is an ownership contract control, not permission
-     for a queue-only production patch: complete the callback-scoped
-     Kernel/framebuffer port before full runnable/parked slot and leaf-permit
-     migration, then retain B's original CPU across publication failure.
+     for a queue-only production patch. The bounded connected port and
+     `Some(custody)` gate retain B's original CPU in tested early/late
+     conflicts, but only as stopped custody. Continue full runnable/parked
+     slot and exact leaf-permit migration.
      Stage further expected reds before replacing parked Box ownership with
      checked locators; do not add another pending owner vector. A controlled
      `Exited`-classifier fixture and separate live-pump deferred-launch/

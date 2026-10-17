@@ -4,22 +4,20 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
-- **Nested A→B→C launch retains CPUs but cannot run its next selected slice:**
-  the [enabled real-MIPS census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
-  counted exactly one physical CPU payload each for live A, B and C both
-  after nested launch and after the next call, with empty Cut 3a custody.
-  B's first slice rotated the local `child` CPU payload to C; the outer
-  [child helper](src/emulator/unicorn.rs#L21376) then published that C payload
-  inside B's parked wrapper. Subsequent activation selected B while the
-  active payload remained C. The exact-owner
-  [preflight](src/emulator/unicorn.rs#L9418) correctly refused before native
-  entry with typed `Backend("child CPU does not own the selected live process
-  birth")`, `NoAttempt`, and no attempt ID. This is reproducible guest
-  non-progress, not observed CPU loss. A B-only restore guard, relabeling C
-  as B, or quarantining C under B's reservation would be unsound; the
-  connected callback-scoped port and O-T7 exact-slot/leaf transfer must
-  preserve both original payloads and align selection with the executing
-  slot. No iNavi or mount run is attributed to this failure.
+- **Nested A→B→C launch is retained but cannot make its next selected slice:**
+  the earlier [real-MIPS census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+  counted A/B/C physical payloads 1/1/1, then reached a typed pre-entry
+  `NoAttempt` because Kernel selected B while the active CPU owned C. On the
+  later [connected source seal](evidence/stage3-connected-port-20261017/validation.receipt.md),
+  the B-origin return instead detects the C-root/B-parked mismatch before
+  classification, retains the whole returned tree as `UnverifiedStopped`,
+  and reports typed terminal failure. A's original CPU wrapper survives but
+  its private continuation is poisoned with no saved context. This closes
+  the tested physical-drop path, not progress or recovery: B still gets no
+  executed next slice from that nested route. A B-only restore guard,
+  relabeling C as B, or putting C in B's runnable slot would be unsound.
+  O-T7 needs exact-slot/leaf selection, checked post-B restoration, and a
+  recoverable custody transition. No iNavi or mount run is attributed here.
 - **Post-native child handoff still restores a mutable process selection
   without checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
   identifies blind save/set/restore of selected module fields and
@@ -47,7 +45,8 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   continuation and requires recovery, not resume; aliasless synthetic
   nonprivate attempts do not prove that poison or an exact `failure_operation`
   record. This is a source-audited risk, not an attributed live-app failure;
-  the connected callback-scoped port and checked parent-suspension token
+  the connected port now exists in a bounded source/test cut, but checked
+  parent suspension, final thread/leaf authority and post-B restoration
   remain open. A later [test-only real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
   reached B's post-child/pre-parent-restore boundary with Kernel selecting C
   and the returned child CPU slot owning C's launch, not B's. The current
@@ -288,21 +287,20 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       covers only tested natural-parked and requested-active stopped exits;
       [first-slice receipt](evidence/stage3-first-slice-survivor-green-20261016/validation.receipt.md).
       This source-audited risk is not an attributed live-app failure.
-    - **Post-native `Parked` publication can lose a live child's CPU:** the
-      [test-only real-MIPS expected red](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
-      makes A execute `CreateProcessW` and B execute a fixed-stack first
-      touch, then holds a parent parked-queue read borrow only around B's
-      publication. The path returns typed `Backend` and poisons A's private
-      attempt; B remains exact-birth Kernel-live, unsignaled and wait-unready,
-      but its parked queue is empty and the final assertion finds zero
-      machine-owned B CPU slots instead of one. The borrow is an artificial
-      test conflict, not demonstrated natural reentry, live-pump behavior or
-      a mounted-app failure. The one-shot seam and ignored fixture have since
-      been retired from current source; the receipt remains historical
-      evidence, not a fix. Cut 3a holds non-runnable native-fault children,
-      not this runnable/parked publication case. Preserve B's original CPU
-      through a connected O-T7 slot/leaf migration after the callback-scoped
-      machine-state port, not a queue-only owner patch.
+    - **Post-native child custody remains incomplete outside the connected
+      holding-cell path:** at its earlier seal, the
+      [test-only `Parked` publication red](evidence/stage3-parked-publication-red-20261017/validation.receipt.md)
+      ran A's `CreateProcessW` and B's fixed-stack first touch, then held a
+      parent parked-queue read borrow around publication; B stayed Kernel-live
+      while its CPU was lost. That artificial borrow was not demonstrated
+      natural reentry or mounted-app behavior. The later
+      [connected gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
+      retains B's original CPU as `UnverifiedStopped` on tested early and late
+      queue conflicts, with no abandoned unbound tree. It does not provide a
+      runnable B slot or cover public/direct-fixture `custody=None`, all
+      exit/classifier paths, or in-session recovery. Full O-T7 locator/leaf
+      migration remains open; the historical red is not a current narrow
+      `Some(custody)` failure.
     - At its earlier source seal, a [real-MIPS non-live expected-red](evidence/stage3-real-mips-first-slice-20261016/validation.receipt.md)
       executed A's actual `CreateProcessW` IAT call to launch B, then returned
       A through its saved startup RA. A exited `0x63`; B remained exact-birth
@@ -339,10 +337,11 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       skips that unnecessary borrow; its
       [bounded receipt](evidence/stage3-completed-borrow-20261017/validation.receipt.md)
       records focused **1/0**, 19-block release **2,162/0/11 ignored**, and
-      no-default **1,532/0/3 ignored**. Nonempty descendants instead use
-      fallible borrow/reservation: on conflict, the child exit effects are
-      already committed and the typed terminal error can still lose descendant
-      CPU custody. No current-route nonempty survivor or live-pump later-slice
+      no-default **1,532/0/3 ignored**. Nonempty descendants instead used
+      fallible borrow/reservation: at that earlier seal, a conflict after
+      committed child exit effects could lose descendant CPU custody. The
+      connected `Parked` controls do not establish a nonempty
+      `Completed`/`Exited` survivor transition. No current-route nonempty survivor or live-pump later-slice
       control closes that gap. The later bounded
       [exact-primary stopped-exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
       covers its tested child/boot birth checks, not this descendant-publication
@@ -361,10 +360,11 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       [owner-sealed Cut 3a receipt](evidence/stage3-cpu-custody-quarantine-20261017/validation.receipt.md)
       passes a11 focused release **1/0**, 19-block a12 release
       **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and a14–a16
-      feature checks; all six source hashes matched. This bounded result does
-      not repair the
-      nonempty descendant publication conflict above, other parked/active
-      owner-loss paths, or the public run wrapper's custody bypass. A
+      feature checks; all six source hashes matched. This bounded result did
+      not by itself repair the nonempty descendant publication conflict above,
+      other parked/active owner-loss paths, or the public run wrapper's custody
+      bypass. The later connected gate covers its tested `Parked` conflicts
+      only. A
       stamped a07 expected red reproduced a synthetic post-load/pre-native-entry
       error crossing the producer's `child_admitted` flag before poisoning and
       moving an unpoisoned CPU into quarantine. The test stopped at that
@@ -377,9 +377,11 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
       Unicorn; the consumer poison check remains a backstop. This does not
       prove natural pre-entry reachability or general error-path closure. The two
       stale route-specific controls were retired; none is a live iNavi result.
-    - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
-      refuses a preseeded busy block service but does not exclude raw
-      code/import/memory-hook aliases or prove natural nested callbacks.
+    - The historical [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
+      refused a preseeded busy block service but did not exclude raw
+      code/import/memory-hook aliases or prove natural nested callbacks. The
+      later connected port removes the named raw aliases, but it does not
+      independently authorize an exact executing leaf.
       Source order permits modal framebuffer restoration to consume a wait and
       publish pixels before a hypothetical nested fault is observed.
       Whole-attempt access, partial-effects recovery, and full runnable/parked

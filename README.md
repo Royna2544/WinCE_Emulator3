@@ -50,10 +50,23 @@ remote-control HTTP/WebSocket surface.
   open. A [test-only nested A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
   found C selected and occupying the returned child CPU slot when B's
   post-native handoff returned, so a B-only restore guard is deferred to
-  O-T7. A follow-on [CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
+  O-T7. At its earlier seal, a follow-on
+  [CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
   found A/B/C payloads intact but the next selected slice refused before
-  guest execution because B selection was paired with C's CPU. The NAND
-  `notify.dll` trace has not established CE launch timing.
+  guest execution because B selection was paired with C's CPU. The later
+  connected gate below stops earlier and retains the mismatched tree. The
+  NAND `notify.dll` trace has not established CE launch timing.
+- The bounded [connected port and child-custody cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
+  passes final-source release-feature **2,228/0/9 ignored** and no-default
+  **1,564/0/2 ignored** across 19 blocks, plus two feature checks. A borrowed
+  per-attempt `MachineKernelPort` removes named raw Kernel/framebuffer hook
+  aliases and uses short fallible loans. Production `Some(custody)` child
+  execution reserves a whole-tree holding cell before B runs: ordinary B
+  executes a second real-MIPS slice; nested A→B→C stops on the mismatched
+  C-root/B-parked return and retains it as `UnverifiedStopped`. Tested early
+  and late queue conflicts and a native fault retain admitted B. The stopped
+  tree is not runnable recovery; exact thread/leaf authority, checked post-B
+  restoration, public no-custody bypass removal and live iNavi remain open.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,
@@ -151,9 +164,10 @@ remote-control HTTP/WebSocket surface.
   **2,184/0/9 ignored**, a13 no-default **1,543/0/2 ignored**, and three
   feature checks; all six source hashes matched. Pre-seal a03
   **2,183/0/9 ignored** remains development evidence.
-  Status/debug report retained mapped-blob bytes, not measured RSS. The
-  callback-scoped machine-state port, runnable/parked custody, public-run
-  bypass removal and general private VM/file-view exit cleanup remain open.
+  Status/debug report retained mapped-blob bytes, not measured RSS. At the
+  Cut 3a seal, the callback-scoped machine-state port, runnable/parked custody,
+  public-run bypass removal and general private VM/file-view exit cleanup
+  remained open; the later bounded port is described above.
   Other exit paths, no-context/PC resumability and
   live-app proof remain open; no new app or mount run was made.
 - The bounded [exact-primary exit gate](evidence/stage3-primary-exit-birth-v4-20261017/validation.receipt.md)
@@ -166,15 +180,17 @@ remote-control HTTP/WebSocket surface.
 - The [scheduler-block self-reentry fence](evidence/stage3-scheduler-block-fence-20261017/validation.receipt.md)
    passes a real-MIPS preseeded-busy control and sealed 19-block release and
    no-default suites (**2,176/0/10** and **1,539/0/2 ignored**). It refuses a
-   preseeded-busy scheduler service with a typed error; natural self-reentry,
-   other hook aliases, cross-hook reentry and machine-owned CPU custody remain open.
+   preseeded-busy scheduler service with a typed error. At that seal, natural
+   self-reentry, other hook aliases, cross-hook reentry and machine-owned CPU
+   custody remained open; the later port removes named raw aliases only.
 - A [native-entry precondition](evidence/stage3-native-entry-precondition-20261017/validation.receipt.md)
   now refuses same-host-thread nested guest execution before private CPU
   setup; a preseeded-busy real-MIPS control verifies refusal and same-CPU
   retry. Sealed 19-block release and no-default suites passed **2,178/0/10
-  ignored** and **1,539/0/2 ignored**. Natural reentry, a connected
-  Kernel/framebuffer port and full child CPU custody remain unproved; the
-  later non-runnable Cut 3a quarantine is bounded above.
+  ignored** and **1,539/0/2 ignored**. At that seal, natural reentry, a
+  connected Kernel/framebuffer port and full child CPU custody were unproved;
+  the later connected port is bounded above and still lacks exact leaf
+  authority and runnable child custody.
 - A bounded [checkpoint lineage guard](evidence/stage3-checkpoint-orphan-frame-green-20261016/validation.receipt.md)
   refuses monitor save/restore while canonical task records or pending
   launches are retained, or CPU custody remains. This prevents duplicate
