@@ -12883,6 +12883,73 @@ fn shell_execute_ex_resolves_relative_paths_from_process_current_directory() -> 
 }
 
 #[test]
+fn shell_execute_ex_direct_exe_unwritable_hinstapp_has_no_false_live_queue() -> Result<()> {
+    struct Cleanup(std::path::PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_direct_exe_unwritable_hinstapp");
+    let _cleanup = Cleanup(root.clone());
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    kernel.set_file_root(&root);
+    kernel.set_process_current_directory(Some(r"\Windows".to_owned()));
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let info = 0x2_6200;
+    let file_ptr = 0x2_6300;
+    // Inputs through nShow (+28) are mapped, but hInstApp (+32) cannot be
+    // written after the direct .exe launch is published. No partial-copy
+    // contents or invalid-output CE return value is assumed.
+    memory.map_words(info, 8);
+    memory.write_word(info, 60);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_word(info + 28, 1);
+    memory.write_wide_z(file_ptr, "viewer.exe");
+
+    let returned_false = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHELL_EXECUTE_EX,
+        [info],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(value),
+            ..
+        } => !value,
+        other => panic!("ShellExecuteEx must return a Boolean: {other:?}"),
+    };
+    let launches = kernel.take_pending_process_launches();
+    let one_live_unsignaled_child = if let [launch] = launches.as_slice() {
+        launch.process_birth.is_some_and(|birth| {
+            kernel
+                .handles
+                .process_birth_key_for_handle(launch.process_handle)
+                == Some(birth)
+                && kernel.handles.process_execution_live_by_birth(birth)
+                && kernel.process_exit_code(launch.process_handle) == Some(STILL_ACTIVE)
+                && kernel.is_wait_ready(launch.process_handle, thread_id) == Some(false)
+        })
+    } else {
+        false
+    };
+    assert!(
+        !(returned_false && one_live_unsignaled_child),
+        "ShellExecuteEx reported failure after publishing one live, unsignaled direct-EXE child"
+    );
+    Ok(())
+}
+
+#[test]
 fn shell_execute_ex_resolves_generic_file_association_for_extensionless_document() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
