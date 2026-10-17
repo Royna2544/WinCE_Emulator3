@@ -554,16 +554,16 @@ a short, fallible directory borrow, releases that borrow, then uses
 `try_borrow_mut` on **that slot only** for the closure. It does not
 build a self-referential guard containing both an `Rc` and a `RefMut`, return an
 unguarded `&mut CpuPayload`, or use a panicking `borrow_mut` for reentry.
-During the current deferred handoff, A's payload loan may stay on the outer
-post-native handoff stack while a different child slot is admitted and run;
-A's native callback and `emu_start` have already returned. Metadata/readiness
-queries must use the separate header, not try to reborrow the held parent
-payload. Attempted same-slot reentry stops or defers with a typed conflict;
-it never creates a second executable loan. A separate slot-loan latch,
-checked with the key's generation, must make `retire_exact` refuse
-removal/reuse while any payload
-loan or run permit exists; cloning the private `Rc` alone does not ensure
-that. The directory remains the durable registration/CPU owner after each
+For the current deferred route, a future slot implementation may keep A's
+payload loan on the outer post-native handoff stack while admitting and
+running B in its own slot; A's native callback and `emu_start` have already
+returned. Metadata/readiness queries must use the separate header instead of
+reborrowing the held parent payload. Attempted same-slot reentry stops or
+defers with a typed conflict; it never creates a second executable loan.
+A separate slot-loan latch, checked with the key's generation, must make
+`retire_exact` refuse removal/reuse while any payload loan or run permit
+exists; cloning the private `Rc` alone does not ensure that. The directory
+remains the durable registration/CPU owner after each
 scoped loan ends.
 
 Parked-tree edges and Scheduler ready/wait indexes would hold checked slot
