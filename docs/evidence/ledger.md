@@ -2907,6 +2907,27 @@ and is not validation. This is not machine-owned runnable slots, an exact
 executing-leaf permit, general recovery, full O-T7 or live-app acceptance.
 No app or writable mount was run.
 
+## O-T7a machine-directory groundwork (2026-10-17, development-only snapshot)
+
+The [development receipt](../../evidence/stage3-machine-directory-20261017/validation.development.receipt.md)
+records six tested source-file hashes and closed raw logs without claiming a
+connected Cut 1 seal. Focused controls cover
+once-bound `CeKernel`/directory lineage, poisoned bound-Kernel/CPU clones,
+wrong-directory and stale-permit refusal, exact-birth admitted CPU cells and
+loans, witness-preserving exit retirement refusal, boxed-child admission
+refusal, and bound Send handoff refusal before native effects. The tested
+`MachineKernelPort` checks an issued slot/birth/attempt token that currently
+also carries a thread field; it does
+not mint one from a selected PID/TID. Across 19 blocks each, a20 full-feature
+debug passed **2,255/0/9 ignored**, a22 full-feature release passed
+**2,254/0/9 ignored**, and a23 no-default passed **1,581/0/2 ignored**
+with loopback permitted. The final a24 Unicorn-only and a25 CI desktop
+feature checks exited 0. The source hashes stayed unchanged across those
+accepted attempts. This is preparatory testing, not connected
+O-T7a Cut 1 or exact intra-slice thread/frame Cut 2: boot, normal, Event,
+monitor and rotation still lack one directory-owned CPU/selector route.
+No iNavi or writable-mount run was made.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in
