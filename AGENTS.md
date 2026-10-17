@@ -346,10 +346,11 @@ preallocates an unbound whole-tree holding cell before production
 `Some(custody)` child execution. Its final source passed release-feature
 **2,228/0/9 ignored** and no-default **1,564/0/2 ignored** across 19 blocks,
 plus Unicorn-only and CI desktop feature checks. Ordinary B executes a
-second slice; nested C-with-B stops typed and retains the returned tree as
+second slice; at that connected seal, nested C-with-B stopped typed and
+retained the returned tree as
 `UnverifiedStopped`, with A's private continuation poisoned. Tested early
 and late queue conflicts and a native fault retain admitted B. This does not
-provide exact executing-thread/leaf authority, runnable recovery, checked
+provide exact executing-thread/leaf authority, runnable recovery, general
 post-B restoration, exit-event fencing or public `custody=None` coverage;
 it is not full Step 2/O-T7 or live-app acceptance. The
 [later public no-custody admission fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
@@ -358,6 +359,16 @@ image setup but before consuming its exact claim or executing guest child
 instructions. The launch remains pending for machine-owned recovery; the
 public parent's attempt is poisoned, not safely retryable in-session. This
 does not create a runnable custody slot or exact executing-leaf permit. The
+[focused witnessed two-node rotated handoff](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+verifies C-root/parked-B with exact live births and selected C image, restores
+A's caller, and publishes the original B/C CPUs under their own legacy-queue
+labels; later real-MIPS A/B/C slices execute. The separate
+[a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+retains an unwitnessed nested E→D tree whole and stopped. The
+[a09 selection observation](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+ends with ordinary outer rotation selecting B/B after A restoration, not A.
+These are focused tests only, not a broad seal, machine-owned runnable slots,
+exact leaf authority, general recovery or live-app acceptance. The
 [v2 offline preflight](evidence/stage3-preflight-v2-review-20261017/validation.receipt.md)
 passes 171 source/build-chain controls and 83 runner guards; it requires a
 future fresh output-hash-stamped rebuild and does not authorize a run.

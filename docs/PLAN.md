@@ -326,10 +326,12 @@ not an implemented owner. Stage its connected source cut in this order:
    belong in O-T7's connected slot/leaf cut.
    The historical [follow-on census](../evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
    preserved A/B/C payloads but reached typed `NoAttempt` on the next call
-   because B was selected with C's CPU. The connected cut stops earlier and
-   retains the returned C-root/B-parked tree as unverified; it still cannot
-   execute B's next slice. O-T7 acceptance must turn that into an executed
-   exact-owner guest slice, not suppress the preflight.
+   because B was selected with C's CPU. At its seal the connected cut stopped
+   earlier and retained the returned C-root/B-parked tree as unverified. A
+   newer focused witnessed two-node branch publishes B and C under their
+   own legacy-queue labels and executes later exact-owner A/B/C guest slices;
+   a no-witness nested E→D return remains `UnverifiedStopped`. This is not
+   the full O-T7 slot/leaf migration or general post-child recovery.
    The [proposed port contract](subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
    specifies one borrowed Kernel/framebuffer port for the native attempt,
    fallible short loans tied to exact attempt/leaf authority, and a checked
@@ -340,8 +342,11 @@ not an implemented owner. Stage its connected source cut in this order:
    `emu_start` or B's nested run. This is not the full proposed contract:
    entry verifies selected process birth, not the final executing thread;
    callback thread/slice token values are self-compared rather than issued by
-   an independent leaf owner. Prove framebuffer callback conflicts where
-   reachable, exact selected-birth/PID reuse, checked post-B restoration,
+   an independent leaf owner. The focused witnessed two-node branch checks
+   exact A caller restoration before publishing B/C, and its a09 observation
+   finishes with B selected after ordinary outer rotation, not A. Prove
+   framebuffer callback conflicts where reachable, exact selected-birth/PID
+   reuse, general checked post-B restoration,
    exit-event fencing and hook finish/abort lifetime. Any conflict must stop
    with a typed terminal outcome, never guest API success or a scheduling
    yield. Independent review and executed feature-appropriate suites support
@@ -373,8 +378,8 @@ not an implemented owner. Stage its connected source cut in this order:
    A later [connected source/test gate](../evidence/stage3-connected-port-20261017/validation.receipt.md)
    preallocates an unbound deposit ticket and private whole-tree holding cell
    before a `Some(custody)` child runs. Its ordinary B executes a second
-   real-MIPS slice; a nested C-root/B-parked mismatch and tested early/late
-   queue conflicts retain the original CPU tree as `UnverifiedStopped`, with
+   real-MIPS slice; at that seal a nested C-root/B-parked mismatch and tested
+   early/late queue conflicts retained the original CPU tree as `UnverifiedStopped`, with
    zero abandoned unbound trees in those controls. A fixed-stack native fault
    also retains B. This is preservation, not a runnable B locator or checked
    parent-suspension transfer; at that connected seal, public `custody=None`
@@ -386,7 +391,11 @@ not an implemented owner. Stage its connected source cut in this order:
    before claim consumption, CPU admission or guest child execution. It
    retains the exact launch for machine-owned recovery while poisoning the
    public parent's attempt; no same-session retry, runnable slot, checked
-   leaf authority or broader classifier/exit closure follows.
+   leaf authority or broader classifier/exit closure follows. A later focused
+   real-MIPS witnessed two-node handoff publishes the exact B/C payloads
+   through the legacy queue, while a nested no-witness E→D return stays
+   stopped with its original tree. This does not migrate runnable/parked
+   CPUs into machine slots or complete O-T7.
    Status/debug expose retained mapped-blob bytes, not
    measured RSS; checkpoint save/restore refuses custody. Pre-seal a03 broad
    **2,183/0/9 ignored** is development-only. Cut 3a alone could not claim a

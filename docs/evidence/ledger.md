@@ -2878,6 +2878,28 @@ same-session retry is not proven. This gate does not create a runnable slot,
 issue a leaf permit, repair post-B restoration or settle other classifier/
 exit paths. No iNavi or writable-mount run followed.
 
+## Witnessed two-node rotated child handoff (2026-10-17, focused source tests)
+
+The enabled real-MIPS A→B→C [a01 expected red](../../evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)
+stopped at the prior B-origin C-root/B-parked mismatch before the required
+later guest slices. On later focused source, [a10](../../evidence/stage3-rotated-handoff-20261017/a10-nested-three-shapes.raw.log)
+and [a11](../../evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+each passed **3/0**. The witnessed exact two-node branch validates both
+original CPU births and C's selected image, checks the live A caller and
+restoration, reserves both entries under one fallible parent-queue borrow,
+then publishes B and C under their own legacy-queue labels. The positive
+control executes later A/B/C guest slices; five selected C metadata/image
+challenges retain the intact tree as `UnverifiedStopped`. The focused
+[a09 selection control](../../evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+passed **1/0**: C is selected/active when B returns, and ordinary outer
+rotation finally selects B/B after A restoration, not A. The focused
+[a12 no-witness control](../../evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+passed **1/0** and retains a nested E→D tree whole and stopped, preserving
+untouched outer siblings in order. These are focused attempts pending a
+final source/broad receipt, not machine-owned runnable slots, an exact
+executing-leaf permit, general recovery, full O-T7 or live-app acceptance.
+No app or writable mount was run.
+
 ## Chat-project validation notes (not in this repository)
 
 The pages cite the following notes by name. Their originals are available in

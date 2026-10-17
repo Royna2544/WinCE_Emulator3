@@ -345,8 +345,8 @@ already-exited launch handle is not proof that the returned CPU belongs to
 that launch: rotation may have selected a different still-live process, so
 discard requires verification of the CPU's own exact birth. The machine
 sequencer must not allow host/framebuffer reentry to mutate a queue during
-this transition. The current first-slice helper's terminal owner-loss branch
-does not yet satisfy this contract.
+this transition. Legacy first-slice terminal branches and non-runnable
+holding cells do not yet satisfy this complete contract.
 
 The bounded public no-custody admission fence now refuses a pending child
 with typed `Backend` after local CPU/image setup but before consuming its
@@ -357,6 +357,20 @@ no saved context. This is a machine-recovery hold, not a retryable pre-CPU
 load error or a proven same-session retry. It does not issue an exact leaf
 permit, turn the child into a runnable custody slot, or close other
 post-admission publication/exit paths.
+
+A later focused real-MIPS source cut handles only a witnessed, exact
+C-root/one-parked-B return from A→B→C. It verifies the original CPU and
+canonical process/primary-thread births, C's selected image, and A's live
+caller/selection restoration before one fallible parent-queue borrow and
+two-entry reservation. It then publishes the original B and C payloads under
+their own labels; later A/B/C guest slices execute in the focused control.
+Selection/image challenges stop with the intact tree retained. Without the
+parent witness, a nested E→D control still retains the whole tree as
+`UnverifiedStopped`. At B's return C remains selected; after A restoration,
+ordinary outer rotation can finish with B selected and B's CPU active. This
+is legacy-queue handoff, not the machine-owned runnable-slot or exact
+executing-leaf contract above, general restoration, recovery, or live-app
+acceptance.
 
 ## A4. Guest memory and publication
 
