@@ -9,17 +9,36 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   identifies blind save/set/restore of selected module fields and
   `CurrentProcessState` across B's run. The selected-context stamp passed its
   [bounded preparatory gate](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md).
-  A focused pre-admission source candidate now checks that stamp, exact live
-  A owner/caller and nonzero staged PC before the aggregate pending-launch
-  drain. A changed generation refuses with both original queued births still
-  present; an unchanged-context control still drains both, without creator
-  attribution. Broad validation is pending. The preflight does not check or
-  safely restore selection after B runs, bind cloned Kernels to one machine
-  lineage, or cover arbitrary mutation through public backing objects. It
-  does not provide an exact-birth queue claim or recover A by resuming it after
-  refusal. This is a source-audited risk, not an attributed live-app failure;
+  A [bounded pre-admission gate](evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
+  now checks that stamp, exact live A owner/caller and nonzero staged PC before
+  the aggregate pending-launch drain. A changed generation refuses with both
+  original queued births still present; an unchanged-context control still
+  drains both, without creator attribution. Final-source focused **17/0**,
+  19-block no-default
+  **1,548/0/2 ignored** and release **2,192/0/9 ignored** suites pass. The
+  preflight does not check or safely restore selection after B runs, bind
+  cloned Kernels to one machine lineage, or cover arbitrary mutation through
+  public backing objects. It does not provide an exact-birth queue claim or
+  independent event/shell
+  trigger; raw `CreateProcessW` queues B before the post-native caller-birth
+  check. In the tested canonical/private A path, refusal poisons its saved
+  continuation and requires recovery, not resume; aliasless synthetic
+  nonprivate attempts do not prove that poison or an exact `failure_operation`
+  record. This is a source-audited risk, not an attributed live-app failure;
   the connected callback-scoped port and checked parent-suspension token
   remain open.
+- **Standalone event/Shell launches can starve without a later
+  `CreateProcessW`:** raw [`CeEventHasOccurred`](src/ce/coredll.rs#L23525)
+  and [`ShellExecuteExW`](src/ce/coredll.rs#L34758) queue process launches,
+  but the production pending-launch drain is reached only from the deferred
+  `CreateProcessW` tail in [`unicorn.rs`](src/emulator/unicorn.rs#L15147).
+  Without a subsequent deferred `CreateProcessW`, their queued children have
+  no independent admission trigger and may never execute, despite the
+  guest-facing notification/Shell call reporting success. This is a
+  source-audited guest-visible liveness defect, not an observed iNavi failure
+  or proof of its runtime frequency. Add a fair event/Shell drain trigger with an
+  exact-birth claim; do not make those older launches A's child in the
+  current aggregate tail.
 - **`CreateProcessW` can queue a child even when its output write fails:**
   [the raw shim](src/ce/coredll.rs#L29141) calls
   `queue_process_launch_with_options` before four fallible

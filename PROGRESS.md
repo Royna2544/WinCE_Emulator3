@@ -4,7 +4,7 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
-## 2026-10-17 selected-context pre-admission candidate (focused only)
+## 2026-10-17 bounded selected-context pre-admission gate
 
 The current source captures a selected-context stamp immediately before A's
 native `emu_start`. On a deferred `CreateProcessW` stop, it checks that stamp,
@@ -12,16 +12,26 @@ the exact execution-live parent/caller births and a nonzero staged return PC
 before the existing aggregate pending-launch queue is drained. A test-only
 real-MIPS control queues an older launch through raw `CeEventHasOccurred`,
 then makes A execute `CreateProcessW` and changes A's selected-context
-generation after native stop. Focused red-to-green validation now returns
+generation after native stop. The red-to-green control now returns
 typed `Backend` before either queued birth is drained, resolved or given a
-CPU; both retain their FIFO order. This is a stopped refusal requiring A
-recovery, not rollback or permission to resume A. An unchanged-context mixed
-control confirms that the existing aggregate drain still admits both launches
-in order; the preflight does not attribute each launch to its creator.
-Existing non-live and both-mode deferred-launch controls pass focused tests.
-Broad validation remains pending. This is not an exact-birth queue claim,
-checked post-B parent restoration, a connected `MachineKernelPort`, Step 2 or
-Stage 3 acceptance, or a live-app result. No app or writable mount was run.
+CPU; both retain their FIFO order. In the tested canonical/private A path,
+the refusal poisons A's saved continuation and requires recovery rather than
+rollback or resume; aliasless synthetic nonprivate attempts do not establish
+that poison or an exact `failure_operation` record.
+An unchanged-context mixed control confirms that the existing aggregate drain
+still admits both launches in order; the preflight does not attribute each
+launch to its creator. The final `unicorn.rs` source SHA-256 is
+`ED2A2AB693735794DB86DCC97E672DCB16AB5071C13EA0010D0A877E8393E2B8`.
+Its [sealed receipt](evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
+records a13 focused `deferred_` **17/0**, a14 no-default 19 blocks
+**1,548/0/2 ignored**, a15 release-feature 19 blocks **2,192/0/9 ignored**,
+a16 final parent-resume **1/0**, and a17–a19 feature checks exiting 0. Source
+hashes were stable; backup-only commits moved HEAD during a15. B is already
+queued inside raw `CreateProcessW` before the post-native caller-birth check;
+there is no independent event/shell launch trigger. This is not an exact-birth
+queue claim, checked post-B parent restoration, a connected
+`MachineKernelPort`, Step 2 or Stage 3 acceptance, or a live-app result. No
+app or writable mount was run.
 
 ## 2026-10-17 retired machine-state port foundation (development evidence)
 

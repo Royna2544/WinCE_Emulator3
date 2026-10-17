@@ -248,18 +248,26 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      Broad no-default passed 19 blocks **1,548/0/2 ignored** and three
      feature checks exited 0 on unchanged source
      ([receipt](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md)).
-     The focused pre-admission candidate now consumes that stamp only before
+     The [bounded pre-admission gate](evidence/stage3-deferred-context-preflight-20261017/validation.receipt.md)
+     now consumes that stamp only before
      the existing aggregate pending-launch drain: it checks A's selected
      context, exact live parent/caller and nonzero staged PC. Its test-only
      real-MIPS A `CreateProcessW` plus older raw `CeEventHasOccurred` launch
      is red-to-green on a changed selected generation: typed refusal leaves
-     both queued births in FIFO order and requires A recovery, not rollback
-     or resume. Unchanged-context mixed and existing non-live/both-mode
-     controls pass focused tests, but broad validation is pending. The mixed
+     both queued births in FIFO order. In the tested canonical/private A path,
+     its saved continuation is poisoned and requires recovery, not rollback
+     or resume; aliasless synthetic nonprivate attempts do not prove that
+     poison or an exact `failure_operation` record. Final-source a13 focused
+     `deferred_` passed **17/0**, a14 no-default **1,548/0/2 ignored** and a15
+     release **2,192/0/9 ignored** over 19 blocks each; a16 parent-resume
+     passed **1/0** and three feature checks exited 0. Unchanged-context
+     mixed and existing non-live/both-mode controls pass. The mixed
      control intentionally confirms that both launches still drain together;
-     creator attribution is not checked. Next make an exact-birth pending
-     claim/return with a fair trigger, then update that mixed control to
-     require only the claimed launch to run. Also test and fix the separate
+     creator attribution is not checked. Raw `CreateProcessW` has already
+     queued B before the post-native caller-birth check. Next make an
+     exact-birth pending claim/return plus an independent fair event/shell
+     trigger, then update that mixed control to require only the claimed
+     launch to run. Also test and fix the separate
      `CreateProcessW` partial-output path: `coredll.rs` queues before four
      `PROCESS_INFORMATION` writes, so a failed write can return `FALSE` while
      leaving a queued live child for a later trigger. This is distinct from
