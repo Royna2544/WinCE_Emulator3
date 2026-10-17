@@ -4,6 +4,30 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 O-T7a machine-directory groundwork (development-only snapshot)
+
+The [development receipt](evidence/stage3-machine-directory-20261017/validation.development.receipt.md)
+records a source-tested preparatory snapshot, not a connected source gate.
+`CeKernel` can bind once to a CPU directory lineage; a clone cannot inherit
+that executable binding, and an
+accepted-exit witness carries its originating lineage. `CpuCustody` has
+exact-birth admitted cells with checked slot/birth/attempt tokens that still
+carry a thread field,
+fallible payload loans, parent suspension and refusal of a boxed foreign
+child. Bound `UnicornMips` clones are non-executable; bound CPU entry and
+`MachineKernelPort` callbacks check the live Kernel/directory pair and the
+directory-issued permit. A bound Send handoff without a checked thread-leaf
+transfer refuses before native effects. These are bounded safety controls,
+not a production host-loop conversion.
+
+On unchanged six-file source hashes, the 19-block full-feature debug suite
+passed **2,255/0/9 ignored**, release **2,254/0/9 ignored**, and no-default
+**1,581/0/2 ignored** with loopback permitted. Final Unicorn-only and CI
+desktop feature checks exited 0. Boot, ordinary, Event, monitor and rotation
+still do not share a directory-owned selector/CPU route; no connected Cut 1
+or intra-slice thread/frame Cut 2 is claimed. No iNavi or writable-mount run
+was made.
+
 ## 2026-10-17 witnessed two-node rotated child handoff (bounded source/test gate)
 
 An enabled real-MIPS A→B→C control first failed at the B-origin return:
