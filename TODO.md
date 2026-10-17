@@ -267,11 +267,15 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      queued B before the post-native caller-birth check. Next make an
      exact-birth pending claim/return plus an independent fair event/shell
      trigger, then update that mixed control to require only the claimed
-     launch to run. The raw `CreateProcessW` output-Boolean correction has
-     bounded [A03](evidence/ce6-createprocess-output-contract-20261017/a03-raw-kernel-green.raw.log)
-     and [A04](evidence/ce6-createprocess-output-contract-20261017/a04-broad-no-default.raw.log)
-     passes; release A05 remains pending. Audit lifetime/retirement of the
-     process/thread aliases created when optional output is null or unwritable,
+     launch to run. The sealed [raw `CreateProcessW` output-Boolean gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+     passed A03 raw-kernel **135/0**, 19-block A04 no-default **1,550/0/2
+     ignored**, A05 release-feature **2,194/0/9 ignored**, and a06–a08 feature
+     checks exit 0. The bounded [REA/Shell finding](evidence/ce6-rea-shell-trigger-20261017/findings.md)
+     supports one dumped-COREDLL `ShellExecuteEx`→`CreateProcessW` branch and
+     a `CeEventHasOccurred`→`DeviceIoControl` boundary routed through `NFY0:`
+     in local CE6 source; it does not establish notification launch timing or
+     implement the exact-birth trigger/claim above. Audit lifetime/retirement
+     of process/thread aliases created when optional output is null or unwritable,
      and preserve the separate `TRUE`-before-loader gap. Output-copy failure
      is not permission to roll back an already-published child. The shim's
      success-path `LastError=0` remains a known CE6 mismatch outside this gate.

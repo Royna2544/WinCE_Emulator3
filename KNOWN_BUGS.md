@@ -42,10 +42,12 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 - **`CreateProcessW` output correction leaves alias lifetime and loader status
   open:** [the raw shim](src/ce/coredll.rs#L29141) now returns `TRUE` for a
   published child even when optional `PROCESS_INFORMATION` is null or cannot
-  receive all four words; the bounded raw/no-default controls pass while
-  release validation is pending. Process/thread handle aliases are allocated
-  before output copying. With null output the guest receives neither number,
-  while canonical completion retains aliases; their retirement in that shape
+  receive all four words. The [sealed output gate](evidence/ce6-createprocess-output-contract-20261017/validation.receipt.md)
+  passed 19-block no-default **1,550/0/2 ignored** and release-feature
+  **2,194/0/9 ignored** suites; a06–a08 feature checks exited 0. Process/thread
+  handle aliases are allocated before output copying. With null output the
+  guest receives neither number, while canonical completion retains aliases;
+  their retirement in that shape
   has no executed control and may retain completed records. The raw `TRUE`
   still precedes PE load and CPU admission. The existing forced success-path
   `LastError=0` is a known CE6 mismatch and is not validated by this gate.
