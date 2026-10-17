@@ -21285,7 +21285,8 @@ where
                     // A direct CPU caller without the machine directory has
                     // nowhere to retain an admitted child after a native
                     // fault or an ownership conflict. Keep the exact launch
-                    // retryable; setup errors above retain their own result.
+                    // pending for machine recovery; setup errors above retain
+                    // their own result.
                     if custody.is_none() {
                         return Err(Error::Backend(
                             "child CPU admission requires machine custody".to_owned(),
@@ -21528,8 +21529,8 @@ where
                     // The child has crossed its CPU admission boundary. Never
                     // replay this CreateProcess launch; only unattempted tail
                     // launches remain pending. The original CPU is quarantined
-                    // in production, while legacy direct fixtures have no
-                    // machine directory and retain their historical behavior.
+                    // in its machine directory; a no-custody caller was refused
+                    // before this admission boundary.
                     return Err(err);
                 }
             };
@@ -84083,13 +84084,15 @@ mod unicorn_tests {
         );
         assert_eq!(attempt.report.start_process_birth(), Some(parent_birth));
         let pending = kernel.take_pending_process_launches();
-        assert_eq!(pending.len(), 1, "the exact child remains retryable");
+        assert_eq!(pending.len(), 1, "the exact child remains pending");
         let launch = &pending[0];
         let child_birth = launch.process_birth.expect("original child birth");
         assert!(kernel.handles.process_execution_live_by_birth(child_birth));
         assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
         assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
         assert!(cpu.parked_child_processes.is_empty());
+        assert!(cpu.private_slab_attempt_poisoned);
+        assert!(cpu.saved_context.is_none(), "parent needs machine recovery");
         assert!(!kernel.recent_process_ops().iter().any(|record| {
             matches!(
                 record.op,
