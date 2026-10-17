@@ -655,7 +655,17 @@ impl CpuCustody {
     }
 
     fn blob_bytes(cpu: &UnicornMips) -> u64 {
-        u64::try_from(cpu.retained_tree_blob_bytes()).unwrap_or(u64::MAX)
+        #[cfg(feature = "unicorn")]
+        {
+            return u64::try_from(cpu.retained_tree_blob_bytes()).unwrap_or(u64::MAX);
+        }
+        #[cfg(not(feature = "unicorn"))]
+        {
+            CpuBackend::mapped_blob_ranges(cpu)
+                .iter()
+                .map(|blob| u64::from(blob.size))
+                .fold(0, u64::saturating_add)
+        }
     }
 
     fn snapshot_slot(key: CpuCustodyKey, slot: &Slot) -> Option<CpuCustodySnapshot> {

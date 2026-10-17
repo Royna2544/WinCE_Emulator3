@@ -83554,6 +83554,101 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn real_mips_late_child_publication_conflict_retains_original_cpu_tree() -> crate::Result<()> {
+        struct FailLatePublication {
+            queue: VecDeque<super::ParkedProcess>,
+            accesses: usize,
+        }
+
+        impl super::PendingLaunchParentQueue for FailLatePublication {
+            fn with_queue<R>(
+                &mut self,
+                conflict: Error,
+                use_queue: impl FnOnce(&mut VecDeque<super::ParkedProcess>) -> crate::Result<R>,
+            ) -> crate::Result<R> {
+                self.accesses += 1;
+                if self.accesses == 2 {
+                    return Err(conflict);
+                }
+                use_queue(&mut self.queue)
+            }
+        }
+
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let root_path = test_root.join("root.exe");
+        std::fs::write(&root_path, tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("root.exe")?;
+        kernel.set_process_module_host_path(root_path);
+        let launch = kernel.queue_process_launch(Some("survivor.exe".to_owned()), None);
+        let birth = launch.process_birth.expect("original B birth");
+        let batch = kernel
+            .reserve_pending_process_launch_batch()?
+            .expect("B launch batch");
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut queue = FailLatePublication {
+            queue: VecDeque::new(),
+            accesses: 0,
+        };
+        let mut quarantined_child_fault = false;
+        let result = {
+            let port = super::MachineKernelPort::new(&mut kernel, &mut framebuffer);
+            super::run_pending_process_launch_batch_with_custody(
+                &port,
+                super::UnicornRunLimits {
+                    instruction_limit: 128,
+                    wall_clock_limit_ms: 500,
+                    stop_pc: None,
+                    live_pump: false,
+                },
+                &[],
+                &mut queue,
+                Some(&mut custody),
+                &mut quarantined_child_fault,
+                batch,
+                |_| Ok(()),
+                None,
+                None,
+            )
+        };
+        let error = result.expect_err("second queue access refuses late publication");
+        assert!(
+            matches!(&error, Error::Backend(reason) if reason.contains("child CPU queue borrow conflict; returned tree retained unverified")),
+            "late queue refusal keeps its CPU payload: {error}"
+        );
+        assert_eq!(
+            queue.accesses, 2,
+            "ownership scan succeeded before publication"
+        );
+        assert!(queue.queue.is_empty(), "no CPU reached the parent queue");
+        assert!(kernel.handles.process_execution_live_by_birth(birth));
+        assert_eq!(custody.counts().unverified_stopped_trees, 1);
+        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        assert_eq!(custody.counts().reserved, 0);
+        assert!(!quarantined_child_fault);
+        let retained = custody.retained_tree_snapshots();
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].origin_birth, birth);
+        custody
+            .with_retained_tree(retained[0].key, |tree| {
+                assert_eq!(
+                    tree.owned_process_launch
+                        .as_ref()
+                        .and_then(|owned| owned.process_birth),
+                    Some(birth)
+                );
+                assert!(tree.run_slice_generation > 0, "B executed real MIPS");
+            })
+            .expect("late-conflict B CPU remains in its holding cell");
+        Ok(())
+    }
+
+    #[test]
     fn deferred_create_process_claims_only_its_child_and_leaves_older_event_queued()
     -> crate::Result<()> {
         let test_root = create_process_timeout_test_root();

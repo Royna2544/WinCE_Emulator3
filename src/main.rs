@@ -2175,7 +2175,7 @@ fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &
                 "processIncarnation": snapshot.birth.incarnation(),
                 "state": format!("{:?}", snapshot.state),
                 "mappedBlobBytes": snapshot.mapped_blob_bytes,
-                "rootVirtualRegionBytes": snapshot.root_virtual_region_bytes,
+                "virtualRegionBytes": snapshot.virtual_region_bytes,
             })
         })
         .collect::<Vec<_>>();
@@ -2192,7 +2192,7 @@ fn publish_cpu_custody_observation(server: Option<&RemoteServer>, cpu_custody: &
                 "state": format!("{:?}", snapshot.state),
                 "metricsAvailable": snapshot.metrics_available,
                 "mappedBlobBytes": snapshot.mapped_blob_bytes,
-                "virtualRegionBytes": snapshot.virtual_region_bytes,
+                "rootVirtualRegionBytes": snapshot.root_virtual_region_bytes,
             })
         })
         .collect::<Vec<_>>();
