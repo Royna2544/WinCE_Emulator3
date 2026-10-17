@@ -27,20 +27,22 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   record. This is a source-audited risk, not an attributed live-app failure;
   the connected callback-scoped port and checked parent-suspension token
   remain open.
-- **Standalone event/Shell launches can starve without a later
-  `CreateProcessW`:** raw [`CeEventHasOccurred`](src/ce/coredll.rs#L23525)
-  and [`ShellExecuteExW`](src/ce/coredll.rs#L34758) queue process launches,
-  but the production pending-launch drain is reached only from the deferred
-  `CreateProcessW` tail in [`unicorn.rs`](src/emulator/unicorn.rs#L15147).
-  Without a subsequent deferred `CreateProcessW`, their queued children have
-  no independent admission trigger and may never execute, despite the
-  guest-facing notification/Shell call reporting success. This is a
-  source-audited guest-visible liveness defect, not an observed iNavi failure
-  or proof of its runtime frequency. Add a fair event/Shell drain trigger with an
-  exact-birth claim; do not make those older launches A's child in the
-  current aggregate tail. The [bounded Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
-  corrected only a post-publication `FALSE` on failed output copying; it did
-  not add this trigger.
+- **Standalone event/Shell launches lack a service trigger:** raw
+  [`CeEventHasOccurred`](src/ce/coredll.rs#L23525) and direct-EXE
+  [`ShellExecuteExW`](src/ce/coredll.rs#L34753) queue launches with exact
+  process/primary-thread births in [`CeKernel`](src/ce/kernel.rs#L3416).
+  The production drain runs only after a successful deferred
+  [`CreateProcessW` handoff](src/emulator/unicorn.rs#L15147), where it takes
+  the entire queue [into a local batch](src/emulator/unicorn.rs#L20620).
+  Guest execution may continue through later slices while an older event E
+  stays queued; without another `CreateProcessW`, E has no independent path
+  to CPU admission. This is a source-established liveness gap, not an
+  observed iNavi hang or measured frequency. The [planned P0 in-place claim](docs/PLAN.md#L231)
+  repairs queue ownership but not this gap; [P1](docs/PLAN.md#L238) must add
+  fair exact-birth event/notification service before the witnessed B-only
+  gate, without inferring `NFY0:` return timing. The bounded
+  [Shell output gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md)
+  did not add a trigger.
 - **Shell output success still leaves alias and status semantics open:** the
   direct-EXE `hInstApp`/requested `hProcess` copy-fault controls passed under
   the [sealed source gate](evidence/stage3-shell-createprocess-handoff-20261017/validation.receipt.md),
