@@ -15291,7 +15291,7 @@ impl UnicornMips {
             };
             deferred_launch_preflight_failed = preflight.is_err();
             deferred_launch_error = preflight
-                .and_then(|_| {
+                .and_then(|parent_witness| {
                     let publication = deferred_process_launch.get().ok_or_else(|| {
                         Error::Backend(
                             "deferred child lost its attempt-local publication witness".to_owned(),
@@ -15311,6 +15311,7 @@ impl UnicornMips {
                         custody.as_deref_mut(),
                         &mut deferred_quarantined_child_fault,
                         publication,
+                        parent_witness,
                     )
                 })
                 .err();
@@ -20672,6 +20673,13 @@ fn sync_mapped_blobs_from_unicorn<D>(
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Clone, Copy)]
+struct DeferredParentRestoreWitness {
+    process_birth: crate::ce::object::ProcessBirthKey,
+    caller_birth: crate::ce::object::ThreadBirthKey,
+}
+
+#[cfg(feature = "unicorn")]
 fn preflight_deferred_process_launch_context(
     kernel: &CeKernel,
     pre_native_stamp: Option<crate::ce::kernel::SelectedProcessContextStamp>,
@@ -20679,7 +20687,7 @@ fn preflight_deferred_process_launch_context(
     native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
     native_stop_thread: (u32, Option<crate::ce::object::ThreadBirthKey>),
     raw_stop_pc: &AttemptObservation<u32>,
-) -> Result<()> {
+) -> Result<DeferredParentRestoreWitness> {
     let owner = native_owner_birth.ok_or_else(|| {
         Error::Backend(
             "deferred process launch pre-admission has no native parent birth".to_owned(),
@@ -20715,7 +20723,10 @@ fn preflight_deferred_process_launch_context(
             "deferred process launch pre-admission has no nonzero staged return PC".to_owned(),
         ));
     }
-    Ok(())
+    Ok(DeferredParentRestoreWitness {
+        process_birth: owner,
+        caller_birth: thread_birth,
+    })
 }
 
 #[cfg(feature = "unicorn")]
@@ -20830,6 +20841,7 @@ impl UnicornMips {
             Some(custody),
             &mut quarantined_child_fault,
             batch,
+            None,
             |_| Ok(()),
             #[cfg(test)]
             None,
@@ -20963,6 +20975,7 @@ fn run_pending_process_launches_with_custody<D>(
         custody,
         quarantined_child_fault,
         batch,
+        None,
         |kernel| {
             sync_file_mapping_views_from_unicorn_guarded(
                 parent_uc,
@@ -20990,6 +21003,7 @@ fn run_witnessed_pending_process_launch_with_custody<D>(
     custody: Option<&mut CpuCustody>,
     quarantined_child_fault: &mut bool,
     publication: crate::ce::coredll::PendingLaunchPublication,
+    parent_witness: DeferredParentRestoreWitness,
 ) -> Result<()> {
     let batch = port
         .try_loan("reserve witnessed child launch")
@@ -21005,6 +21019,7 @@ fn run_witnessed_pending_process_launch_with_custody<D>(
         custody,
         quarantined_child_fault,
         batch,
+        Some(parent_witness),
         |kernel| {
             sync_file_mapping_views_from_unicorn_guarded(
                 parent_uc,
@@ -21029,6 +21044,7 @@ fn run_pending_process_launch_batch_with_custody<Q, F>(
     mut custody: Option<&mut CpuCustody>,
     quarantined_child_fault: &mut bool,
     batch: crate::ce::kernel::PendingLaunchBatch,
+    parent_witness: Option<DeferredParentRestoreWitness>,
     prepare: F,
     #[cfg(test)] launch_observer: Option<
         &dyn Fn(&CeKernel, &crate::ce::kernel::PendingProcessLaunch),
@@ -21068,6 +21084,7 @@ where
                 saved_current_directory,
                 saved_show_cmd,
                 saved_process_state,
+                saved_process_birth,
                 child_module_path,
                 mut child_admitted,
                 child_prepare_result,
@@ -21255,6 +21272,7 @@ where
                     kernel.process_current_directory().map(ToOwned::to_owned);
                 let saved_show_cmd = kernel.process_show_cmd();
                 let saved_process_state = kernel.current_process_state();
+                let saved_process_birth = kernel.current_process_birth_key();
 
                 kernel.set_process_module_base(image.image_base());
                 let child_module_path = kernel
@@ -21325,6 +21343,7 @@ where
                     saved_current_directory,
                     saved_show_cmd,
                     saved_process_state,
+                    saved_process_birth,
                     child_module_path,
                     child_admitted,
                     child_prepare_result,
@@ -21373,6 +21392,241 @@ where
             };
             let (kernel, framebuffer) = post_state.split_mut();
             let mut deposit_ticket = deposit_ticket;
+            // A nested witnessed A→B→C call can return with C selected and
+            // B parked inside its original CPU tree. The legacy B-root path
+            // must not relabel that C engine as B. Prove this exact two-node
+            // shape, restore the still-live A caller, then publish both
+            // original payloads atomically through one queue borrow.
+            if child_admitted
+                && matches!(&child_result, Ok(ChildProcessRunOutcome::Parked))
+                && let Some(witness) = parent_witness
+                && let Some(leaf_birth) = verified_rotated_child_pair(&child, launch_birth, kernel)
+            {
+                let mut returned_cpu = Some(child);
+                let publication = (|| -> Result<()> {
+                    let root = returned_cpu
+                        .as_ref()
+                        .expect("returned CPU remains whole before publication");
+                    let leaf_launch = root
+                        .owned_process_launch
+                        .as_ref()
+                        .expect("verified rotated root has launch");
+                    let leaf_process_handle = leaf_launch.process_handle;
+                    let leaf_thread_handle = leaf_launch.thread_handle;
+                    let ticket_key = deposit_ticket
+                        .as_ref()
+                        .expect("admitted child has unbound deposit ticket")
+                        .key();
+                    let key = custody_key.ok_or_else(|| {
+                        Error::Backend("rotated child lost its reserved custody key".to_owned())
+                    })?;
+                    let directory = custody.as_deref().ok_or_else(|| {
+                        Error::Backend("rotated child lost machine CPU custody".to_owned())
+                    })?;
+                    if witness.process_birth
+                        != saved_process_birth.ok_or_else(|| {
+                            Error::Backend("rotated child lost saved parent birth".to_owned())
+                        })?
+                        || witness.process_birth == launch_birth
+                        || witness.process_birth == leaf_birth
+                        || saved_process_state.process_id != witness.process_birth.process_id()
+                        || saved_process_state.exit_code != crate::ce::kernel::STILL_ACTIVE
+                        || saved_process_state.signaled
+                        || !kernel
+                            .handles
+                            .process_execution_live_by_birth(witness.process_birth)
+                        || kernel
+                            .handles
+                            .process_signaled_by_id(witness.process_birth.process_id())
+                            != Some(false)
+                        || kernel
+                            .handles
+                            .thread_birth_key_by_id(witness.caller_birth.thread_id())
+                            != Some(witness.caller_birth)
+                        || kernel
+                            .handles
+                            .thread_creation_owner_by_id(witness.caller_birth.thread_id())
+                            != Some(witness.process_birth)
+                        || kernel.live_thread_birth_key_by_id(witness.caller_birth.thread_id())
+                            != Some(witness.caller_birth)
+                    {
+                        return Err(Error::Backend(
+                            "rotated child parent caller no longer owns its saved live birth"
+                                .to_owned(),
+                        ));
+                    }
+                    if !directory
+                        .snapshot_exact(key, launch_birth)
+                        .is_ok_and(|slot| {
+                            slot.state == crate::emulator::cpu_custody::CpuCustodyState::Reserved
+                        })
+                        || directory.snapshots().iter().any(|slot| {
+                            (slot.birth == launch_birth || slot.birth == leaf_birth)
+                                && slot.key != key
+                        })
+                        || directory
+                            .retained_tree_snapshots()
+                            .iter()
+                            .filter(|tree| {
+                                tree.origin_birth == launch_birth
+                                    || tree.origin_birth == leaf_birth
+                            })
+                            .any(|tree| {
+                                tree.key != ticket_key
+                                    || tree.origin_birth != launch_birth
+                                    || tree.state
+                                        != crate::emulator::cpu_custody::RetainedTreeState::ReservedUnbound
+                            })
+                    {
+                        return Err(Error::Backend(
+                            "rotated child has duplicate or stale machine CPU custody"
+                                .to_owned(),
+                        ));
+                    }
+                    let leaf_state = kernel.current_process_state();
+                    let leaf_base = kernel.process_module_base();
+                    let leaf_path = kernel.process_module_path().to_owned();
+                    let leaf_host_path =
+                        kernel.process_module_host_path().cloned().ok_or_else(|| {
+                            Error::Backend(
+                                "rotated child has no selected host image path".to_owned(),
+                            )
+                        })?;
+                    let leaf_command_line = kernel.process_command_line().to_owned();
+                    let leaf_current_directory =
+                        kernel.process_current_directory().map(ToOwned::to_owned);
+                    if leaf_state.process_id != leaf_birth.process_id()
+                        || leaf_state.exit_code != crate::ce::kernel::STILL_ACTIVE
+                        || leaf_state.signaled
+                        || root.entry_image_base != Some(leaf_base)
+                        || !root.loaded_modules.iter().any(|module| {
+                            module.base == leaf_base
+                                && module.host_path.as_ref() == Some(&leaf_host_path)
+                        })
+                        || root
+                            .last_debug
+                            .as_ref()
+                            .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
+                            .is_some()
+                    {
+                        return Err(Error::Backend(
+                            "rotated child selected image or wait edge is not an exact leaf"
+                                .to_owned(),
+                        ));
+                    }
+                    #[cfg(test)]
+                    POST_CHILD_SELECTION_PROBE.with(|probe| {
+                        if let Some(observations) = probe.borrow_mut().as_mut() {
+                            observations.push(PostChildSelectionObservation {
+                                launch_birth,
+                                selected_birth: kernel.current_process_birth_key(),
+                                selected_cpu_birth: Some(leaf_birth),
+                            });
+                        }
+                    });
+                    kernel.set_process_module_base(saved_base);
+                    kernel.set_process_module_path(saved_path.clone());
+                    kernel.set_process_module_host_path_option(saved_host_path.clone());
+                    kernel.set_process_command_line(saved_command_line.clone());
+                    kernel.set_process_current_directory(saved_current_directory.clone());
+                    kernel.set_process_show_cmd(saved_show_cmd);
+                    kernel.set_current_process_state(saved_process_state);
+                    if kernel.current_process_birth_key() != Some(witness.process_birth)
+                        || kernel.checked_guest_process_caller_for_birth(witness.caller_birth)
+                            != Some(witness.process_birth)
+                    {
+                        return Err(Error::Backend(
+                            "rotated child could not restore exact parent caller".to_owned(),
+                        ));
+                    }
+                    let births = std::collections::BTreeSet::from([launch_birth, leaf_birth]);
+                    parent_queue.with_queue(
+                        Error::Backend(
+                            "rotated child queue borrow conflict; original tree retained unverified"
+                                .to_owned(),
+                        ),
+                        |queue| {
+                            if queue_contains_cpu_birth(queue, &births) {
+                                return Err(Error::Backend(
+                                    "rotated child queue already owns an exact CPU birth"
+                                        .to_owned(),
+                                ));
+                            }
+                            queue.try_reserve(2).map_err(|_| {
+                                Error::Backend(
+                                    "rotated child queue capacity refused; original tree retained unverified"
+                                        .to_owned(),
+                                )
+                            })?;
+                            custody
+                                .as_deref_mut()
+                                .expect("verified machine custody")
+                                .cancel_reservation(key, launch_birth)
+                                .map_err(|error| {
+                                    Error::Backend(format!(
+                                        "rotated child custody cancellation refused: {error}"
+                                    ))
+                                })?;
+                            // Every fallible check is finished. Move B and C
+                            // exactly once, preserving B's wrapper and giving
+                            // C only metadata captured from its own selection.
+                            let mut leaf = returned_cpu
+                                .take()
+                                .expect("verified rotated CPU remains whole");
+                            let parked_origin = leaf
+                                .parked_child_processes
+                                .pop_front()
+                                .expect("verified rotated pair has original B");
+                            let parked_leaf = ParkedProcess {
+                                application: Some(leaf_path.clone()),
+                                process_handle: Some(leaf_process_handle),
+                                thread_handle: Some(leaf_thread_handle),
+                                process_state: leaf_state,
+                                thread_id: leaf.representative_thread_id(),
+                                cpu: Box::new(leaf),
+                                blocked_send_id: None,
+                                module_base: leaf_base,
+                                module_path: leaf_path,
+                                module_host_path: leaf_host_path,
+                                command_line: leaf_command_line,
+                                current_directory: leaf_current_directory,
+                            };
+                            queue.push_back(parked_origin);
+                            queue.push_back(parked_leaf);
+                            Ok(())
+                        },
+                    )
+                })();
+                match publication {
+                    Ok(()) => {
+                        deposit_ticket
+                            .take()
+                            .expect("published rotated pair has deposit ticket")
+                            .cancel();
+                        continue;
+                    }
+                    Err(error) => {
+                        child = returned_cpu
+                            .take()
+                            .expect("failed rotated publication retains whole tree");
+                        if let Some(ticket) = deposit_ticket.take() {
+                            ticket.deposit_unverified(child);
+                        }
+                        if let (Some(directory), Some(key)) = (custody.as_deref_mut(), custody_key)
+                        {
+                            let _ = directory.cancel_reservation(key, launch_birth);
+                        }
+                        kernel.set_process_module_base(saved_base);
+                        kernel.set_process_module_path(saved_path);
+                        kernel.set_process_module_host_path_option(saved_host_path);
+                        kernel.set_process_command_line(saved_command_line);
+                        kernel.set_process_current_directory(saved_current_directory);
+                        kernel.set_process_show_cmd(saved_show_cmd);
+                        kernel.set_current_process_state(saved_process_state);
+                        return Err(error);
+                    }
+                }
+            }
             if child_admitted && deposit_ticket.is_some() {
                 let verified = verified_returned_child_tree_births(&child, launch_birth, kernel);
                 let ownership_conflict = if let Some(ref births) = verified {
@@ -21800,6 +22054,92 @@ fn verified_returned_child_tree_births(
     let mut births = std::collections::BTreeSet::new();
     visit(child, origin, kernel, &mut births, true)?;
     Some(births)
+}
+
+/// Recognize only a returned C-root/B-parked pair whose two original CPU
+/// payloads still have distinct, live canonical owners. This is a read-only
+/// identity proof, not permission to run, split, or restore either process.
+#[cfg(feature = "unicorn")]
+fn verified_rotated_child_pair(
+    child: &UnicornMips,
+    origin: crate::ce::object::ProcessBirthKey,
+    kernel: &CeKernel,
+) -> Option<crate::ce::object::ProcessBirthKey> {
+    fn verify_cpu(
+        cpu: &UnicornMips,
+        birth: crate::ce::object::ProcessBirthKey,
+        kernel: &CeKernel,
+    ) -> Option<()> {
+        let launch = cpu.owned_process_launch.as_ref()?;
+        let primary = launch.primary_thread_birth?;
+        let saved = cpu.saved_context_thread_birth?;
+        if cpu.completed_active_process_exit
+            || cpu.private_slab_attempt_poisoned
+            || launch.process_birth != Some(birth)
+            || launch.process_id != birth.process_id()
+            || launch.thread_id != primary.thread_id()
+            || cpu.initial_thread_id != launch.thread_id
+            || kernel.handles.process_birth_key(birth.process_id()) != Some(birth)
+            || kernel
+                .handles
+                .process_birth_key_for_handle(launch.process_handle)
+                != Some(birth)
+            || kernel.handles.process_primary_thread_birth(birth) != Some(primary)
+            || kernel
+                .handles
+                .thread_birth_key_for_handle(launch.thread_handle)
+                != Some(primary)
+            || kernel.handles.thread_birth_key_by_id(primary.thread_id()) != Some(primary)
+            || kernel
+                .handles
+                .thread_creation_owner_by_id(primary.thread_id())
+                != Some(birth)
+            || cpu.current_thread_id != saved.thread_id()
+            || kernel.live_thread_birth_key_by_id(saved.thread_id()) != Some(saved)
+            || kernel
+                .handles
+                .thread_creation_owner_by_id(saved.thread_id())
+                != Some(birth)
+            || !cpu
+                .saved_context
+                .as_ref()
+                .is_some_and(UnicornMips::saved_cpu_context_is_resumable)
+            || !kernel.handles.process_execution_live_by_birth(birth)
+            || kernel.handles.process_signaled_by_id(birth.process_id()) != Some(false)
+            || kernel.process_exit_code_for_handle(launch.process_handle)
+                != Some(crate::ce::kernel::STILL_ACTIVE)
+            || kernel.pending_process_launch_for_birth(birth).is_some()
+        {
+            return None;
+        }
+        Some(())
+    }
+
+    if child.parked_child_processes.len() != 1 {
+        return None;
+    }
+    let active_birth = child.owned_process_launch.as_ref()?.process_birth?;
+    let parked = child.parked_child_processes.front()?;
+    let parked_launch = parked.cpu.owned_process_launch.as_ref()?;
+    if active_birth == origin
+        || !parked.cpu.parked_child_processes.is_empty()
+        || parked_launch.process_birth != Some(origin)
+        || parked.process_handle != Some(parked_launch.process_handle)
+        || parked.thread_handle != Some(parked_launch.thread_handle)
+        || parked.process_state.process_id != origin.process_id()
+        || parked.process_state.exit_code != crate::ce::kernel::STILL_ACTIVE
+        || parked.process_state.signaled
+        || parked.thread_id != parked.cpu.representative_thread_id()
+        || parked.blocked_send_id.is_some()
+        || kernel.current_process_birth_key() != Some(active_birth)
+        || kernel.current_process_state().exit_code != crate::ce::kernel::STILL_ACTIVE
+        || kernel.current_process_state().signaled
+    {
+        return None;
+    }
+    verify_cpu(child, active_birth, kernel)?;
+    verify_cpu(&parked.cpu, origin, kernel)?;
+    Some(active_birth)
 }
 
 #[cfg(feature = "unicorn")]
@@ -83145,16 +83485,12 @@ mod unicorn_tests {
     }
 
     #[test]
-    fn nested_real_mips_launch_refuses_mismatched_next_slice_without_owner_loss()
-    -> crate::Result<()> {
-        fn collect_cpu_payloads<'a>(
-            cpu: &'a super::UnicornMips,
-            payloads: &mut Vec<&'a super::UnicornMips>,
-        ) {
-            payloads.push(cpu);
-            for parked in &cpu.parked_child_processes {
-                collect_cpu_payloads(&parked.cpu, payloads);
-            }
+    fn nested_real_mips_launch_progresses_all_exact_cpu_births() -> crate::Result<()> {
+        #[derive(Clone, Copy, Debug)]
+        struct GuestWitness {
+            pc: u32,
+            s1: u32,
+            s2: u32,
         }
 
         fn assert_exact_cpu_census(
@@ -83165,137 +83501,177 @@ mod unicorn_tests {
             boot_birth: crate::ce::object::ProcessBirthKey,
             child_birth: crate::ce::object::ProcessBirthKey,
             leaf_birth: crate::ce::object::ProcessBirthKey,
-        ) {
-            let boot_primary = kernel
-                .handles
-                .process_primary_thread_birth(boot_birth)
-                .expect("canonical boot primary birth");
-            let mut owners = std::collections::BTreeMap::new();
-            let mut inspect_tree = |tree: &super::UnicornMips| {
-                let mut payloads = Vec::new();
-                collect_cpu_payloads(tree, &mut payloads);
-                for payload in payloads {
-                    let owner = if let Some(launch) = payload.owned_process_launch.as_ref() {
-                        let birth = launch
-                            .process_birth
-                            .expect("child CPU has original launch birth");
-                        let primary = kernel
-                            .handles
-                            .process_primary_thread_birth(birth)
-                            .expect("canonical child primary birth");
-                        assert_eq!(launch.process_id, birth.process_id(), "{phase}: launch PID");
-                        assert_eq!(
-                            launch.primary_thread_birth,
-                            Some(primary),
-                            "{phase}: launch primary"
-                        );
-                        assert_eq!(
-                            payload.initial_thread_id,
-                            primary.thread_id(),
-                            "{phase}: CPU primary TID"
-                        );
-                        assert_eq!(
-                            kernel
-                                .handles
-                                .process_birth_key_for_handle(launch.process_handle),
-                            Some(birth),
-                            "{phase}: process handle must retain original birth"
-                        );
-                        assert_eq!(
-                            kernel.process_exit_code(launch.process_handle),
-                            Some(crate::ce::kernel::STILL_ACTIVE),
-                            "{phase}: child must remain unsignaled"
-                        );
-                        assert_eq!(
-                            kernel.is_wait_ready(launch.process_handle, 1),
-                            Some(false),
-                            "{phase}: child process wait must not complete"
-                        );
-                        assert!(
-                            kernel.pending_process_launch_for_birth(birth).is_none(),
-                            "{phase}: admitted CPU birth must not also remain pending"
-                        );
-                        birth
-                    } else {
-                        assert_eq!(
-                            payload.initial_thread_id,
-                            boot_primary.thread_id(),
-                            "{phase}: only the boot CPU may lack a launch"
-                        );
-                        assert_eq!(
-                            payload.saved_context_thread_birth, None,
-                            "{phase}: terminal nested refusal does not publish A's continuation"
-                        );
-                        assert!(
-                            payload.private_slab_attempt_poisoned,
-                            "{phase}: A's original CPU wrapper is retained but requires restart"
-                        );
-                        assert!(
-                            payload.saved_context.is_none(),
-                            "{phase}: A must not resume after an unverified nested child return"
-                        );
-                        boot_birth
-                    };
-                    assert!(
-                        kernel.handles.process_execution_live_by_birth(owner),
-                        "{phase}: each CPU owner must still be canonically execution-live: {owner:?}"
+        ) -> std::collections::BTreeMap<crate::ce::object::ProcessBirthKey, GuestWitness> {
+            fn visit(
+                phase: &str,
+                payload: &super::UnicornMips,
+                wrapper: Option<&super::ParkedProcess>,
+                kernel: &crate::ce::kernel::CeKernel,
+                boot_birth: crate::ce::object::ProcessBirthKey,
+                owners: &mut std::collections::BTreeMap<
+                    crate::ce::object::ProcessBirthKey,
+                    GuestWitness,
+                >,
+            ) {
+                let launch = payload.owned_process_launch.as_ref();
+                let owner = launch
+                    .and_then(|owned| owned.process_birth)
+                    .unwrap_or(boot_birth);
+                let primary = kernel
+                    .handles
+                    .process_primary_thread_birth(owner)
+                    .expect("canonical CPU owner primary birth");
+                if let Some(launch) = launch {
+                    assert_eq!(launch.process_birth, Some(owner), "{phase}: launch birth");
+                    assert_eq!(launch.process_id, owner.process_id(), "{phase}: launch PID");
+                    assert_eq!(
+                        launch.primary_thread_birth,
+                        Some(primary),
+                        "{phase}: launch primary"
                     );
-                    *owners.entry(owner).or_insert(0usize) += 1;
+                    assert_eq!(
+                        kernel
+                            .handles
+                            .process_birth_key_for_handle(launch.process_handle),
+                        Some(owner),
+                        "{phase}: process handle retains original birth"
+                    );
+                    assert_eq!(
+                        kernel.process_exit_code(launch.process_handle),
+                        Some(crate::ce::kernel::STILL_ACTIVE),
+                        "{phase}: child remains unsignaled"
+                    );
+                    assert_eq!(
+                        kernel.is_wait_ready(launch.process_handle, 1),
+                        Some(false),
+                        "{phase}: child process wait remains blocked"
+                    );
+                    assert!(
+                        kernel.pending_process_launch_for_birth(owner).is_none(),
+                        "{phase}: admitted child cannot also remain pending"
+                    );
+                } else {
+                    assert_eq!(owner, boot_birth, "{phase}: only boot A lacks a launch");
                 }
-            };
-            inspect_tree(cpu);
-            for retained in custody.retained_tree_snapshots() {
                 assert_eq!(
-                    retained.state,
-                    crate::emulator::cpu_custody::RetainedTreeState::UnverifiedStopped,
-                    "{phase}: no unbound or abandoned ticket may remain"
+                    payload.initial_thread_id,
+                    primary.thread_id(),
+                    "{phase}: CPU primary TID"
                 );
-                let (expected_bytes, root_bytes) = custody
-                    .with_retained_tree(retained.key, |tree| {
-                        inspect_tree(tree);
-                        let mut payloads = Vec::new();
-                        collect_cpu_payloads(tree, &mut payloads);
-                        let total = payloads.iter().fold(0usize, |total, payload| {
-                            total.saturating_add(
-                                payload.mapped_blobs.iter().fold(0usize, |bytes, blob| {
-                                    bytes.saturating_add(blob.bytes.len())
-                                }),
-                            )
-                        });
-                        let root = tree
-                            .mapped_blobs
-                            .iter()
-                            .fold(0usize, |bytes, blob| bytes.saturating_add(blob.bytes.len()));
-                        (total, root)
-                    })
-                    .expect("read retained tree census");
-                assert_eq!(retained.mapped_blob_bytes, expected_bytes as u64);
+                assert_eq!(
+                    payload.saved_context_thread_birth,
+                    Some(primary),
+                    "{phase}: saved CPU context retains its exact primary birth"
+                );
                 assert!(
-                    expected_bytes > root_bytes,
-                    "{phase}: nested parked B bytes are included beyond C root"
+                    !payload.private_slab_attempt_poisoned,
+                    "{phase}: a runnable payload cannot be poisoned"
                 );
-            }
-            eprintln!(
-                "NESTED_CPU_CENSUS phase={phase} selected={:?} active_cpu_owner={:?} owners={owners:?} custody={:?}",
-                kernel.current_process_birth_key(),
-                cpu.owned_process_launch
+                assert!(
+                    kernel.handles.process_execution_live_by_birth(owner),
+                    "{phase}: CPU owner remains canonically live: {owner:?}"
+                );
+                if let Some(parked) = wrapper {
+                    assert_eq!(
+                        parked.process_state.process_id,
+                        owner.process_id(),
+                        "{phase}: parked wrapper PID matches its CPU payload"
+                    );
+                    assert_eq!(
+                        parked.thread_id, payload.initial_thread_id,
+                        "{phase}: parked wrapper TID matches its CPU payload"
+                    );
+                    if let Some(launch) = launch {
+                        assert_eq!(
+                            parked.process_handle,
+                            Some(launch.process_handle),
+                            "{phase}: parked wrapper process handle matches its CPU payload"
+                        );
+                        assert_eq!(
+                            parked.thread_handle,
+                            Some(launch.thread_handle),
+                            "{phase}: parked wrapper thread handle matches its CPU payload"
+                        );
+                        // `application` may be a resolved module path rather
+                        // than the original CreateProcessW argument. Exact
+                        // handles and births, not that display string, label
+                        // this parked payload.
+                    }
+                }
+                let saved = payload
+                    .saved_context
                     .as_ref()
-                    .and_then(|launch| launch.process_birth),
-                custody.snapshots()
+                    .expect("each live CPU has a resumable guest context");
+                assert!(
+                    owners
+                        .insert(
+                            owner,
+                            GuestWitness {
+                                pc: saved.pc,
+                                s1: saved.regs.regs[17],
+                                s2: saved.regs.regs[18],
+                            },
+                        )
+                        .is_none(),
+                    "{phase}: one original CPU payload per exact live birth: {owner:?}"
+                );
+                for parked in &payload.parked_child_processes {
+                    visit(phase, &parked.cpu, Some(parked), kernel, boot_birth, owners);
+                }
+            }
+
+            let mut owners = std::collections::BTreeMap::new();
+            visit(phase, cpu, None, kernel, boot_birth, &mut owners);
+            let active_owner = cpu
+                .owned_process_launch
+                .as_ref()
+                .and_then(|launch| launch.process_birth)
+                .unwrap_or(boot_birth);
+            assert_eq!(
+                kernel.current_process_birth_key(),
+                Some(active_owner),
+                "{phase}: selected process must own the active CPU payload"
+            );
+            eprintln!(
+                "NESTED_CPU_CENSUS phase={phase} selected={:?} active_cpu_owner={active_owner:?} owners={owners:?} custody={:?}",
+                kernel.current_process_birth_key(),
+                custody.counts()
             );
             assert_eq!(
-                owners,
-                std::collections::BTreeMap::from([
-                    (boot_birth, 1),
-                    (child_birth, 1),
-                    (leaf_birth, 1),
-                ]),
-                "{phase}: count original CPU payloads, not mutable selection or parked wrappers"
+                owners
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                std::collections::BTreeSet::from([boot_birth, child_birth, leaf_birth]),
+                "{phase}: exactly one CPU payload per live A/B/C birth"
+            );
+            let counts = custody.counts();
+            assert_eq!(counts.reserved, 0, "{phase}: no unresolved custody slot");
+            assert_eq!(
+                counts.quarantined, 0,
+                "{phase}: no stopped CPU on the runnable path"
+            );
+            assert_eq!(
+                counts.reserved_unbound_trees, 0,
+                "{phase}: no unbound ticket"
+            );
+            assert_eq!(
+                counts.unverified_stopped_trees, 0,
+                "{phase}: no unverified CPU tree"
+            );
+            assert_eq!(
+                counts.abandoned_unbound_trees, 0,
+                "{phase}: no abandoned ticket"
             );
             assert!(
                 custody.snapshots().is_empty(),
-                "{phase}: no old B slot remains"
+                "{phase}: no terminal per-birth custody slot remains"
             );
+            assert!(
+                custody.retained_tree_snapshots().is_empty(),
+                "{phase}: no terminal returned tree remains"
+            );
+            owners
         }
 
         let test_root = create_process_timeout_test_root();
@@ -83311,8 +83687,18 @@ mod unicorn_tests {
         {
             write_vec_u16(&mut child_bytes, 0x480 + index * 2, wide);
         }
+        // B resumes past its real CreateProcessW return, then changes a guest
+        // register on every spin. A later B slice must advance this counter.
+        write_vec_u32(&mut child_bytes, 0x200 + 19 * 4, 0x2652_0001); // addiu s2,s2,1
+        write_vec_u32(&mut child_bytes, 0x200 + 20 * 4, 0x1000_fffe); // branch to increment
+        write_vec_u32(&mut child_bytes, 0x200 + 21 * 4, 0); // delay slot
         std::fs::write(test_root.join("survivor.exe"), child_bytes).unwrap();
-        std::fs::write(test_root.join("leaf.exe"), tiny_mips_spinner_pe()).unwrap();
+        let mut leaf_bytes = tiny_mips_spinner_pe();
+        write_vec_u32(&mut leaf_bytes, 0x200, 0x2411_00c3); // C's distinct s1 marker
+        write_vec_u32(&mut leaf_bytes, 0x204, 0x2652_0001); // addiu s2,s2,1
+        write_vec_u32(&mut leaf_bytes, 0x208, 0x1000_fffe); // branch to increment
+        write_vec_u32(&mut leaf_bytes, 0x20c, 0); // delay slot
+        std::fs::write(test_root.join("leaf.exe"), leaf_bytes).unwrap();
 
         let mut kernel = phase1_kernel("parent.exe")?;
         kernel.set_process_module_host_path(parent_path.clone());
@@ -83338,18 +83724,7 @@ mod unicorn_tests {
             limits,
             &mut custody,
         );
-        let error = first
-            .result
-            .expect_err("nested C-with-B tree must stop before B classification");
-        assert!(
-            matches!(&error, Error::Backend(reason) if reason.contains("returned child CPU tree disagrees")),
-            "first return is typed and retains the tree: {error}"
-        );
-        assert_eq!(
-            first.report.failure_operation(),
-            Some("private native post-run tail"),
-            "A remains a poisoned, non-resumable CPU after the nested refusal"
-        );
+        first.result?;
         assert_eq!(first.report.start_process_birth(), Some(boot_birth));
         assert_eq!(
             first.report.raw_stop_pc(),
@@ -83371,7 +83746,7 @@ mod unicorn_tests {
             .process_birth_key_for_handle(queued[1].process_handle.expect("C handle"))
             .expect("original C birth");
         assert_ne!(child_birth, leaf_birth);
-        assert_exact_cpu_census(
+        let initial = assert_exact_cpu_census(
             "after-nested-launch",
             &cpu,
             &kernel,
@@ -83380,8 +83755,89 @@ mod unicorn_tests {
             child_birth,
             leaf_birth,
         );
-        assert_eq!(custody.counts().unverified_stopped_trees, 1);
-        assert_eq!(custody.counts().abandoned_unbound_trees, 0);
+        assert_eq!(initial[&boot_birth].pc, entry + 18 * 4);
+        assert_eq!(
+            initial[&boot_birth].s1, 0,
+            "A has not resumed its import return"
+        );
+        assert_eq!(
+            initial[&leaf_birth].s1, 0x00c3,
+            "C executed its guest marker"
+        );
+        assert!(initial[&leaf_birth].s2 > 0, "C entered its guest loop");
+
+        let mut progressed = std::collections::BTreeSet::new();
+        let mut attempted_births = Vec::new();
+        for slice in 0..32 {
+            let attempt = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+                &mut kernel,
+                &mut framebuffer,
+                limits,
+                &mut custody,
+            );
+            attempt.result?;
+            let phase = format!("later-slice-{slice}");
+            let now = assert_exact_cpu_census(
+                &phase,
+                &cpu,
+                &kernel,
+                &custody,
+                boot_birth,
+                child_birth,
+                leaf_birth,
+            );
+            let selected = attempt.report.start_process_birth();
+            if attempt.report.attempt_id().is_some() {
+                attempted_births.push(selected);
+            }
+            let marker_advanced = match selected {
+                Some(birth) if birth == boot_birth => {
+                    now[&boot_birth].s1 == 0x55aa && initial[&boot_birth].s1 == 0
+                }
+                Some(birth) if birth == child_birth => {
+                    now[&child_birth].s1 == 0x55aa
+                        && now[&child_birth].s2 > initial[&child_birth].s2
+                }
+                Some(birth) if birth == leaf_birth => {
+                    now[&leaf_birth].s1 == 0x00c3 && now[&leaf_birth].s2 > initial[&leaf_birth].s2
+                }
+                _ => false,
+            };
+            if marker_advanced {
+                assert!(
+                    attempt.report.attempt_id().is_some(),
+                    "{phase}: changed guest marker requires a real native attempt"
+                );
+                assert_eq!(
+                    attempt.report.native_result(),
+                    &super::AttemptObservation::Value(()),
+                    "{phase}: guest execution completed without a native fault"
+                );
+                assert_eq!(
+                    attempt.report.count_stop_query(),
+                    &super::AttemptObservation::Value(true),
+                    "{phase}: the bounded guest slice reached its instruction count"
+                );
+                progressed.insert(selected.expect("marker owner is selected"));
+            }
+            if progressed.len() == 3 {
+                break;
+            }
+        }
+        assert_eq!(
+            progressed,
+            std::collections::BTreeSet::from([boot_birth, child_birth, leaf_birth]),
+            "A, B and C each need a later exact-owner guest slice; native attempts={attempted_births:?}"
+        );
+        assert_eq!(
+            kernel
+                .recent_process_ops()
+                .iter()
+                .filter(|record| record.op == "CreateProcessWQueued")
+                .count(),
+            2,
+            "later slices must not replay either guest CreateProcessW"
+        );
         Ok(())
     }
 
@@ -83697,6 +84153,7 @@ mod unicorn_tests {
                 Some(&mut custody),
                 &mut quarantined_child_fault,
                 batch,
+                None,
                 |_| Ok(()),
                 None,
                 None,
