@@ -108,9 +108,17 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
    reproduced exact-owner `NoAttempt` non-progress with all three CPUs
    retained at its earlier seal. The later
    [connected cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
-   instead retains the mismatched C-root/B-parked tree as stopped and returns
-   typed terminal error before classification; it does not execute the next
-   B slice or provide in-session recovery. Next, in order:
+   retained the mismatched C-root/B-parked tree as stopped at its seal. A
+   newer focused real-MIPS witnessed two-node gate now publishes B and C
+   under their own legacy-queue labels and executes later A/B/C slices.
+   Its [a09 selection observation](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+   ends with ordinary outer rotation selecting B after exact A restoration;
+   it does not leave A finally selected. The
+   [a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+   still retains the whole nested E→D tree as `UnverifiedStopped`, with
+   untouched outer siblings queued. This is focused legacy-queue progress,
+   not a broad seal, runnable machine slot or in-session recovery. Next, in
+   order:
    - Complete exit-effect authority beyond exact-birth window/backing selection,
      sender cleanup and the bounded
      [exact-window-set gate](evidence/stage3-host-exit-exact-window-20261015/validation.receipt.md)
@@ -325,16 +333,18 @@ History and suite tallies live in `docs/evidence/ledger.md`; open defects are in
      is not permission to roll back an already-published child. The shim's
      success-path `LastError=0` remains a known CE6 mismatch outside this gate.
      The [connected port and custody gate](evidence/stage3-connected-port-20261017/validation.receipt.md)
-     now passes a bounded source/test seal. Next authenticate the final
-     executing thread and exact leaf permit (including handoff), check
-     post-B selection restoration and exit-event fencing. The bounded
+     passes its bounded historical source/test seal. The focused witnessed
+     two-node rotated handoff checks A restoration before publishing exact
+     B/C payloads, but other post-child routes remain unproved. Next
+     authenticate the final executing thread and exact leaf permit (including
+     handoff), generalize checked restoration and add exit-event fencing. The bounded
      [public no-custody fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
      now refuses the tested direct admission bypass before guest child
      execution; the public parent is poisoned and the exact launch stays
      pending for machine-owned recovery, not proven same-session retry.
      Convert retained unverified and legacy runnable/parked trees into
      checked executable slots with exact locator migration, then prove
-     later-slice progress and
+     later-slice progress beyond the witnessed two-node case and
      recovery/relineage. The historical parked-publication red is preserved;
      current tested `Some(custody)` conflicts retain B but do not provide a
      runnable hold or close every child/exit path. Public backing-object

@@ -4,6 +4,35 @@ Refreshed on 2026-10-17 (client KST date). This file records confirmed facts onl
 Older investigation ledgers were purged; use commits, logs, and targeted source
 references for historical reconstruction.
 
+## 2026-10-17 witnessed two-node rotated child handoff (focused tests)
+
+An enabled real-MIPS A→B→C control first failed at the B-origin return:
+the C-root/B-parked tree was retained `UnverifiedStopped` before A, B and C
+could make their required later slices
+([a01 expected red](evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)).
+The bounded witnessed path now checks that exact two-node tree, its distinct
+live process/primary-thread births and original CPU payloads, and C's own
+selected image metadata. It checks restoration of A's exact live caller before
+one fallible parent-queue borrow and capacity reservation, then publishes the
+original B and C CPUs under their own labels. Focused real-MIPS
+[a10](evidence/stage3-rotated-handoff-20261017/a10-nested-three-shapes.raw.log)
+and [a11](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+each passed **3/0**: later A/B/C guest slices progress, and challenged C
+selection/image metadata stops with the intact tree retained rather than
+being mislabeled. The separate
+[a09 observation](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+passed **1/0**: B's return still selects/owns C; after A's checked
+restoration, ordinary outer rotation ends with B selected and B's CPU active,
+not A selected. The
+[a12 no-witness control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+passed **1/0**: a nested Event E→D return without that parent witness remains
+stopped as one whole `UnverifiedStopped` tree while untouched outer siblings
+stay queued in order. These are focused source tests, not a broad-suite seal.
+This is a bounded legacy-queue handoff, not machine-owned runnable CPU slots,
+an independently issued executing-leaf permit, general post-child restoration,
+in-session recovery, full O-T7/Stage 3 or live iNavi acceptance. No app or
+writable-mount run was made.
+
 ## 2026-10-17 public no-custody child-admission fence
 
 The [bounded source/test gate](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
@@ -31,7 +60,7 @@ two-observation assertion: the new mismatch guard stops before the second
 probe. A14 checks the retained tree directly. No live iNavi or writable-mount
 run was made.
 
-The connected `MachineKernelPort` now carries fallible short Kernel/framebuffer
+At that source seal, the connected `MachineKernelPort` carried fallible short Kernel/framebuffer
 loans through native setup/tail, the code/block/import/memory hooks and the
 recursive child path; no named `kernel_ptr`/`framebuffer_ptr` uses remain in
 `unicorn.rs`. A synthetic held-loan callback gives a typed terminal refusal
@@ -39,7 +68,7 @@ before effects; natural hook reentry was not exercised. On the production
 `Some(custody)` child path, an unbound ticket and holding cell are reserved
 before execution. A conflicting/error tree is deposited there before
 classification; an ordinary verified B cancels the ticket and proceeds. B
-executes a second real-MIPS slice. Nested A→B→C instead stops when the
+executes a second real-MIPS slice. At that seal, nested A→B→C instead stopped when the
 returned C-root/B-parked tree conflicts with B's origin, retaining that tree
 as `UnverifiedStopped`; A's original CPU wrapper remains but its private
 continuation is poisoned. Early and late queue conflicts and a fixed-stack
@@ -52,7 +81,7 @@ not an independently authorized executing thread/leaf. At that connected
 seal, public/direct-fixture `custody=None` still bypassed the holding cell;
 the later pre-admission fence above stops that tested route before guest
 child execution. Unverified trees are stopped, not runnable recovery.
-Checked post-B restoration, an exit-event fence,
+General checked post-B restoration, an exit-event fence,
 whole-machine checkpoint relineage and live-app acceptance remain open. The
 earlier nested observation and census below describe their historical seals,
 not the new guarded outcome.
@@ -65,11 +94,13 @@ boundary, Kernel selected C's exact birth (PID 67/incarnation 3), and the
 returned child CPU slot owned C's launch; B's launch birth was PID
 66/incarnation 2. A later ordinary rotation selected B. A guard requiring B
 to remain selected at that boundary would reject this reached nested path,
-and the current B-key reservation cannot be assumed to own the returned C
-payload. No restore guard or production behavior changed. The failing a01
+and the B-key reservation at that seal could not own the returned C
+payload. No restore guard or production behavior changed at that seal. The failing a01
 development run had an overstrict *later* selector assertion; its same
-pre-restore observation is retained but not a production red. General
-post-B restoration and rotated-subtree custody remain O-T7 work. No broad
+pre-restore observation is retained but not a production red. The later
+focused two-node handoff above checks A restoration and separate B/C
+publication; general restoration and machine-owned rotated-subtree custody
+remain O-T7 work. No broad
 suite, iNavi or writable-mount run was made for this observation.
 
 A separate [enabled real-MIPS nested CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
@@ -80,14 +111,15 @@ Yet the follow-on call executed no guest slice: Kernel selected B while the
 active CPU payload owned C, and exact-owner preflight returned typed
 `Backend("child CPU does not own the selected live process birth")`,
 `NoAttempt`, with no attempt ID. The a02 development red demanded an executed
-second slice; enabled a03 instead asserts this precise current fail-closed
+second slice; enabled a03 instead asserted this precise then-current fail-closed
 behavior. This is reproduced selection/lease non-progress, not observed CPU
-loss. It does not make the nested route acceptable; O-T7 acceptance must turn
-that follow-on call into witnessed guest progress with exact slot ownership.
+loss. It did not make the nested route acceptable at that seal; the later
+focused two-node handoff above witnesses guest progress without completing
+O-T7's machine-owned exact slot ownership.
 On the same a03 test-source hash, later 19-block broad runs passed
 no-default **1,560/0/2 ignored** and release-feature **2,220/0/9 ignored**;
 both new enabled real-MIPS diagnostics passed in the release suite. These
-checks validate the current baseline, not the missing second-slice progress.
+checks validated that historical baseline, not second-slice progress.
 
 ## 2026-10-17 combined monitor Event + P2 witnessed B-only launch gate
 

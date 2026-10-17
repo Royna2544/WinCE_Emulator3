@@ -46,7 +46,7 @@ remote-control HTTP/WebSocket surface.
   exact-child B-only claims, leaving older notification E queued for an
   independent host turn. Monitor `continue` can offer E and avoids re-entering
   a completed CPU; `stop_pc` intentionally keeps E queued. Other Shell routes,
-  checked post-B restoration, full CPU custody and live-app behavior remain
+  general checked post-B restoration, full CPU custody and live-app behavior remain
   open. A [test-only nested A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
   found C selected and occupying the returned child CPU slot when B's
   post-native handoff returned, so a B-only restore guard is deferred to
@@ -54,7 +54,8 @@ remote-control HTTP/WebSocket surface.
   [CPU census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
   found A/B/C payloads intact but the next selected slice refused before
   guest execution because B selection was paired with C's CPU. The later
-  connected gate below stops earlier and retains the mismatched tree. The
+  connected gate below stopped earlier and retained the mismatched tree at its
+  seal; a later focused witnessed two-node cut progresses B/C. The
   NAND `notify.dll` trace has not established CE launch timing.
 - The bounded [connected port and child-custody cut](evidence/stage3-connected-port-20261017/validation.receipt.md)
   passes final-source release-feature **2,228/0/9 ignored** and no-default
@@ -62,10 +63,10 @@ remote-control HTTP/WebSocket surface.
   per-attempt `MachineKernelPort` removes named raw Kernel/framebuffer hook
   aliases and uses short fallible loans. Production `Some(custody)` child
   execution reserves a whole-tree holding cell before B runs: ordinary B
-  executes a second real-MIPS slice; nested A→B→C stops on the mismatched
-  C-root/B-parked return and retains it as `UnverifiedStopped`. Tested early
+  executes a second real-MIPS slice; at that seal, nested A→B→C stopped on
+  the mismatched C-root/B-parked return and retained it as `UnverifiedStopped`. Tested early
   and late queue conflicts and a native fault retain admitted B. The stopped
-  tree is not runnable recovery; exact thread/leaf authority, checked post-B
+  tree is not runnable recovery; exact thread/leaf authority, general checked post-B
   restoration and live iNavi remain open. A later bounded
   [public no-custody fence](evidence/stage3-no-custody-admission-20261017/validation.receipt.md)
   refuses pending child admission with typed `Backend` after local setup but
@@ -73,6 +74,17 @@ remote-control HTTP/WebSocket surface.
   stays pending for machine-owned recovery; the public parent's attempt is
   poisoned, not an established same-session retry. This closes the tested
   admission bypass, not runnable custody or a leaf permit.
+- A newer focused real-MIPS witnessed two-node A→B→C handoff publishes the
+  original B and C CPUs under their own legacy-queue labels after checking
+  A's exact live caller restoration. The [a01 expected red](evidence/stage3-rotated-handoff-20261017/a01-nested-progress-red.raw.log)
+  and later [a11 focused 3/0](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+  distinguish progress from stopped retention; selected C image/metadata
+  challenges retain the intact tree. [A12](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+  keeps an unwitnessed nested E→D tree stopped. At B's return C is still
+  selected; [a09](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+  shows ordinary outer rotation ends with B selected after A restoration,
+  not with A finally selected. This is not a broad seal, full machine-owned
+  runnable custody, an exact leaf permit, general recovery or live iNavi proof.
 - The first [TaskFrame finite-Sleep source cut](evidence/stage3-finite-sleep-frame-20261015/validation.receipt.md)
   is resealed at HEAD `6626e74d`. Real-MIPS controls defer a same-process send
   while its receiver sleeps, then deliver through `GetMessageW`,

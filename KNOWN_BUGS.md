@@ -4,22 +4,25 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
 
 ## Open Issues
 
-- **Nested A→B→C launch is retained but cannot make its next selected slice:**
+- **Nested CPU ownership outside the witnessed two-node shape remains stopped:**
   the earlier [real-MIPS census](evidence/stage3-nested-cpu-census-20261017/validation.receipt.md)
   counted A/B/C physical payloads 1/1/1, then reached a typed pre-entry
-  `NoAttempt` because Kernel selected B while the active CPU owned C. On the
+  `NoAttempt` because Kernel selected B while the active CPU owned C. At the
   later [connected source seal](evidence/stage3-connected-port-20261017/validation.receipt.md),
-  the B-origin return instead detects the C-root/B-parked mismatch before
-  classification, retains the whole returned tree as `UnverifiedStopped`,
-  and reports typed terminal failure. A's original CPU wrapper survives but
-  its private continuation is poisoned with no saved context. This closes
-  the tested physical-drop path, not progress or recovery: B still gets no
-  executed next slice from that nested route. A B-only restore guard,
-  relabeling C as B, or putting C in B's runnable slot would be unsound.
-  O-T7 needs exact-slot/leaf selection, checked post-B restoration, and a
-  recoverable custody transition. No iNavi or mount run is attributed here.
-- **Post-native child handoff still restores a mutable process selection
-  without checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
+  the B-origin return instead retained the C-root/B-parked tree as
+  `UnverifiedStopped`, with A's private continuation poisoned. The newer
+  focused [witnessed handoff controls](evidence/stage3-rotated-handoff-20261017/a11-rotated-five-challenges.raw.log)
+  execute later A/B/C guest slices for exactly one verified C-root/parked-B
+  pair and preserve both original payload labels. A
+  [no-witness nested E→D control](evidence/stage3-rotated-handoff-20261017/a12-no-witness-retention.raw.log)
+  still stops with its whole tree retained and untouched siblings queued;
+  malformed selected C metadata also fails closed. A B-only restore guard,
+  relabeling C as B, or putting C in B's reserved slot remains unsound.
+  Deeper trees, general exact-slot/leaf selection, recoverable machine-owned
+  custody and in-session recovery remain open. No iNavi or mount run is
+  attributed here.
+- **Other post-native child handoffs still restore mutable process selection
+  without general checked lineage:** the [proposed port boundary](docs/subsystems/tasks-scheduler.md#callback-scoped-machine-state-port-cut-proposed-not-implemented)
   identifies blind save/set/restore of selected module fields and
   `CurrentProcessState` across B's run. The selected-context stamp passed its
   [bounded preparatory gate](evidence/stage3-selector-context-stamp-20261017/validation.receipt.md).
@@ -46,16 +49,20 @@ Refreshed on 2026-10-17. This file lists unresolved behavior only; resolved entr
   nonprivate attempts do not prove that poison or an exact `failure_operation`
   record. This is a source-audited risk, not an attributed live-app failure;
   the connected port now exists in a bounded source/test cut, but checked
-  parent suspension, final thread/leaf authority and post-B restoration
-  remain open. A later [test-only real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
+  parent suspension, final thread/leaf authority and general post-B
+  restoration remain open. A later [test-only real-MIPS A→B→C observation](evidence/stage3-post-child-selection-observation-20261017/validation.receipt.md)
   reached B's post-child/pre-parent-restore boundary with Kernel selecting C
   and the returned child CPU slot owning C's launch, not B's. The current
   [parked-process activation](src/emulator/unicorn.rs#L8229) can swap the
   active CPU payload during B's slice. A B-only restoration check or transfer
   of that returned payload into B's reservation would reject or mislabel this
-  reached nested shape; it is not a safe preparatory fix. The blind restore
-  remains, and exact rotated-subtree ownership plus checked restoration move
-  to O-T7. The observation does not demonstrate actual CPU loss or a live-app
+  reached nested shape; it is not a safe preparatory fix. A newer focused
+  witnessed two-node branch checks A's exact caller/selection before
+  publishing B and C, but other child-return paths still use the legacy
+  restoration path. The [a09 control](evidence/stage3-rotated-handoff-20261017/a09-selection-observation-green.raw.log)
+  ends with an ordinary outer rotation selecting B/B after A was restored;
+  it must not be described as a final A selection. General checked
+  restoration remains O-T7 work. Neither observation attributes a live-app
   failure.
 - **Independent launch service remains incomplete outside the bounded
   routes:** raw [`CeEventHasOccurred`](src/ce/coredll.rs#L23551) and
