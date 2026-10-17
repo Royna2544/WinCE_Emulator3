@@ -127,7 +127,7 @@ struct NativeStopEvidence {
 /// This remains CPU-local until the native owner is closed and the framebuffer
 /// exit preflight passes.
 #[cfg(feature = "unicorn")]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct StoppedPseudoSelfExit {
     caller: crate::ce::object::ThreadBirthKey,
     owner: crate::ce::object::ProcessBirthKey,
@@ -304,6 +304,8 @@ pub struct UnicornMips {
     native_mixed_jr_stop_probe: Option<Rc<std::cell::Cell<NativeMixedJrStopProbe>>>,
     #[cfg(all(test, feature = "unicorn"))]
     scheduler_block_busy_probe: Option<Rc<std::cell::Cell<bool>>>,
+    #[cfg(all(test, feature = "unicorn"))]
+    test_rewrite_selected_context_before_deferred_launch: bool,
     // An E18 pointer-map failure or unowned worker exit cannot resume from an
     // older CPU snapshot or silently restart at process entry on a later call.
     private_slab_attempt_poisoned: bool,
@@ -2409,6 +2411,8 @@ impl UnicornMips {
             native_mixed_jr_stop_probe: None,
             #[cfg(all(test, feature = "unicorn"))]
             scheduler_block_busy_probe: None,
+            #[cfg(all(test, feature = "unicorn"))]
+            test_rewrite_selected_context_before_deferred_launch: false,
             private_slab_attempt_poisoned: false,
             completed_active_process_exit: false,
             owned_process_launch: None,
@@ -8738,6 +8742,10 @@ impl UnicornMips {
                 native_mixed_jr_stop_probe: self.native_mixed_jr_stop_probe.take(),
                 #[cfg(all(test, feature = "unicorn"))]
                 scheduler_block_busy_probe: self.scheduler_block_busy_probe.take(),
+                #[cfg(all(test, feature = "unicorn"))]
+                test_rewrite_selected_context_before_deferred_launch: std::mem::take(
+                    &mut self.test_rewrite_selected_context_before_deferred_launch,
+                ),
                 private_slab_attempt_poisoned: std::mem::take(
                     &mut self.private_slab_attempt_poisoned,
                 ),
@@ -14976,6 +14984,10 @@ impl UnicornMips {
         let native_start_tid = current_thread_id.get().0;
         report.start_thread_id = Some(native_start_tid);
         report.start_pc = Some(start_pc);
+        // The post-native CreateProcess handoff must still belong to this
+        // selected Kernel context. Child setup intentionally changes this
+        // stamp later, so capture it once at the primary native boundary.
+        let pre_native_selected_context = kernel.selected_process_context_stamp();
         let result = uc.emu_start(
             u64::from(start_pc),
             0,
@@ -15096,8 +15108,18 @@ impl UnicornMips {
         }
         .outcome();
         let mut deferred_launch_error = None;
+        let mut deferred_launch_preflight_failed = false;
         let mut deferred_quarantined_child_fault = false;
         let mut deferred_view_sync_error = None;
+        #[cfg(test)]
+        if deferred_process_launch.get()
+            && self.test_rewrite_selected_context_before_deferred_launch
+        {
+            // Test-only reentrant same-birth metadata write after A stops.
+            // The value is unchanged, but the selected-context generation is not.
+            self.test_rewrite_selected_context_before_deferred_launch = false;
+            kernel.set_process_show_cmd(kernel.process_show_cmd());
+        }
         if result.is_ok()
             && native_count_stop_query.is_ok()
             && native_timeout_query.is_ok()
@@ -15106,20 +15128,36 @@ impl UnicornMips {
             && immediate_process_sync_failure.is_none()
             && scheduler_block_access_failure.is_none()
             && deferred_process_launch.get()
+            && pseudo_self_exit_intent.get().is_none()
         {
-            deferred_launch_error = run_pending_process_launches_with_custody(
-                &mut uc,
+            let preflight = preflight_deferred_process_launch_context(
                 kernel,
+                pre_native_selected_context,
                 native_owner_pid,
-                &sealed_host_write_guard,
-                framebuffer,
-                limits,
-                &deferred_process_dll_search_dirs,
-                &parked_child_processes,
-                custody.as_deref_mut(),
-                &mut deferred_quarantined_child_fault,
-            )
-            .err();
+                native_owner_birth,
+                native_stop_thread,
+                &report.raw_stop_pc,
+            );
+            deferred_launch_preflight_failed = preflight.is_err();
+            deferred_launch_error = preflight
+                .and_then(|_| {
+                    // This is still the existing aggregate queue drain. The
+                    // parent stamp does not attribute older event/shell launches
+                    // to this CreateProcessW caller.
+                    run_pending_process_launches_with_custody(
+                        &mut uc,
+                        kernel,
+                        native_owner_pid,
+                        &sealed_host_write_guard,
+                        framebuffer,
+                        limits,
+                        &deferred_process_dll_search_dirs,
+                        &parked_child_processes,
+                        custody.as_deref_mut(),
+                        &mut deferred_quarantined_child_fault,
+                    )
+                })
+                .err();
             if deferred_launch_error.is_none() {
                 deferred_view_sync_error = sync_file_mapping_views_to_unicorn_guarded(
                     &mut uc,
@@ -15882,6 +15920,13 @@ impl UnicornMips {
         if let Some(err) = deferred_launch_error {
             self.last_native_slice_outcome = NativeSliceOutcome::BackendError;
             if diagnostic_private && !deferred_quarantined_child_fault {
+                if deferred_launch_preflight_failed {
+                    reject_private_attempt!(
+                        err,
+                        NativeSliceOutcome::BackendError,
+                        "deferred process launch pre-admission"
+                    );
+                }
                 reject_private_attempt!(err);
             }
             let parent_state_clean = native_count_stop_query.is_ok()
@@ -16367,6 +16412,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             native_mixed_jr_stop_probe: None,
             #[cfg(test)]
             scheduler_block_busy_probe: None,
+            #[cfg(test)]
+            test_rewrite_selected_context_before_deferred_launch: false,
             run_slice_generation: 0,
             visible_callout_push_generation: 0,
             slice_end_rotation_pending: false,
@@ -20461,6 +20508,53 @@ fn sync_mapped_blobs_from_unicorn<D>(
                 blob.bytes.len()
             ))
         })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn preflight_deferred_process_launch_context(
+    kernel: &CeKernel,
+    pre_native_stamp: Option<crate::ce::kernel::SelectedProcessContextStamp>,
+    native_owner_pid: u32,
+    native_owner_birth: Option<crate::ce::object::ProcessBirthKey>,
+    native_stop_thread: (u32, Option<crate::ce::object::ThreadBirthKey>),
+    raw_stop_pc: &AttemptObservation<u32>,
+) -> Result<()> {
+    let owner = native_owner_birth.ok_or_else(|| {
+        Error::Backend(
+            "deferred process launch pre-admission has no native parent birth".to_owned(),
+        )
+    })?;
+    let stamp = pre_native_stamp.ok_or_else(|| {
+        Error::Backend(
+            "deferred process launch pre-admission has no selected context stamp".to_owned(),
+        )
+    })?;
+    if owner.process_id() != native_owner_pid
+        || stamp.birth() != owner
+        || !kernel.selected_process_context_matches(stamp)
+    {
+        return Err(Error::Backend(
+            "deferred process launch pre-admission lost its selected parent context".to_owned(),
+        ));
+    }
+    let (thread_id, Some(thread_birth)) = native_stop_thread else {
+        return Err(Error::Backend(
+            "deferred process launch pre-admission has no stopped caller birth".to_owned(),
+        ));
+    };
+    if thread_birth.thread_id() != thread_id
+        || kernel.checked_guest_process_caller_for_birth(thread_birth) != Some(owner)
+    {
+        return Err(Error::Backend(
+            "deferred process launch pre-admission lost its live parent caller".to_owned(),
+        ));
+    }
+    if !matches!(raw_stop_pc, AttemptObservation::Value(pc) if *pc != 0) {
+        return Err(Error::Backend(
+            "deferred process launch pre-admission has no nonzero staged return PC".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -81203,6 +81297,267 @@ mod unicorn_tests {
 
         run_case(true)?;
         run_case(false)
+    }
+
+    fn queue_raw_event_fixture_launch(
+        kernel: &mut crate::ce::kernel::CeKernel,
+        application: &str,
+    ) -> crate::Result<crate::ce::kernel::PendingProcessLaunch> {
+        use crate::ce::coredll::{CoredllDispatch, CoredllExportTable, CoredllValue};
+
+        kernel.schedule_app_at_event(application.to_owned(), 2);
+        let mut raw_uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|error| Error::Backend(format!("event fixture native owner: {error:?}")))?;
+        let mut memory = super::UnicornGuestMemory::new(&mut raw_uc);
+        let result = CoredllExportTable::default().dispatch_raw_ordinal_with_memory(
+            kernel,
+            &mut memory,
+            super::MAIN_GUEST_THREAD_ID,
+            crate::ce::coredll_ordinals::ORD_CE_EVENT_HAS_OCCURRED,
+            [2, 0],
+        );
+        assert!(matches!(
+            result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+        let launches = kernel.take_pending_process_launches();
+        assert_eq!(launches.len(), 1, "one real notification launch");
+        let event_launch = launches[0].clone();
+        kernel.restore_pending_process_launches(launches);
+        Ok(event_launch)
+    }
+
+    #[test]
+    fn deferred_launch_preflight_requires_live_birth_and_nonzero_stop_pc() -> crate::Result<()> {
+        let mut kernel = phase1_kernel("parent.exe")?;
+        let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+        let owner = launch.process_birth.expect("exact queued child birth");
+        let caller = launch
+            .primary_thread_birth
+            .expect("exact primary thread birth");
+        kernel.set_current_process_id(launch.process_id);
+        let stamp = kernel.selected_process_context_stamp();
+        assert!(stamp.is_some());
+        let raw_pc = super::AttemptObservation::Value(0x0040_1020);
+        let check = |kernel: &crate::ce::kernel::CeKernel, pc: &super::AttemptObservation<u32>| {
+            super::preflight_deferred_process_launch_context(
+                kernel,
+                stamp,
+                launch.process_id,
+                Some(owner),
+                (caller.thread_id(), Some(caller)),
+                pc,
+            )
+        };
+        check(&kernel, &raw_pc)?;
+        let zero = check(&kernel, &super::AttemptObservation::Value(0))
+            .expect_err("PC zero cannot authorize deferred child admission");
+        assert!(
+            matches!(zero, Error::Backend(reason) if reason.contains("nonzero staged return PC"))
+        );
+
+        assert!(
+            kernel
+                .try_mark_process_launch_exited_with_witness(&launch, 0x63, None)?
+                .is_some()
+        );
+        assert!(
+            kernel.selected_process_context_matches(stamp.expect("captured stamp")),
+            "accepted child exit does not itself advance the selected-context generation"
+        );
+        let exited = check(&kernel, &raw_pc)
+            .expect_err("unchanged stamp cannot revive an accepted exited birth");
+        assert!(matches!(exited, Error::Backend(reason) if reason.contains("live parent caller")));
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_create_process_refuses_changed_context_before_aggregate_drain() -> crate::Result<()>
+    {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("event.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let event_birth = event.process_birth.expect("event process birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        cpu.test_rewrite_selected_context_before_deferred_launch = true;
+        let entry = cpu.entry.expect("parent entry");
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &mut custody,
+        );
+        let error = first
+            .result
+            .expect_err("stale A context must refuse before draining E+B");
+        assert!(
+            matches!(&error, Error::Backend(reason) if reason.contains("deferred process launch pre-admission")),
+            "typed refusal: {error}"
+        );
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            first.report.failure_operation(),
+            Some("deferred process launch pre-admission")
+        );
+        assert_eq!(
+            first.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(entry + 18 * 4),
+            "A executed its real CreateProcessW import and staged a nonzero return"
+        );
+        assert_eq!(kernel.current_process_birth_key(), Some(parent_birth));
+        let queued = kernel.take_pending_process_launches();
+        assert_eq!(queued.len(), 2, "neither E nor B was drained");
+        assert_eq!(
+            queued[0], event,
+            "older notification launch retains FIFO position"
+        );
+        assert_eq!(queued[1].application.as_deref(), Some("survivor.exe"));
+        let child = &queued[1];
+        let child_birth = child.process_birth.expect("CreateProcessW child birth");
+        assert_ne!(child_birth, event_birth);
+        for launch in &queued {
+            let birth = launch.process_birth.expect("original launch birth");
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(
+                kernel.process_exit_code(launch.process_handle),
+                Some(crate::ce::kernel::STILL_ACTIVE)
+            );
+            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+            assert!(!kernel.recent_process_ops().iter().any(|record| {
+                matches!(
+                    record.op,
+                    "CreateProcessResolved"
+                        | "CreateProcessChildParked"
+                        | "CreateProcessChildError"
+                ) && record.process_id == Some(launch.process_id)
+            }));
+        }
+        assert_eq!(custody.counts().reserved, 0);
+        assert!(!custody.has_any_custody());
+        assert!(cpu.parked_child_processes.is_empty());
+        kernel.restore_pending_process_launches(queued);
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_tail_drains_preexisting_event_launch_with_create_process_launch()
+    -> crate::Result<()> {
+        let test_root = create_process_timeout_test_root();
+        let _cleanup = TestDirectoryCleanup(test_root.clone());
+        std::fs::create_dir_all(&test_root).unwrap();
+        let parent_path = test_root.join("parent.exe");
+        std::fs::write(&parent_path, tiny_mips_create_process_then_spin_pe()).unwrap();
+        std::fs::write(test_root.join("survivor.exe"), tiny_mips_spinner_pe()).unwrap();
+        std::fs::write(test_root.join("event.exe"), tiny_mips_spinner_pe()).unwrap();
+
+        let mut kernel = phase1_kernel("parent.exe")?;
+        kernel.set_process_module_host_path(parent_path.clone());
+        let parent_birth = kernel.current_process_birth_key().expect("parent birth");
+        let event = queue_raw_event_fixture_launch(&mut kernel, "event.exe")?;
+        let event_birth = event.process_birth.expect("event birth");
+        let image = crate::pe::PeImage::inspect(&parent_path)?;
+        let mut cpu = super::UnicornMips::new()?;
+        cpu.load_pe_image(&image)?;
+        let entry = cpu.entry.expect("parent entry");
+        let mut custody = super::CpuCustody::new()
+            .map_err(|error| Error::Backend(format!("fixture custody: {error}")))?;
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        let first = cpu.run_until_import_trap_with_framebuffer_limits_report_with_custody(
+            &mut kernel,
+            &mut framebuffer,
+            super::UnicornRunLimits {
+                instruction_limit: 128,
+                wall_clock_limit_ms: 500,
+                stop_pc: None,
+                live_pump: false,
+            },
+            &mut custody,
+        );
+        first.result?;
+        assert_eq!(first.report.start_process_birth(), Some(parent_birth));
+        assert_eq!(
+            first.report.raw_stop_pc(),
+            &super::AttemptObservation::Value(entry + 18 * 4)
+        );
+        assert_eq!(first.report.end_process_birth(), Some(parent_birth));
+        assert!(!kernel.has_pending_process_launches());
+        // The normal scheduler may select E, B or A after both children are
+        // admitted. Count original CPU owners across selected and parked slots,
+        // not only their final queue positions.
+        let owned: Vec<_> = cpu
+            .owned_process_launch
+            .iter()
+            .chain(
+                cpu.parked_child_processes
+                    .iter()
+                    .filter_map(|parked| parked.cpu.owned_process_launch.as_ref()),
+            )
+            .collect();
+        let event_owned: Vec<_> = owned
+            .iter()
+            .copied()
+            .filter(|launch| launch.process_birth == Some(event_birth))
+            .collect();
+        assert_eq!(event_owned, [&event]);
+        let b_owned: Vec<_> = owned
+            .iter()
+            .copied()
+            .filter(|launch| launch.application.as_deref() == Some("survivor.exe"))
+            .collect();
+        assert_eq!(b_owned.len(), 1, "one original CreateProcessW CPU");
+        let b = b_owned[0];
+        assert_ne!(b.process_birth, Some(event_birth));
+        let ops = kernel.recent_process_ops();
+        let event_resolved = ops
+            .iter()
+            .position(|record| {
+                record.op == "CreateProcessResolved" && record.process_id == Some(event.process_id)
+            })
+            .expect("older event launch resolved");
+        let b_resolved = ops
+            .iter()
+            .position(|record| {
+                record.op == "CreateProcessResolved" && record.process_id == Some(b.process_id)
+            })
+            .expect("later CreateProcessW launch resolved");
+        assert!(
+            event_resolved < b_resolved,
+            "aggregate drain keeps FIFO order"
+        );
+        for launch in [&event, b] {
+            let birth = launch.process_birth.expect("exact queued birth");
+            assert!(kernel.handles.process_execution_live_by_birth(birth));
+            assert_eq!(kernel.is_wait_ready(launch.process_handle, 1), Some(false));
+            for op in ["CreateProcessResolved", "CreateProcessChildParked"] {
+                assert!(kernel.recent_process_ops().iter().any(|record| {
+                    record.op == op && record.process_id == Some(launch.process_id)
+                }));
+            }
+        }
+        assert!(!custody.has_any_custody());
+        Ok(())
     }
 
     #[test]
